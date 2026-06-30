@@ -85,14 +85,14 @@ export function ArticleView({
             className="h-full w-full"
           />
         </div>
-      ) : (
+      ) : content.cover_image_url ? (
         <figure className="mt-5">
           <div className="aspect-[16/9] w-full overflow-hidden rounded-2xl border border-line">
             <Cover src={content.cover_image_url} alt="صورة المقال" />
           </div>
           <Credit name={content.cover_credit_name} url={content.cover_credit_url} />
         </figure>
-      )}
+      ) : null}
 
       {content.excerpt ? (
         <p className="mt-5 border-r-4 border-teal pr-4 text-[15px] font-medium leading-loose text-gray">
