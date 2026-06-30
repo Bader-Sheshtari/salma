@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
-import { runIngestion } from "@/lib/ai/agent";
 import type { TablesInsert, TablesUpdate } from "@/lib/supabase/database.types";
 
 function slugify(input: string): string {
@@ -170,21 +169,40 @@ export type IngestResult =
   | null;
 
 /**
- * Run the news-ingestion agent: live-search trusted sources, translate/curate
- * into Arabic, and store real, sourced items as `pending` content (origin =
- * 'ai') for an admin to review and approve. The AI never authors facts.
+ * Trigger the news-ingestion agent, which runs entirely inside Supabase as the
+ * `ingest-news` Edge Function: it live-searches trusted sources, translates and
+ * curates into Arabic, and stores real, sourced items as `pending` content
+ * (origin = 'ai') for an admin to review. The AI never authors facts.
+ *
+ * This server action is a thin proxy — it forwards the admin's session JWT so
+ * the function can authorize the caller, then returns the run stats.
  */
 export async function ingestNews(_prev: IngestResult, _formData: FormData): Promise<IngestResult> {
   await requireAdmin();
   const supabase = await createClient();
 
-  try {
-    const stats = await runIngestion(supabase, { trigger: "manual" });
-    revalidatePath("/admin/content");
-    return stats;
-  } catch {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) return { error: "انتهت الجلسة. سجّل الدخول مرة أخرى." };
+
+  const { data, error } = await supabase.functions.invoke("ingest-news", {
+    body: {},
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (error || !data || data.ok === false) {
     return { error: "تعذّر تشغيل وكيل الأخبار. تأكد من مفتاح OpenRouter وإعدادات السياسة التحريرية." };
   }
+
+  revalidatePath("/admin/content");
+  return {
+    found: Number(data.found) || 0,
+    kept: Number(data.kept) || 0,
+    filtered: Number(data.filtered) || 0,
+    duplicates: Number(data.duplicates) || 0,
+  };
 }
 
 const VALID_REGIONS = ["kuwait", "gulf", "mena", "world"];

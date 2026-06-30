@@ -21,10 +21,9 @@ export function contentMetadata(detail: ContentDetail): Metadata {
   const path = pathForContent(c);
   const url = absoluteUrl(path);
   const description = c.excerpt ?? undefined;
-  const image = leadImage(detail);
-  const images = image ? [image] : undefined;
   const isVideo = c.type === "video";
 
+  // og:image is supplied by the route's opengraph-image.tsx (branded Salma card).
   return {
     title: c.title,
     description,
@@ -34,7 +33,6 @@ export function contentMetadata(detail: ContentDetail): Metadata {
       title: c.title,
       description,
       url,
-      images,
       ...(c.published_at ? { publishedTime: c.published_at } : {}),
       ...(c.updated_at ? { modifiedTime: c.updated_at } : {}),
     },
@@ -42,7 +40,6 @@ export function contentMetadata(detail: ContentDetail): Metadata {
       card: "summary_large_image",
       title: c.title,
       description,
-      images,
     },
   };
 }
