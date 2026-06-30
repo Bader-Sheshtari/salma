@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="610867ba-5070-4d0e-9513-ab833b553f08"></script>
+
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<style>/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("5140a874-dfb3-48d0-a58c-6189aeb48066") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("67f9556c-e570-4d6c-9c6a-8702e1bacff6") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("6f9d52a0-4b47-4741-85ef-f176f5786554") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("94537912-df73-41c6-9df1-ed2bca7a8e30") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fde62275-32a9-4ee7-80d1-8466b95210c5") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("e299db6b-d083-4d24-86a8-22f0c1ba4438") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("736026e3-b862-4d1a-b005-abce5f198d77") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("3d8f5847-99c0-4947-9b40-609294e140e7") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("e3e5a945-7ae9-4479-a6f6-542713836a8a") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("b5a2ae8f-d0c3-486f-ab08-1d5cd7a3cb4f") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("9fcb836d-3884-4c0a-b063-a0f1b830a8fb") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("5545f843-c76f-4c5c-a44b-787d10143927") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("94b0e209-6815-4a93-a365-d10632fa5238") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("ea2b0177-78c4-45a6-861b-7e2eaa071040") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("73add842-8214-417e-ab20-d3a20c251b4e") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("64d9a923-c0e6-4e21-a12b-37be02d29b1e") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("9fcb836d-3884-4c0a-b063-a0f1b830a8fb") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("5545f843-c76f-4c5c-a44b-787d10143927") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("94b0e209-6815-4a93-a365-d10632fa5238") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("ea2b0177-78c4-45a6-861b-7e2eaa071040") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("73add842-8214-417e-ab20-d3a20c251b4e") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("64d9a923-c0e6-4e21-a12b-37be02d29b1e") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("9fcb836d-3884-4c0a-b063-a0f1b830a8fb") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("5545f843-c76f-4c5c-a44b-787d10143927") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("94b0e209-6815-4a93-a365-d10632fa5238") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("ea2b0177-78c4-45a6-861b-7e2eaa071040") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("73add842-8214-417e-ab20-d3a20c251b4e") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("64d9a923-c0e6-4e21-a12b-37be02d29b1e") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("9fcb836d-3884-4c0a-b063-a0f1b830a8fb") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("5545f843-c76f-4c5c-a44b-787d10143927") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* greek */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("94b0e209-6815-4a93-a365-d10632fa5238") format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("ea2b0177-78c4-45a6-861b-7e2eaa071040") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("73add842-8214-417e-ab20-d3a20c251b4e") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("64d9a923-c0e6-4e21-a12b-37be02d29b1e") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* arabic */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("3a53f663-9eff-40ef-8a67-e5647020b1ec") format('woff2');
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC, U+102E0-102FB, U+10E60-10E7E, U+10EC2-10EC4, U+10EFC-10EFF, U+1EE00-1EE03, U+1EE05-1EE1F, U+1EE21-1EE22, U+1EE24, U+1EE27, U+1EE29-1EE32, U+1EE34-1EE37, U+1EE39, U+1EE3B, U+1EE42, U+1EE47, U+1EE49, U+1EE4B, U+1EE4D-1EE4F, U+1EE51-1EE52, U+1EE54, U+1EE57, U+1EE59, U+1EE5B, U+1EE5D, U+1EE5F, U+1EE61-1EE62, U+1EE64, U+1EE67-1EE6A, U+1EE6C-1EE72, U+1EE74-1EE77, U+1EE79-1EE7C, U+1EE7E, U+1EE80-1EE89, U+1EE8B-1EE9B, U+1EEA1-1EEA3, U+1EEA5-1EEA9, U+1EEAB-1EEBB, U+1EEF0-1EEF1;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("01ecd839-6a2d-478d-b2ca-08de5ac05ce2") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fd3e2fe9-5511-44c0-937d-c12deca0051d") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("72a0fd0e-5467-40f8-8f3f-fd40a81d6fe5") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* arabic */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("75d839d1-64c3-4108-bd28-972220dee426") format('woff2');
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC, U+102E0-102FB, U+10E60-10E7E, U+10EC2-10EC4, U+10EFC-10EFF, U+1EE00-1EE03, U+1EE05-1EE1F, U+1EE21-1EE22, U+1EE24, U+1EE27, U+1EE29-1EE32, U+1EE34-1EE37, U+1EE39, U+1EE3B, U+1EE42, U+1EE47, U+1EE49, U+1EE4B, U+1EE4D-1EE4F, U+1EE51-1EE52, U+1EE54, U+1EE57, U+1EE59, U+1EE5B, U+1EE5D, U+1EE5F, U+1EE61-1EE62, U+1EE64, U+1EE67-1EE6A, U+1EE6C-1EE72, U+1EE74-1EE77, U+1EE79-1EE7C, U+1EE7E, U+1EE80-1EE89, U+1EE8B-1EE9B, U+1EEA1-1EEA3, U+1EEA5-1EEA9, U+1EEAB-1EEBB, U+1EEF0-1EEF1;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("dd37cec4-a604-49dc-92ee-6dd26b9685b2") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("893fc738-5112-4bb2-8e0f-4afda2621317") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("585548e2-e1c9-4145-9d06-ac722824f331") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* arabic */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("0cd4efd2-5934-40d9-8b1c-ae8a53c9c65f") format('woff2');
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC, U+102E0-102FB, U+10E60-10E7E, U+10EC2-10EC4, U+10EFC-10EFF, U+1EE00-1EE03, U+1EE05-1EE1F, U+1EE21-1EE22, U+1EE24, U+1EE27, U+1EE29-1EE32, U+1EE34-1EE37, U+1EE39, U+1EE3B, U+1EE42, U+1EE47, U+1EE49, U+1EE4B, U+1EE4D-1EE4F, U+1EE51-1EE52, U+1EE54, U+1EE57, U+1EE59, U+1EE5B, U+1EE5D, U+1EE5F, U+1EE61-1EE62, U+1EE64, U+1EE67-1EE6A, U+1EE6C-1EE72, U+1EE74-1EE77, U+1EE79-1EE7C, U+1EE7E, U+1EE80-1EE89, U+1EE8B-1EE9B, U+1EEA1-1EEA3, U+1EEA5-1EEA9, U+1EEAB-1EEBB, U+1EEF0-1EEF1;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("cd7d0c4d-de03-439d-aedb-731f3677d137") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("89985707-310a-4aa5-83a5-3b98e601637d") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("61d1bd90-dbcd-4260-8b4b-92a28a3ed9c2") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* arabic */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("a67d7517-4720-46f6-944f-830034dc8e96") format('woff2');
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC, U+102E0-102FB, U+10E60-10E7E, U+10EC2-10EC4, U+10EFC-10EFF, U+1EE00-1EE03, U+1EE05-1EE1F, U+1EE21-1EE22, U+1EE24, U+1EE27, U+1EE29-1EE32, U+1EE34-1EE37, U+1EE39, U+1EE3B, U+1EE42, U+1EE47, U+1EE49, U+1EE4B, U+1EE4D-1EE4F, U+1EE51-1EE52, U+1EE54, U+1EE57, U+1EE59, U+1EE5B, U+1EE5D, U+1EE5F, U+1EE61-1EE62, U+1EE64, U+1EE67-1EE6A, U+1EE6C-1EE72, U+1EE74-1EE77, U+1EE79-1EE7C, U+1EE7E, U+1EE80-1EE89, U+1EE8B-1EE9B, U+1EEA1-1EEA3, U+1EEA5-1EEA9, U+1EEAB-1EEBB, U+1EEF0-1EEF1;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("9806b6fc-1655-49e7-aeff-f1347c2b6b22") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("b20c4135-4a76-4b31-900e-4b77c3945466") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Sans Arabic';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("7a07a491-cef1-4b5e-836b-665ca437def5") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+</style>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0;background:#e6dccd;font-family:'IBM Plex Sans Arabic','IBM Plex Sans',sans-serif;-webkit-font-smoothing:antialiased;}
+  @keyframes salmaMarquee{from{transform:translateX(0)}to{transform:translateX(50%)}}
+  @keyframes salmaPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
+  .salma-scroll::-webkit-scrollbar{display:none;}
+</style>
+</helmet>
+<div ref="{{ containerRef }}" dir="rtl" style="width:412px;margin:0 auto;background:#fff;min-height:100vh;box-shadow:0 0 60px rgba(46,46,45,.18);overflow:hidden;position:relative;color:#2E2E2D;">
+
+  <!-- status bar -->
+  <div style="height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;background:#3A7C6C;color:#fff;font-family:'IBM Plex Sans',sans-serif;font-size:14px;font-weight:600;">
+    <span>9:41</span>
+    <span style="font-size:11px;letter-spacing:1px;">●●●  5G  ▮▮▮</span>
+  </div>
+
+  <!-- sticky masthead + nav -->
+  <div style="position:sticky;top:0;z-index:40;background:#fff;border-bottom:1px solid #ECE4D8;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px 10px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:40px;height:40px;border-radius:12px;background:#3A7C6C;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:22px;">س</div>
+        <div style="line-height:1;">
+          <div style="font-size:23px;font-weight:700;color:#3A7C6C;letter-spacing:-.5px;">سلمى</div>
+          <div style="font-size:10px;font-weight:500;color:#449785;font-family:'IBM Plex Sans',sans-serif;letter-spacing:1.5px;margin-top:3px;">SALMA · HEALTH</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div onclick="{{ toggleLang }}" style="display:flex;align-items:center;border:1px solid #C3C4C6;border-radius:8px;overflow:hidden;font-size:12px;font-weight:600;cursor:pointer;">
+          <span style="{{ arBtnStyle }}">ع</span>
+          <span style="{{ enBtnStyle }}">EN</span>
+        </div>
+        <div style="width:22px;height:22px;border-radius:50%;border:1.5px solid #616261;display:flex;align-items:center;justify-content:center;font-size:13px;color:#616261;">⌕</div>
+        <div style="background:#3A7C6C;color:#fff;font-size:12px;font-weight:600;padding:7px 12px;border-radius:8px;cursor:pointer;">اشتراك</div>
+      </div>
+    </div>
+    <!-- nav -->
+    <div class="salma-scroll" style="display:flex;gap:20px;padding:0 18px 11px;overflow-x:auto;font-size:13.5px;font-weight:600;white-space:nowrap;">
+      <span style="color:#3A7C6C;border-bottom:2.5px solid #3A7C6C;padding-bottom:6px;">الرئيسية</span>
+      <span style="color:#616261;padding-bottom:6px;">الكويت</span>
+      <span style="color:#616261;padding-bottom:6px;">الخليج</span>
+      <span style="color:#616261;padding-bottom:6px;">العالم</span>
+      <span style="color:#5496CF;padding-bottom:6px;">اقتصاد الصحة</span>
+      <span style="color:#616261;padding-bottom:6px;">صحة وحياة</span>
+      <span style="color:#616261;padding-bottom:6px;">تحقيقات</span>
+    </div>
+  </div>
+
+  <!-- breaking ticker -->
+  <div style="display:flex;align-items:stretch;background:#2E2E2D;color:#fff;overflow:hidden;">
+    <div style="background:#E99E8E;color:#2E2E2D;font-size:12px;font-weight:700;padding:9px 13px;display:flex;align-items:center;gap:6px;flex-shrink:0;z-index:2;">
+      <span style="width:7px;height:7px;border-radius:50%;background:#2E2E2D;animation:salmaPulse 1.1s infinite;"></span>عاجل
+    </div>
+    <div style="overflow:hidden;flex:1;display:flex;align-items:center;">
+      <div style="display:flex;gap:36px;white-space:nowrap;font-size:12.5px;font-weight:500;padding:0 18px;animation:salmaMarquee 22s linear infinite;">
+        <span>تعيين د. خالد المطيري مديراً لمستشفى الفروانية</span>
+        <span>·</span>
+        <span>الصحة تعلن خطة لتوظيف 300 طبيب خلال 2026</span>
+        <span>·</span>
+        <span>شراكة بين دار الشفاء ومجموعة طبية إماراتية</span>
+        <span>·</span>
+        <span>تعيين د. خالد المطيري مديراً لمستشفى الفروانية</span>
+        <span>·</span>
+        <span>الصحة تعلن خطة لتوظيف 300 طبيب خلال 2026</span>
+        <span>·</span>
+        <span>شراكة بين دار الشفاء ومجموعة طبية إماراتية</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- HERO -->
+  <div style="padding:18px 18px 6px;">
+    <div style="border-radius:16px;overflow:hidden;border:1px solid #ECE4D8;">
+      <div style="height:208px;background:repeating-linear-gradient(45deg,#F7EFE6,#F7EFE6 9px,#eadfcb 9px,#eadfcb 18px);position:relative;display:flex;align-items:flex-end;">
+        <div style="position:absolute;top:12px;right:12px;background:#3A7C6C;color:#fff;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;">الكويت</div>
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#b39b78;">[ صورة رئيسية · lead image ]</div>
+        <div style="background:linear-gradient(to top,rgba(46,46,45,.88),transparent);width:100%;padding:20px 16px 14px;position:relative;">
+          <h1 style="margin:0;color:#fff;font-size:21px;font-weight:700;line-height:1.45;">وزارة الصحة تعتمد توسعة مركز جابر الأحمد لجراحة القلب بطاقة 200 سرير</h1>
+          <div style="color:#E7CEB5;font-size:11.5px;margin-top:9px;font-family:'IBM Plex Sans',sans-serif;font-weight:500;">قبل 18 دقيقة · أخبار الكويت الصحية</div>
+        </div>
+      </div>
+    </div>
+    <!-- secondary headlines -->
+    <div style="margin-top:12px;display:flex;flex-direction:column;gap:0;">
+      <div style="display:flex;gap:12px;padding:11px 0;border-bottom:1px solid #ECE4D8;align-items:center;">
+        <div style="width:64px;height:50px;border-radius:9px;flex-shrink:0;background:repeating-linear-gradient(45deg,#F7EFE6,#F7EFE6 6px,#eadfcb 6px,#eadfcb 12px);"></div>
+        <div><div style="font-size:14.5px;font-weight:600;line-height:1.5;">افتتاح وحدة الأورام الجديدة في مستشفى العدان الأسبوع المقبل</div><div style="font-size:11px;color:#449785;margin-top:4px;">قبل ساعة</div></div>
+      </div>
+      <div style="display:flex;gap:12px;padding:11px 0;align-items:center;">
+        <div style="width:64px;height:50px;border-radius:9px;flex-shrink:0;background:repeating-linear-gradient(45deg,#F7EFE6,#F7EFE6 6px,#eadfcb 6px,#eadfcb 12px);"></div>
+        <div><div style="font-size:14.5px;font-weight:600;line-height:1.5;">حملة وطنية للكشف المبكر عن السكري في المراكز الصحية</div><div style="font-size:11px;color:#449785;margin-top:4px;">قبل ساعتين</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DOCTOR MOVEMENTS — signature -->
+  <div style="margin-top:14px;background:#F7EFE6;padding:18px 0 20px;">
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;padding:0 18px 14px;">
+      <div style="display:flex;align-items:center;gap:9px;">
+        <div style="width:4px;height:24px;background:#3A7C6C;border-radius:3px;"></div>
+        <div>
+          <div style="font-size:18px;font-weight:700;">تنقّلات الأطباء</div>
+          <div style="font-size:11px;color:#616261;font-family:'IBM Plex Sans',sans-serif;margin-top:2px;">DOCTOR MOVEMENTS</div>
+        </div>
+      </div>
+      <span style="font-size:12px;font-weight:600;color:#449785;">عرض الكل ←</span>
+    </div>
+    <div class="salma-scroll" style="display:flex;gap:13px;overflow-x:auto;padding:0 18px 4px;">
+      <sc-for list="{{ doctors }}" as="doc" hint-placeholder-count="4">
+        <div style="width:248px;flex-shrink:0;background:#fff;border-radius:14px;padding:15px;border:1px solid #ECE4D8;">
+          <div style="display:flex;align-items:center;gap:11px;margin-bottom:13px;">
+            <div style="width:46px;height:46px;border-radius:50%;background:repeating-linear-gradient(45deg,#E7CEB5,#E7CEB5 4px,#d8bd9c 4px,#d8bd9c 8px);flex-shrink:0;"></div>
+            <div>
+              <div style="font-size:15px;font-weight:700;">{{ doc.name }}</div>
+              <div style="font-size:12px;color:#3A7C6C;font-weight:600;margin-top:2px;">{{ doc.spec }}</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;background:#F7EFE6;border-radius:10px;padding:10px 11px;">
+            <div style="flex:1;text-align:center;"><div style="font-size:9px;color:#616261;margin-bottom:3px;">من</div><div style="font-size:12px;font-weight:600;">{{ doc.from }}</div></div>
+            <div style="color:#449785;font-size:18px;font-weight:700;">←</div>
+            <div style="flex:1;text-align:center;"><div style="font-size:9px;color:#616261;margin-bottom:3px;">إلى</div><div style="font-size:12px;font-weight:700;color:#3A7C6C;">{{ doc.to }}</div></div>
+          </div>
+          <div style="font-size:10.5px;color:#616261;margin-top:11px;text-align:left;font-family:'IBM Plex Sans',sans-serif;">{{ doc.when }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- YOUR FEED prompt (guest) -->
+  <div style="margin:16px 18px;border-radius:16px;background:linear-gradient(135deg,#3A7C6C,#449785);padding:20px 18px;color:#fff;">
+    <div style="font-size:17px;font-weight:700;margin-bottom:6px;">خلاصتك تبدأ من هنا</div>
+    <div style="font-size:13px;line-height:1.6;opacity:.92;margin-bottom:15px;">اختر اهتماماتك وستعرض لك سلمى ما يهمّك أولاً — أخبار، فيديو، تحقيقات.</div>
+    <div style="background:#fff;color:#3A7C6C;font-size:13.5px;font-weight:700;padding:11px;border-radius:10px;text-align:center;">اختر اهتماماتك ←</div>
+  </div>
+
+  <!-- KUWAIT HEALTH NEWS -->
+  <div style="padding:6px 18px 4px;">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px;">
+      <div style="width:4px;height:22px;background:#449785;border-radius:3px;"></div>
+      <div style="font-size:17px;font-weight:700;">أخبار الكويت الصحية</div>
+    </div>
+    <div style="display:flex;flex-direction:column;">
+      <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #ECE4D8;">
+        <div style="width:88px;height:66px;border-radius:10px;flex-shrink:0;background:repeating-linear-gradient(45deg,#F7EFE6,#F7EFE6 7px,#eadfcb 7px,#eadfcb 14px);"></div>
+        <div><div style="font-size:15px;font-weight:600;line-height:1.5;">المراكز الصحية تبدأ تطبيق نظام المواعيد الإلكتروني الموحّد</div><div style="font-size:11px;color:#449785;margin-top:6px;">قبل 3 ساعات · الكويت</div></div>
+      </div>
+      <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #ECE4D8;">
+        <div style="width:88px;height:66px;border-radius:10px;flex-shrink:0;background:repeating-linear-gradient(45deg,#F7EFE6,#F7EFE6 7px,#eadfcb 7px,#eadfcb 14px);"></div>
+        <div><div style="font-size:15px;font-weight:600;line-height:1.5;">مستشفى الصباح يدشّن جهاز رنين مغناطيسي بتقنية حديثة</div><div style="font-size:11px;color:#449785;margin-top:6px;">قبل 5 ساعات · الكويت</div></div>
+      </div>
+      <div style="display:flex;gap:12px;padding:12px 0;">
+        <div style="width:88px;height:66px;border-radius:10px;flex-shrink:0;background:repeating-linear-gradient(45deg,#F7EFE6,#F7EFE6 7px,#eadfcb 7px,#eadfcb 14px);"></div>
+        <div><div style="font-size:15px;font-weight:600;line-height:1.5;">الصحة: نقص بعض الأدوية المزمنة يُحَل خلال أسبوعين</div><div style="font-size:11px;color:#449785;margin-top:6px;">قبل 6 ساعات · الكويت</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIDEO & EXPLAINERS -->
+  <div style="padding:14px 0 6px;">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px;padding:0 18px;">
+      <div style="width:4px;height:22px;background:#449785;border-radius:3px;"></div>
+      <div style="font-size:17px;font-weight:700;">فيديو وتبسيط طبي</div>
+    </div>
+    <div class="salma-scroll" style="display:flex;gap:13px;overflow-x:auto;padding:0 18px 4px;">
+      <sc-for list="{{ videos }}" as="v" hint-placeholder-count="3">
+        <div style="width:230px;flex-shrink:0;">
+          <div style="height:132px;border-radius:13px;background:repeating-linear-gradient(45deg,#2E2E2D,#2E2E2D 9px,#3a3a39 9px,#3a3a39 18px);position:relative;display:flex;align-items:center;justify-content:center;">
+            <div style="width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.92);display:flex;align-items:center;justify-content:center;color:#3A7C6C;font-size:16px;padding-right:3px;">▶</div>
+            <div style="position:absolute;bottom:8px;left:8px;background:rgba(46,46,45,.85);color:#fff;font-size:10px;font-weight:600;padding:3px 7px;border-radius:5px;font-family:'IBM Plex Sans',sans-serif;">{{ v.len }}</div>
+          </div>
+          <div style="font-size:14px;font-weight:600;line-height:1.5;margin-top:9px;">{{ v.title }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- HEALTH ECONOMY — blue lane -->
+  <div style="margin-top:16px;background:#0f2230;padding:20px 0 22px;">
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;padding:0 18px 6px;">
+      <div style="display:flex;align-items:center;gap:9px;">
+        <div style="width:4px;height:24px;background:#5496CF;border-radius:3px;"></div>
+        <div>
+          <div style="font-size:18px;font-weight:700;color:#fff;">اقتصاد الصحة</div>
+          <div style="font-size:11px;color:#5496CF;font-family:'IBM Plex Sans',sans-serif;margin-top:2px;letter-spacing:.5px;">HEALTH ECONOMY · BUSINESS DESK</div>
+        </div>
+      </div>
+      <span style="font-size:12px;font-weight:600;color:#68BBCA;">المزيد ←</span>
+    </div>
+    <!-- mini market strip -->
+    <div class="salma-scroll" style="display:flex;gap:10px;overflow-x:auto;padding:12px 18px 16px;">
+      <div style="background:#15303f;border:1px solid #1f4257;border-radius:10px;padding:10px 13px;flex-shrink:0;min-width:120px;"><div style="font-size:10px;color:#7fa9c4;font-family:'IBM Plex Sans',sans-serif;">السوق الصحي الخليجي</div><div style="font-size:17px;font-weight:700;color:#fff;font-family:'IBM Plex Sans',sans-serif;margin-top:3px;">+9.4%<span style="color:#68BBCA;font-size:11px;"> ▲</span></div></div>
+      <div style="background:#15303f;border:1px solid #1f4257;border-radius:10px;padding:10px 13px;flex-shrink:0;min-width:120px;"><div style="font-size:10px;color:#7fa9c4;font-family:'IBM Plex Sans',sans-serif;">استثمارات 2026</div><div style="font-size:17px;font-weight:700;color:#fff;font-family:'IBM Plex Sans',sans-serif;margin-top:3px;">د.ك 180م</div></div>
+      <div style="background:#15303f;border:1px solid #1f4257;border-radius:10px;padding:10px 13px;flex-shrink:0;min-width:120px;"><div style="font-size:10px;color:#7fa9c4;font-family:'IBM Plex Sans',sans-serif;">صفقات الربع</div><div style="font-size:17px;font-weight:700;color:#fff;font-family:'IBM Plex Sans',sans-serif;margin-top:3px;">7</div></div>
+    </div>
+    <div style="padding:0 18px;">
+      <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #1f4257;">
+        <div style="width:4px;border-radius:3px;background:#5496CF;flex-shrink:0;"></div>
+        <div><div style="font-size:15px;font-weight:600;line-height:1.5;color:#fff;">مجموعة الموسى الطبية تستحوذ على 3 عيادات بـ12 مليون دينار</div><div style="font-size:11px;color:#5496CF;margin-top:6px;font-family:'IBM Plex Sans',sans-serif;">صفقة · قبل يوم</div></div>
+      </div>
+      <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #1f4257;">
+        <div style="width:4px;border-radius:3px;background:#5496CF;flex-shrink:0;"></div>
+        <div><div style="font-size:15px;font-weight:600;line-height:1.5;color:#fff;">استثمار خليجي بـ50 مليون دولار في التقنية الصحية الكويتية</div><div style="font-size:11px;color:#5496CF;margin-top:6px;font-family:'IBM Plex Sans',sans-serif;">استثمار · قبل يومين</div></div>
+      </div>
+      <div style="display:flex;gap:12px;padding:12px 0;">
+        <div style="width:4px;border-radius:3px;background:#5496CF;flex-shrink:0;"></div>
+        <div><div style="font-size:15px;font-weight:600;line-height:1.5;color:#fff;">شراكة بين رويال حياة وشركة تأمين لتوسيع التغطية الصحية</div><div style="font-size:11px;color:#5496CF;margin-top:6px;font-family:'IBM Plex Sans',sans-serif;">شراكة · قبل 3 أيام</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- INVESTIGATIONS -->
+  <div style="padding:20px 18px 6px;">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px;">
+      <div style="width:4px;height:22px;background:#2E2E2D;border-radius:3px;"></div>
+      <div style="font-size:17px;font-weight:700;">تحقيقات</div>
+      <span style="font-size:10px;font-weight:600;color:#fff;background:#3A7C6C;padding:2px 8px;border-radius:20px;margin-right:auto;">قراءة معمّقة</span>
+    </div>
+    <div style="border-radius:16px;overflow:hidden;border:1px solid #ECE4D8;margin-bottom:13px;">
+      <div style="height:170px;background:repeating-linear-gradient(45deg,#e8dcc8,#e8dcc8 9px,#dccaae 9px,#dccaae 18px);display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a8906b;">[ صورة التحقيق ]</div>
+      <div style="padding:15px 16px;">
+        <h2 style="margin:0;font-size:18px;font-weight:700;line-height:1.5;">رحلة المريض الكويتي بين القطاعين العام والخاص</h2>
+        <div style="font-size:13px;color:#616261;line-height:1.65;margin-top:8px;">تحقيق موسّع يتتبع مسار العلاج، أوقات الانتظار، والتكلفة — بالأرقام والشهادات.</div>
+        <div style="font-size:11px;color:#449785;font-weight:600;margin-top:10px;font-family:'IBM Plex Sans',sans-serif;">12 دقيقة قراءة · ملف خاص</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;align-items:center;">
+      <div style="width:88px;height:66px;border-radius:10px;flex-shrink:0;background:repeating-linear-gradient(45deg,#e8dcc8,#e8dcc8 7px,#dccaae 7px,#dccaae 14px);"></div>
+      <div><div style="font-size:15px;font-weight:600;line-height:1.5;">لماذا يسافر الكويتيون للعلاج بالخارج؟</div><div style="font-size:11px;color:#449785;margin-top:5px;">8 دقائق قراءة</div></div>
+    </div>
+  </div>
+
+  <!-- LIFESTYLE — صحة وحياة (teal/blush soft lane) -->
+  <div style="margin-top:18px;background:linear-gradient(135deg,#eef7f8,#fbeeea);padding:18px 0 20px;">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px;padding:0 18px;">
+      <div style="width:4px;height:22px;background:#68BBCA;border-radius:3px;"></div>
+      <div style="font-size:17px;font-weight:700;color:#2E2E2D;">صحة وحياة</div>
+    </div>
+    <div class="salma-scroll" style="display:flex;gap:12px;overflow-x:auto;padding:0 18px;">
+      <div style="width:170px;flex-shrink:0;background:#fff;border-radius:14px;overflow:hidden;">
+        <div style="height:96px;background:repeating-linear-gradient(45deg,#d7eef1,#d7eef1 7px,#c3e4e9 7px,#c3e4e9 14px);"></div>
+        <div style="padding:11px 12px;font-size:13.5px;font-weight:600;line-height:1.5;">5 عادات صباحية تحسّن صحتك النفسية</div>
+      </div>
+      <div style="width:170px;flex-shrink:0;background:#fff;border-radius:14px;overflow:hidden;">
+        <div style="height:96px;background:repeating-linear-gradient(45deg,#fbe0da,#fbe0da 7px,#f6cdc3 7px,#f6cdc3 14px);"></div>
+        <div style="padding:11px 12px;font-size:13.5px;font-weight:600;line-height:1.5;">دليل التغذية في الصيف الخليجي</div>
+      </div>
+      <div style="width:170px;flex-shrink:0;background:#fff;border-radius:14px;overflow:hidden;">
+        <div style="height:96px;background:repeating-linear-gradient(45deg,#d7eef1,#d7eef1 7px,#c3e4e9 7px,#c3e4e9 14px);"></div>
+        <div style="padding:11px 12px;font-size:13.5px;font-weight:600;line-height:1.5;">تمارين بسيطة تمارسها في المكتب</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GULF + WORLD digest -->
+  <div style="padding:18px 18px 6px;">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px;">
+      <div style="width:4px;height:22px;background:#449785;border-radius:3px;"></div>
+      <div style="font-size:17px;font-weight:700;">الخليج والعالم</div>
+      <span style="font-size:11px;color:#616261;margin-right:auto;">الأهم فقط</span>
+    </div>
+    <div style="display:flex;flex-direction:column;">
+      <div style="display:flex;gap:11px;padding:12px 0;border-bottom:1px solid #ECE4D8;align-items:baseline;">
+        <span style="font-size:11px;font-weight:700;color:#449785;font-family:'IBM Plex Sans',sans-serif;flex-shrink:0;">السعودية</span>
+        <div style="font-size:14.5px;font-weight:500;line-height:1.5;">إطلاق أكبر مدينة طبية متكاملة في الرياض</div>
+      </div>
+      <div style="display:flex;gap:11px;padding:12px 0;border-bottom:1px solid #ECE4D8;align-items:baseline;">
+        <span style="font-size:11px;font-weight:700;color:#449785;font-family:'IBM Plex Sans',sans-serif;flex-shrink:0;">الإمارات</span>
+        <div style="font-size:14.5px;font-weight:500;line-height:1.5;">نتائج واعدة لعلاج جيني جديد في أبوظبي</div>
+      </div>
+      <div style="display:flex;gap:11px;padding:12px 0;align-items:baseline;">
+        <span style="font-size:11px;font-weight:700;color:#449785;font-family:'IBM Plex Sans',sans-serif;flex-shrink:0;">العالم</span>
+        <div style="font-size:14.5px;font-weight:500;line-height:1.5;">منظمة الصحة العالمية تحذّر من سلالة إنفلونزا جديدة</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VOTING — تصويت سلمى -->
+  <div style="margin-top:16px;background:#F7EFE6;padding:20px 0 22px;">
+    <div style="padding:0 18px;">
+      <div style="display:flex;align-items:center;gap:9px;">
+        <div style="width:4px;height:24px;background:#3A7C6C;border-radius:3px;"></div>
+        <div style="font-size:18px;font-weight:700;">تصويت سلمى</div>
+      </div>
+      <div style="font-size:13px;color:#616261;margin-top:8px;line-height:1.6;">الأطباء الأكثر تقديراً — اختيار الجمهور. تصويت شهري، صوت واحد لكل حساب موثّق.</div>
+    </div>
+    <!-- specialty tabs -->
+    <div class="salma-scroll" style="display:flex;gap:8px;overflow-x:auto;padding:14px 18px 16px;">
+      <sc-for list="{{ specs }}" as="s" hint-placeholder-count="4">
+        <div onclick="{{ s.pick }}" style="{{ s.style }}">{{ s.label }}</div>
+      </sc-for>
+    </div>
+    <!-- candidates -->
+    <div style="padding:0 18px;display:flex;flex-direction:column;gap:11px;">
+      <sc-for list="{{ voteList }}" as="c" hint-placeholder-count="3">
+        <div style="background:#fff;border-radius:13px;padding:13px 14px;border:1px solid #ECE4D8;">
+          <div style="display:flex;align-items:center;gap:11px;">
+            <div style="width:42px;height:42px;border-radius:50%;background:repeating-linear-gradient(45deg,#E7CEB5,#E7CEB5 4px,#d8bd9c 4px,#d8bd9c 8px);flex-shrink:0;"></div>
+            <div style="flex:1;">
+              <div style="font-size:14.5px;font-weight:700;">{{ c.name }}</div>
+              <div style="font-size:11.5px;color:#616261;margin-top:2px;">{{ c.hosp }}</div>
+            </div>
+            <div onclick="{{ c.vote }}" style="{{ c.btnStyle }}">{{ c.btnLabel }}</div>
+          </div>
+          <div style="margin-top:11px;display:flex;align-items:center;gap:9px;">
+            <div style="flex:1;height:7px;background:#ECE4D8;border-radius:5px;overflow:hidden;"><div style="height:100%;width:{{ c.pct }};background:#3A7C6C;border-radius:5px;transition:width .4s;"></div></div>
+            <div style="font-size:12px;font-weight:700;color:#3A7C6C;font-family:'IBM Plex Sans',sans-serif;min-width:34px;text-align:left;">{{ c.count }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- MISSION / من نحن -->
+  <div style="background:#3A7C6C;color:#fff;padding:26px 20px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:2px;color:#9ecabf;font-family:'IBM Plex Sans',sans-serif;margin-bottom:12px;">لماذا سلمى ·  WHY SALMA</div>
+    <div style="font-size:22px;font-weight:700;line-height:1.55;">سلمى تساعدك على حياة أفضل وأكثر صحة.</div>
+    <div style="font-size:14px;line-height:1.75;opacity:.92;margin-top:12px;">منصة إخبارية صحية مستقلة، من الكويت إلى الخليج — نُغربل العالم لنقدّم لك ما يهمّ صحتك، بمصداقية ومصادر موثوقة.</div>
+    <div style="display:inline-flex;margin-top:18px;background:#fff;color:#3A7C6C;font-size:13px;font-weight:700;padding:11px 18px;border-radius:10px;">من نحن ←</div>
+  </div>
+
+  <!-- NEWSLETTER + interests -->
+  <div style="padding:24px 18px;background:#fff;">
+    <div style="font-size:18px;font-weight:700;text-align:center;">اختر اهتماماتك واشترك بالنشرة</div>
+    <div style="font-size:12.5px;color:#616261;text-align:center;margin-top:7px;line-height:1.6;">نُرسل لك الأهم في مجالاتك — أنت تتحكم بما يصلك.</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:16px 0 18px;">
+      <sc-for list="{{ chips }}" as="ch" hint-placeholder-count="8">
+        <div onclick="{{ ch.toggle }}" style="{{ ch.style }}">{{ ch.label }}</div>
+      </sc-for>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <input placeholder="بريدك الإلكتروني" dir="rtl" style="flex:1;border:1px solid #C3C4C6;border-radius:10px;padding:12px 14px;font-size:14px;font-family:'IBM Plex Sans Arabic',sans-serif;outline:none;">
+      <div style="background:#3A7C6C;color:#fff;font-size:14px;font-weight:700;padding:12px 20px;border-radius:10px;display:flex;align-items:center;">اشترك</div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div style="background:#2E2E2D;color:#fff;padding:24px 18px 30px;">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:16px;">
+      <div style="width:34px;height:34px;border-radius:10px;background:#3A7C6C;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;">س</div>
+      <div style="font-size:18px;font-weight:700;">سلمى</div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:x;gap:14px 22px;font-size:13px;color:#C3C4C6;margin-bottom:18px;">
+      <span>الكويت</span><span>الخليج</span><span>العالم</span><span>اقتصاد الصحة</span><span>صحة وحياة</span><span>تحقيقات</span><span>من نحن</span><span>اتصل بنا</span>
+    </div>
+    <div style="border-top:1px solid #444;padding-top:14px;font-size:11px;color:#8a8a89;line-height:1.7;font-family:'IBM Plex Sans',sans-serif;">
+      المعايير التحريرية · مصادرنا: WHO · CDC · Mayo Clinic<br>© 2026 سلمى — جميع الحقوق محفوظة
+    </div>
+    <div style="display:flex;gap:12px;margin-top:14px;">
+      <div style="width:32px;height:32px;border-radius:9px;border:1px solid #444;display:flex;align-items:center;justify-content:center;font-size:13px;font-family:'IBM Plex Sans',sans-serif;">IG</div>
+      <div style="width:32px;height:32px;border-radius:9px;border:1px solid #444;display:flex;align-items:center;justify-content:center;font-size:13px;font-family:'IBM Plex Sans',sans-serif;">X</div>
+      <div style="width:32px;height:32px;border-radius:9px;border:1px solid #444;display:flex;align-items:center;justify-content:center;font-size:13px;">▶</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;$preview&quot;:{&quot;width&quot;:412,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  containerRef = React.createRef();
+  state = { lang: 'ar', spec: 'قلب', votes: {}, voted: {} };
+
+  componentDidUpdate() {
+    if (this.containerRef.current) {
+      this.containerRef.current.dir = this.state.lang === 'ar' ? 'rtl' : 'ltr';
+    }
+  }
+
+  vote(name) {
+    if (this.state.voted[name]) return;
+    this.setState(s => ({
+      votes: { ...s.votes, [name]: (s.votes[name] || 0) + 1 },
+      voted: { ...s.voted, [name]: true }
+    }));
+  }
+
+  renderVals() {
+    const isAr = this.state.lang === 'ar';
+
+    const arBtnStyle = { padding: '6px 9px', background: isAr ? '#3A7C6C' : '#fff', color: isAr ? '#fff' : '#616261' };
+    const enBtnStyle = { padding: '6px 9px', background: !isAr ? '#3A7C6C' : '#fff', color: !isAr ? '#fff' : '#616261', fontFamily: "'IBM Plex Sans',sans-serif" };
+
+    const doctors = [
+      { name: 'د. أحمد العنزي', spec: 'قلب وأوعية دموية', from: 'مبارك الكبير', to: 'دار الشفاء', when: 'قبل يومين' },
+      { name: 'د. نورة الصباح', spec: 'نساء وولادة', from: 'الأميري', to: 'رويال حياة', when: 'قبل 3 أيام' },
+      { name: 'د. يوسف الرشيد', spec: 'جراحة عظام', from: 'العدان', to: 'السلام الدولي', when: 'قبل أسبوع' },
+      { name: 'د. مريم الفهد', spec: 'جلدية', from: 'الجهراء', to: 'عيادة طيبة', when: 'قبل أسبوع' }
+    ];
+
+    const videos = [
+      { title: 'ما الفرق بين النوبة القلبية والسكتة الدماغية؟', len: '3:12' },
+      { title: 'مقابلة: مستقبل زراعة الأعضاء في الكويت', len: '8:45' },
+      { title: 'كيف تقرأ نتائج تحليل الدم؟ — حلقة جديدة', len: '5:30' }
+    ];
+
+    const tabStyle = (on) => ({
+      flexShrink: 0, padding: '8px 16px', borderRadius: '20px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+      background: on ? '#3A7C6C' : '#fff', color: on ? '#fff' : '#616261', border: '1px solid ' + (on ? '#3A7C6C' : '#ECE4D8')
+    });
+    const specNames = ['قلب', 'عظام', 'أطفال', 'جلدية'];
+    const specs = specNames.map(s => ({ label: s, style: tabStyle(s === this.state.spec), pick: () => this.setState({ spec: s }) }));
+
+    const candidates = {
+      'قلب': [
+        { name: 'د. أحمد العنزي', hosp: 'مستشفى مبارك الكبير', base: 342 },
+        { name: 'د. سارة الخالدي', hosp: 'مستشفى دار الشفاء', base: 318 },
+        { name: 'د. فهد العتيبي', hosp: 'مركز جابر الأحمد', base: 297 }
+      ],
+      'عظام': [
+        { name: 'د. يوسف الرشيد', hosp: 'مستشفى السلام الدولي', base: 276 },
+        { name: 'د. ليلى المنصور', hosp: 'مستشفى العدان', base: 254 },
+        { name: 'د. بدر الدوسري', hosp: 'مستشفى الأميري', base: 231 }
+      ],
+      'أطفال': [
+        { name: 'د. هند الصالح', hosp: 'مستشفى الأميري', base: 401 },
+        { name: 'د. عمر القلاف', hosp: 'مستشفى مبارك الكبير', base: 365 },
+        { name: 'د. منى الرشيدي', hosp: 'مستشفى الفروانية', base: 340 }
+      ],
+      'جلدية': [
+        { name: 'د. مريم الفهد', hosp: 'عيادة طيبة التخصصية', base: 289 },
+        { name: 'د. طلال السعيد', hosp: 'مركز رويال حياة', base: 263 },
+        { name: 'د. دلال العجمي', hosp: 'مستشفى دار الشفاء', base: 245 }
+      ]
+    };
+    const list = (candidates[this.state.spec] || []).map(c => ({ ...c, count: c.base + (this.state.votes[c.name] || 0) }));
+    const max = Math.max(...list.map(c => c.count), 1);
+    const voteList = list.map(c => {
+      const voted = !!this.state.voted[c.name];
+      return {
+        name: c.name, hosp: c.hosp, count: c.count, pct: Math.round((c.count / max) * 100) + '%',
+        vote: () => this.vote(c.name),
+        btnLabel: voted ? '✓ صوّتت' : 'صوّت',
+        btnStyle: {
+          fontSize: '12.5px', fontWeight: 700, padding: '8px 15px', borderRadius: '9px', cursor: voted ? 'default' : 'pointer',
+          background: voted ? '#ECE4D8' : '#3A7C6C', color: voted ? '#449785' : '#fff', flexShrink: 0
+        }
+      };
+    });
+
+    const chipNames = ['قلب وأوعية', 'عظام', 'أطفال', 'جلدية', 'تغذية', 'صحة نفسية', 'لياقة', 'اقتصاد الصحة', 'تحقيقات'];
+    const chips = chipNames.map(label => {
+      const on = !!this.state.voted['__chip_' + label] || !!(this.state.chips && this.state.chips[label]);
+      return {
+        label,
+        toggle: () => this.setState(s => ({ chips: { ...(s.chips || {}), [label]: !((s.chips || {})[label]) } })),
+        style: {
+          padding: '8px 15px', borderRadius: '20px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+          background: on ? '#3A7C6C' : '#F7EFE6', color: on ? '#fff' : '#616261',
+          border: '1px solid ' + (on ? '#3A7C6C' : '#E7CEB5')
+        }
+      };
+    });
+
+    return {
+      containerRef: this.containerRef,
+      isAr,
+      toggleLang: () => this.setState(s => ({ lang: s.lang === 'ar' ? 'en' : 'ar' })),
+      arBtnStyle, enBtnStyle,
+      doctors, videos, specs, voteList, chips
+    };
+  }
+}
+</script>
+
+
+</body></html>

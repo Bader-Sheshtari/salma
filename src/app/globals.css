@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+/* Salma design tokens */
+:root {
+  --salma-teal: #3a7c6c;
+  --salma-green: #449785;
+  --salma-gold: #e7ceb5;
+  --salma-cream: #f7efe6;
+  --salma-border: #ece4d8;
+  --salma-sand: #e6dccd;
+  --salma-ink: #2e2e2d;
+  --salma-gray: #616261;
+  --salma-blue: #5496cf;
+  --salma-cyan: #68bbca;
+  --salma-navy: #0f2230;
+  --salma-coral: #e99e8e;
+}
+
+@theme inline {
+  --color-teal: var(--salma-teal);
+  --color-green: var(--salma-green);
+  --color-gold: var(--salma-gold);
+  --color-cream: var(--salma-cream);
+  --color-sand: var(--salma-sand);
+  --color-ink: var(--salma-ink);
+  --color-gray: var(--salma-gray);
+  --color-blue: var(--salma-blue);
+  --color-cyan: var(--salma-cyan);
+  --color-navy: var(--salma-navy);
+  --color-coral: var(--salma-coral);
+  --color-line: var(--salma-border);
+  --font-arabic: var(--font-arabic);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--salma-sand);
+  color: var(--salma-ink);
+  font-family: var(--font-arabic), var(--font-sans), sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+@keyframes salmaMarquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(50%);
+  }
+}
+
+@keyframes salmaPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
+.salma-scroll::-webkit-scrollbar {
+  display: none;
+}
+.salma-scroll {
+  scrollbar-width: none;
+}
