@@ -73,7 +73,15 @@ export type ContentDetail = {
   comments: Comment[];
 };
 
-export const getContentBySlug = cache(async (slug: string): Promise<ContentDetail | null> => {
+export const getContentBySlug = cache(async (rawSlug: string): Promise<ContentDetail | null> => {
+  // Route params arrive percent-encoded for non-ASCII (Arabic) slugs; decode
+  // before matching the raw value stored in the DB.
+  let slug = rawSlug;
+  try {
+    slug = decodeURIComponent(rawSlug);
+  } catch {
+    // already decoded
+  }
   const supabase = await createClient();
   const { data } = await supabase
     .from("content")
