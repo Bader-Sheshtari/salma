@@ -278,3 +278,219 @@ export async function moderateComment(formData: FormData) {
   }
   revalidatePath("/admin/comments");
 }
+
+// ============ DEPARTMENTS ============
+
+export async function saveDepartment(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+
+  const id = String(formData.get("id") ?? "").trim();
+  const name_ar = String(formData.get("name_ar") ?? "").trim();
+  if (name_ar.length < 2) return { error: "اسم القسم قصير جداً." };
+  const slug = String(formData.get("slug") ?? "").trim() || slugify(name_ar);
+  const sortRaw = String(formData.get("sort_order") ?? "").trim();
+  const sort_order = sortRaw ? Number(sortRaw) || 0 : 0;
+
+  const payload = { name_ar, slug, sort_order } satisfies Partial<TablesInsert<"departments">>;
+
+  if (id) {
+    const { error } = await supabase
+      .from("departments")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update(payload as unknown as never)
+      .eq("id", id);
+    if (error) return { error: "تعذّر حفظ القسم." };
+  } else {
+    const { error } = await supabase
+      .from("departments")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insert(payload as unknown as never);
+    if (error) return { error: "تعذّر إنشاء القسم (تأكد أن الرابط فريد)." };
+  }
+
+  revalidatePath("/admin/departments");
+  revalidatePath("/doctors");
+  return null;
+}
+
+export async function deleteDepartment(formData: FormData) {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id"));
+  await supabase.from("departments").delete().eq("id", id);
+  revalidatePath("/admin/departments");
+  revalidatePath("/doctors");
+}
+
+// ============ DOCTORS ============
+
+export async function saveDoctor(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+
+  const id = String(formData.get("id") ?? "").trim();
+  const name_ar = String(formData.get("name_ar") ?? "").trim();
+  if (name_ar.length < 3) return { error: "اسم الطبيب قصير جداً." };
+
+  const department_id = String(formData.get("department_id") ?? "").trim() || null;
+  const title_ar = String(formData.get("title_ar") ?? "").trim() || null;
+  const hospital = String(formData.get("hospital") ?? "").trim() || null;
+  const photo_url = String(formData.get("photo_url") ?? "").trim() || null;
+  const bio = String(formData.get("bio") ?? "").trim() || null;
+  const slug = String(formData.get("slug") ?? "").trim() || slugify(name_ar);
+
+  const payload = {
+    name_ar,
+    slug,
+    department_id,
+    title_ar,
+    hospital,
+    photo_url,
+    bio,
+  } satisfies Partial<TablesInsert<"doctors">>;
+
+  if (id) {
+    const { error } = await supabase
+      .from("doctors")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update(payload as unknown as never)
+      .eq("id", id);
+    if (error) return { error: "تعذّر حفظ التعديلات." };
+  } else {
+    const { error } = await supabase
+      .from("doctors")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insert(payload as unknown as never);
+    if (error) return { error: "تعذّر إنشاء الطبيب (تأكد أن الرابط فريد)." };
+  }
+
+  revalidatePath("/admin/doctors");
+  revalidatePath("/doctors");
+  redirect("/admin/doctors");
+}
+
+export async function softDeleteDoctor(formData: FormData) {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id"));
+  await supabase
+    .from("doctors")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ deleted_at: new Date().toISOString() } as unknown as never)
+    .eq("id", id);
+  revalidatePath("/admin/doctors");
+  revalidatePath("/doctors");
+}
+
+export async function moderateRating(formData: FormData) {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id"));
+  const action = String(formData.get("action"));
+  if (action === "delete") {
+    await supabase.from("doctor_ratings").delete().eq("id", id);
+  } else {
+    const status = action === "approve" ? "approved" : "rejected";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase.from("doctor_ratings").update({ status } as unknown as never).eq("id", id);
+  }
+  revalidatePath("/admin/doctors/ratings");
+  revalidatePath("/doctors");
+}
+
+// ============ DOCTOR TRANSFERS (انتقال الأطباء) ============
+
+export async function saveTransfer(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+
+  const id = String(formData.get("id") ?? "").trim();
+  const doctor_name = String(formData.get("doctor_name") ?? "").trim();
+  if (doctor_name.length < 3) return { error: "اسم الطبيب قصير جداً." };
+
+  const department_id = String(formData.get("department_id") ?? "").trim() || null;
+  const from_hospital = String(formData.get("from_hospital") ?? "").trim() || null;
+  const to_hospital = String(formData.get("to_hospital") ?? "").trim() || null;
+  const transfer_date = String(formData.get("transfer_date") ?? "").trim() || null;
+  const note = String(formData.get("note") ?? "").trim() || null;
+  const status = String(formData.get("status") ?? "published");
+
+  const payload = {
+    doctor_name,
+    department_id,
+    from_hospital,
+    to_hospital,
+    transfer_date,
+    note,
+    status,
+  } satisfies Partial<TablesInsert<"doctor_transfers">>;
+
+  if (id) {
+    const { error } = await supabase
+      .from("doctor_transfers")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update(payload as unknown as never)
+      .eq("id", id);
+    if (error) return { error: "تعذّر حفظ التعديلات." };
+  } else {
+    const { error } = await supabase
+      .from("doctor_transfers")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insert(payload as unknown as never);
+    if (error) return { error: "تعذّر إنشاء الانتقال." };
+  }
+
+  revalidatePath("/admin/transfers");
+  revalidatePath("/transfers");
+  redirect("/admin/transfers");
+}
+
+export async function softDeleteTransfer(formData: FormData) {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id"));
+  await supabase
+    .from("doctor_transfers")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ deleted_at: new Date().toISOString() } as unknown as never)
+    .eq("id", id);
+  revalidatePath("/admin/transfers");
+  revalidatePath("/transfers");
+}
+
+// ============ URL → AI SYNTHESIS ============
+
+export type SynthResult = { error: string } | { ok: true; id: string; title: string } | null;
+
+/**
+ * Proxy to the `synthesize-url` Edge Function: the admin pastes an article URL;
+ * the function fetches the page, writes an Arabic draft, keeps the source as a
+ * reference, and stores it as `pending` content for review. Mirrors ingestNews:
+ * the OpenRouter key lives only as a Supabase function secret, so synthesis must
+ * run inside Supabase, not in this Next.js process.
+ */
+export async function synthesizeUrl(_prev: SynthResult, formData: FormData): Promise<SynthResult> {
+  await requireAdmin();
+  const url = String(formData.get("url") ?? "").trim();
+  if (!/^https?:\/\//i.test(url)) return { error: "أدخل رابطاً صحيحاً يبدأ بـ http(s)." };
+
+  const supabase = await createClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) return { error: "انتهت الجلسة. سجّل الدخول مرة أخرى." };
+
+  const { data, error } = await supabase.functions.invoke("synthesize-url", {
+    body: { url },
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (error || !data || data.ok === false) {
+    return { error: "تعذّرت معالجة الرابط. تأكد من صحته ومن إعدادات OpenRouter." };
+  }
+
+  revalidatePath("/admin/content");
+  return { ok: true, id: String(data.id), title: String(data.title ?? "") };
+}

@@ -8,6 +8,10 @@ export type Category = Tables<"categories">;
 export type ContentSource = Tables<"content_sources">;
 export type ContentMedia = Tables<"content_media">;
 export type Comment = Tables<"comments">;
+export type Department = Tables<"departments">;
+export type Doctor = Tables<"doctors">;
+export type DoctorRating = Tables<"doctor_ratings">;
+export type DoctorTransfer = Tables<"doctor_transfers">;
 
 const CARD_FIELDS =
   "id,type,title,slug,excerpt,category_slug,cover_image_url,video_duration,read_minutes,published_at,is_breaking";
@@ -157,6 +161,96 @@ export async function getRelated(content: Content, limit = 4): Promise<Content[]
     .order("published_at", { ascending: false })
     .limit(limit);
   return (data as Content[]) ?? [];
+}
+
+// ---- Doctors / departments / transfers ---------------------------------
+
+export async function getDepartments(): Promise<Department[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("departments")
+    .select("*")
+    .order("sort_order")
+    .order("name_ar");
+  return (data as Department[]) ?? [];
+}
+
+/** Public doctor directory, newest first, optionally filtered by department. */
+export async function getDoctors(departmentId?: string): Promise<Doctor[]> {
+  const supabase = await createClient();
+  let q = supabase
+    .from("doctors")
+    .select("*")
+    .is("deleted_at", null)
+    .order("rating_avg", { ascending: false })
+    .order("name_ar");
+  if (departmentId) q = q.eq("department_id", departmentId);
+  const { data } = await q;
+  return (data as Doctor[]) ?? [];
+}
+
+export type DoctorDetail = {
+  doctor: Doctor;
+  department: Department | null;
+  ratings: DoctorRating[];
+};
+
+export const getDoctorBySlug = cache(async (rawSlug: string): Promise<DoctorDetail | null> => {
+  let slug = rawSlug;
+  try {
+    slug = decodeURIComponent(rawSlug);
+  } catch {
+    // already decoded
+  }
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("doctors")
+    .select("*")
+    .eq("slug", slug)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (!data) return null;
+  const doctor = data as Doctor;
+
+  const [{ data: department }, { data: ratings }] = await Promise.all([
+    doctor.department_id
+      ? supabase.from("departments").select("*").eq("id", doctor.department_id).maybeSingle()
+      : Promise.resolve({ data: null }),
+    supabase
+      .from("doctor_ratings")
+      .select("*")
+      .eq("doctor_id", doctor.id)
+      .eq("status", "approved")
+      .order("created_at", { ascending: false }),
+  ]);
+
+  return {
+    doctor,
+    department: (department as Department | null) ?? null,
+    ratings: (ratings as DoctorRating[]) ?? [],
+  };
+});
+
+export type TransferRow = DoctorTransfer & { department_name: string | null };
+
+/** Public transfer feed (انتقال الأطباء), newest first. */
+export async function getTransfers(): Promise<TransferRow[]> {
+  const supabase = await createClient();
+  const [{ data: transfers }, departments] = await Promise.all([
+    supabase
+      .from("doctor_transfers")
+      .select("*")
+      .eq("status", "published")
+      .is("deleted_at", null)
+      .order("transfer_date", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false }),
+    getDepartments(),
+  ]);
+  const byId = new Map(departments.map((d) => [d.id, d.name_ar]));
+  return ((transfers as DoctorTransfer[]) ?? []).map((t) => ({
+    ...t,
+    department_name: t.department_id ? byId.get(t.department_id) ?? null : null,
+  }));
 }
 
 export type SitemapEntry = Pick<Content, "slug" | "type" | "updated_at" | "published_at">;

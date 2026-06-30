@@ -251,102 +251,115 @@ async function runIngestion(
   const sourcesChecked = new Set<string>();
   const createdIds: string[] = [];
 
-  try {
-    for (const region of regions) {
-      const regionLabel = REGION_LABELS[region] ?? region;
-      let result: WebChatResult;
+  // Insert a single validated draft. Safe to run concurrently: the unique
+  // index on dedupe_key turns same-run collisions into a counted duplicate.
+  const processItem = async (
+    draft: Draft,
+    citations: Map<string, Citation>,
+  ): Promise<void> => {
+    stats.found++;
+
+    // SAFEGUARD: the source URL must match a real citation the plugin
+    // returned — otherwise the model likely invented it. Drop the item.
+    const key = dedupeKeyFromUrl(draft.source_url);
+    const citation = key ? citations.get(key) : undefined;
+    if (!key || !citation) {
+      stats.filtered++;
+      return;
+    }
+
+    const { data: existing } = await db
+      .from("content")
+      .select("id")
+      .eq("dedupe_key", key)
+      .maybeSingle();
+    if (existing) {
+      stats.duplicates++;
+      return;
+    }
+
+    const sourceName = citation.title || new URL(citation.url).host.replace(/^www\./, "");
+    const coverImage = await fetchCoverImage(citation.url);
+
+    const slug = `${slugify(draft.title)}-${Math.random().toString(36).slice(2, 7)}`;
+    const payload = {
+      title: draft.title,
+      slug,
+      type: "news",
+      status: "pending",
+      origin: "ai",
+      category_slug: draft.category_slug,
+      excerpt: draft.excerpt || null,
+      body: draft.body || null,
+      read_minutes: draft.read_minutes,
+      relevance_score: draft.relevance_score,
+      original_title: draft.original_title || null,
+      original_url: citation.url,
+      cover_image_url: coverImage,
+      cover_credit_name: coverImage ? sourceName : null,
+      cover_credit_url: coverImage ? citation.url : null,
+      dedupe_key: key,
+    };
+    const { data, error } = await db
+      .from("content")
+      .insert(payload)
+      .select("id")
+      .single();
+    if (error || !data) {
+      // 23505 = unique_violation: another concurrent item won the same key.
+      if ((error as { code?: string } | null)?.code === "23505") stats.duplicates++;
+      else stats.filtered++;
+      return;
+    }
+
+    const contentId = (data as { id: string }).id;
+    await db.from("content_sources").insert({
+      content_id: contentId,
+      label: sourceName,
+      url: citation.url,
+    });
+    createdIds.push(contentId);
+    stats.kept++;
+  };
+
+  // Fetch + process each region concurrently to keep total runtime bounded by
+  // the slowest region instead of the sum of all regions.
+  const processRegion = async (region: string): Promise<void> => {
+    const regionLabel = REGION_LABELS[region] ?? region;
+    let result: WebChatResult;
+    try {
+      result = await chatWeb(
+        [
+          { role: "system", content: buildSystem(policy as Policy) },
+          { role: "user", content: buildPrompt(regionLabel, perRegion) },
+        ],
+        { temperature: 0.3, maxTokens: 2600, maxResults: 8 },
+      );
+    } catch {
+      return;
+    }
+
+    for (const c of result.citations) {
       try {
-        result = await chatWeb(
-          [
-            { role: "system", content: buildSystem(policy as Policy) },
-            { role: "user", content: buildPrompt(regionLabel, perRegion) },
-          ],
-          { temperature: 0.3, maxTokens: 2600, maxResults: 8 },
-        );
+        sourcesChecked.add(new URL(c.url).host.replace(/^www\./, ""));
       } catch {
-        continue;
-      }
-
-      for (const c of result.citations) {
-        try {
-          sourcesChecked.add(new URL(c.url).host.replace(/^www\./, ""));
-        } catch {
-          // skip unparseable citation URLs
-        }
-      }
-
-      const citations = citationIndex(result.citations);
-      let parsed: { items?: unknown };
-      try {
-        parsed = extractJson(result.content) as { items?: unknown };
-      } catch {
-        continue;
-      }
-
-      for (const draft of sanitize(parsed.items)) {
-        stats.found++;
-
-        // SAFEGUARD: the source URL must match a real citation the plugin
-        // returned — otherwise the model likely invented it. Drop the item.
-        const key = dedupeKeyFromUrl(draft.source_url);
-        const citation = key ? citations.get(key) : undefined;
-        if (!key || !citation) {
-          stats.filtered++;
-          continue;
-        }
-
-        const { data: existing } = await db
-          .from("content")
-          .select("id")
-          .eq("dedupe_key", key)
-          .maybeSingle();
-        if (existing) {
-          stats.duplicates++;
-          continue;
-        }
-
-        const sourceName = citation.title || new URL(citation.url).host.replace(/^www\./, "");
-        const coverImage = await fetchCoverImage(citation.url);
-
-        const slug = `${slugify(draft.title)}-${Math.random().toString(36).slice(2, 7)}`;
-        const payload = {
-          title: draft.title,
-          slug,
-          type: "news",
-          status: "pending",
-          origin: "ai",
-          category_slug: draft.category_slug,
-          excerpt: draft.excerpt || null,
-          body: draft.body || null,
-          read_minutes: draft.read_minutes,
-          relevance_score: draft.relevance_score,
-          original_title: draft.original_title || null,
-          original_url: citation.url,
-          cover_image_url: coverImage,
-          cover_credit_name: coverImage ? sourceName : null,
-          cover_credit_url: coverImage ? citation.url : null,
-          dedupe_key: key,
-        };
-        const { data, error } = await db
-          .from("content")
-          .insert(payload)
-          .select("id")
-          .single();
-        if (error || !data) {
-          stats.filtered++;
-          continue;
-        }
-
-        const contentId = (data as { id: string }).id;
-        await db.from("content_sources").insert({
-          content_id: contentId,
-          label: sourceName,
-          url: citation.url,
-        });
-        createdIds.push(contentId);
-        stats.kept++;
+        // skip unparseable citation URLs
       }
     }
+
+    const citations = citationIndex(result.citations);
+    let parsed: { items?: unknown };
+    try {
+      parsed = extractJson(result.content) as { items?: unknown };
+    } catch {
+      return;
+    }
+
+    await Promise.all(sanitize(parsed.items).map((draft) => processItem(draft, citations)));
+  };
+
+  try {
+    await Promise.all(regions.map(processRegion));
 
     await db.from("ingestion_runs").insert({
       trigger,

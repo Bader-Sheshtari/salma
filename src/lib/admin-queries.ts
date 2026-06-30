@@ -1,6 +1,15 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
-import type { Content, ContentSource, ContentMedia, Comment } from "@/lib/queries";
+import type {
+  Content,
+  ContentSource,
+  ContentMedia,
+  Comment,
+  Department,
+  Doctor,
+  DoctorRating,
+  DoctorTransfer,
+} from "@/lib/queries";
 import type { Tables } from "@/lib/supabase/database.types";
 
 export type IngestionRun = Tables<"ingestion_runs">;
@@ -105,4 +114,83 @@ export async function listComments(status: string): Promise<Comment[]> {
     .eq("status", status)
     .order("created_at", { ascending: false });
   return (data as Comment[]) ?? [];
+}
+
+// ---- Doctors / departments / transfers (admin) -------------------------
+
+export async function listDepartments(): Promise<Department[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("departments")
+    .select("*")
+    .order("sort_order")
+    .order("name_ar");
+  return (data as Department[]) ?? [];
+}
+
+export async function listDoctors(): Promise<Doctor[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("doctors")
+    .select("*")
+    .is("deleted_at", null)
+    .order("updated_at", { ascending: false });
+  return (data as Doctor[]) ?? [];
+}
+
+export async function getDoctorForEdit(id: string): Promise<Doctor | null> {
+  const supabase = await createClient();
+  const { data } = await supabase.from("doctors").select("*").eq("id", id).maybeSingle();
+  return (data as Doctor | null) ?? null;
+}
+
+export type RatingRow = DoctorRating & { doctor_name: string | null; doctor_slug: string | null };
+
+export async function listRatings(status: string): Promise<RatingRow[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("doctor_ratings")
+    .select("*")
+    .eq("status", status)
+    .order("created_at", { ascending: false });
+  const rows = (data as DoctorRating[]) ?? [];
+
+  const ids = [...new Set(rows.map((r) => r.doctor_id))];
+  const names = new Map<string, { name: string; slug: string }>();
+  if (ids.length > 0) {
+    const { data: docs } = await supabase.from("doctors").select("id,name_ar,slug").in("id", ids);
+    for (const d of (docs as { id: string; name_ar: string; slug: string }[]) ?? []) {
+      names.set(d.id, { name: d.name_ar, slug: d.slug });
+    }
+  }
+  return rows.map((r) => ({
+    ...r,
+    doctor_name: names.get(r.doctor_id)?.name ?? null,
+    doctor_slug: names.get(r.doctor_id)?.slug ?? null,
+  }));
+}
+
+export type AdminTransferRow = DoctorTransfer & { department_name: string | null };
+
+export async function listTransfers(): Promise<AdminTransferRow[]> {
+  const supabase = await createClient();
+  const [{ data }, departments] = await Promise.all([
+    supabase
+      .from("doctor_transfers")
+      .select("*")
+      .is("deleted_at", null)
+      .order("updated_at", { ascending: false }),
+    listDepartments(),
+  ]);
+  const byId = new Map(departments.map((d) => [d.id, d.name_ar]));
+  return ((data as DoctorTransfer[]) ?? []).map((t) => ({
+    ...t,
+    department_name: t.department_id ? byId.get(t.department_id) ?? null : null,
+  }));
+}
+
+export async function getTransferForEdit(id: string): Promise<DoctorTransfer | null> {
+  const supabase = await createClient();
+  const { data } = await supabase.from("doctor_transfers").select("*").eq("id", id).maybeSingle();
+  return (data as DoctorTransfer | null) ?? null;
 }

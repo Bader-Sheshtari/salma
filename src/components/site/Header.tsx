@@ -61,6 +61,26 @@ export function Header({ categories, active }: { categories: Category[]; active?
             </Link>
           );
         })}
+        <Link
+          href="/doctors"
+          className={
+            active === "doctors"
+              ? "border-b-[2.5px] border-teal pb-1.5 text-teal"
+              : "pb-1.5 text-gray hover:text-teal"
+          }
+        >
+          الأطباء
+        </Link>
+        <Link
+          href="/transfers"
+          className={
+            active === "transfers"
+              ? "border-b-[2.5px] border-teal pb-1.5 text-teal"
+              : "pb-1.5 text-gray hover:text-teal"
+          }
+        >
+          انتقال الأطباء
+        </Link>
       </nav>
     </header>
   );

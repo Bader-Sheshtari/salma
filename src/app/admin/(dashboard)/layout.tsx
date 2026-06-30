@@ -9,7 +9,11 @@ const NAV = [
   { href: "/admin/ingest", label: "جلب بالذكاء الاصطناعي" },
   { href: "/admin/ingest/runs", label: "سجلّ الجلب" },
   { href: "/admin/ingest/policy", label: "السياسة التحريرية" },
+  { href: "/admin/synthesize", label: "تحويل رابط لمقال" },
   { href: "/admin/comments", label: "التعليقات" },
+  { href: "/admin/departments", label: "الأقسام" },
+  { href: "/admin/doctors", label: "الأطباء" },
+  { href: "/admin/transfers", label: "انتقال الأطباء" },
 ];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {

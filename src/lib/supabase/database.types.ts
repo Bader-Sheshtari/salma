@@ -284,6 +284,174 @@ export type Database = {
           },
         ]
       }
+      departments: {
+        Row: {
+          created_at: string
+          id: string
+          name_ar: string
+          slug: string
+          sort_order: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name_ar: string
+          slug: string
+          sort_order?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name_ar?: string
+          slug?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
+      doctor_ratings: {
+        Row: {
+          author_name: string
+          body: string | null
+          created_at: string
+          doctor_id: string
+          id: string
+          stars: number
+          status: string
+        }
+        Insert: {
+          author_name: string
+          body?: string | null
+          created_at?: string
+          doctor_id: string
+          id?: string
+          stars: number
+          status?: string
+        }
+        Update: {
+          author_name?: string
+          body?: string | null
+          created_at?: string
+          doctor_id?: string
+          id?: string
+          stars?: number
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "doctor_ratings_doctor_id_fkey"
+            columns: ["doctor_id"]
+            isOneToOne: false
+            referencedRelation: "doctors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      doctor_transfers: {
+        Row: {
+          created_at: string
+          deleted_at: string | null
+          department_id: string | null
+          doctor_name: string
+          from_hospital: string | null
+          id: string
+          note: string | null
+          status: string
+          to_hospital: string | null
+          transfer_date: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          deleted_at?: string | null
+          department_id?: string | null
+          doctor_name: string
+          from_hospital?: string | null
+          id?: string
+          note?: string | null
+          status?: string
+          to_hospital?: string | null
+          transfer_date?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          deleted_at?: string | null
+          department_id?: string | null
+          doctor_name?: string
+          from_hospital?: string | null
+          id?: string
+          note?: string | null
+          status?: string
+          to_hospital?: string | null
+          transfer_date?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "doctor_transfers_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "departments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      doctors: {
+        Row: {
+          bio: string | null
+          created_at: string
+          deleted_at: string | null
+          department_id: string | null
+          hospital: string | null
+          id: string
+          name_ar: string
+          photo_url: string | null
+          rating_avg: number
+          rating_count: number
+          slug: string
+          title_ar: string | null
+          updated_at: string
+        }
+        Insert: {
+          bio?: string | null
+          created_at?: string
+          deleted_at?: string | null
+          department_id?: string | null
+          hospital?: string | null
+          id?: string
+          name_ar: string
+          photo_url?: string | null
+          rating_avg?: number
+          rating_count?: number
+          slug: string
+          title_ar?: string | null
+          updated_at?: string
+        }
+        Update: {
+          bio?: string | null
+          created_at?: string
+          deleted_at?: string | null
+          department_id?: string | null
+          hospital?: string | null
+          id?: string
+          name_ar?: string
+          photo_url?: string | null
+          rating_avg?: number
+          rating_count?: number
+          slug?: string
+          title_ar?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "doctors_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "departments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       editorial_policy: {
         Row: {
           block_topics: string[]
