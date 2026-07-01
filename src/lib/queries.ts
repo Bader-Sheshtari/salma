@@ -27,17 +27,19 @@ export async function getCategories(): Promise<Category[]> {
 
 export type HomepageSection = Tables<"homepage_sections">;
 
+/** A rendered homepage lane: its config plus the items it resolved to. Category
+ * sections fill `content`; the doctor-transfers feature fills `transfers`. */
+export type HomeSectionItems = {
+  section: HomepageSection;
+  content: Content[];
+  transfers: DoctorTransfer[];
+};
+
 export type HomepageData = {
   hero: Content | null;
   breaking: Content[];
-  kuwait: Content[];
   videos: Content[];
-  economy: Content[];
-  investigations: Content[];
-  lifestyle: Content[];
-  gulfWorld: Content[];
-  transfers: DoctorTransfer[];
-  transfersSection: HomepageSection | null;
+  sections: HomeSectionItems[];
 };
 
 export async function getHomepage(): Promise<HomepageData> {
@@ -50,51 +52,45 @@ export async function getHomepage(): Promise<HomepageData> {
       .eq("status", "published")
       .is("deleted_at", null);
 
-  const transfersSectionQ = supabase
-    .from("homepage_sections")
-    .select("*")
-    .eq("key", "feature:doctor_transfers")
-    .maybeSingle();
-
-  const [
-    hero,
-    breaking,
-    kuwait,
-    videos,
-    economy,
-    investigations,
-    lifestyle,
-    gulfWorld,
-    transfersSectionRes,
-  ] = await Promise.all([
+  const [heroRes, breakingRes, videosRes, sectionsRes] = await Promise.all([
     base().eq("is_featured", true).order("published_at", { ascending: false }).limit(1).maybeSingle(),
     base().eq("is_breaking", true).order("published_at", { ascending: false }).limit(8),
-    base().eq("category_slug", "kuwait").eq("is_featured", false).order("published_at", { ascending: false }).limit(5),
     base().eq("type", "video").order("published_at", { ascending: false }).limit(6),
-    base().eq("category_slug", "health-economy").order("published_at", { ascending: false }).limit(4),
-    base().eq("type", "investigation").order("published_at", { ascending: false }).limit(3),
-    base().eq("category_slug", "lifestyle").order("published_at", { ascending: false }).limit(6),
-    base().in("category_slug", ["gulf", "world"]).order("published_at", { ascending: false }).limit(4),
-    transfersSectionQ,
+    supabase
+      .from("homepage_sections")
+      .select("*")
+      .eq("is_enabled", true)
+      .order("sort_order", { ascending: true }),
   ]);
 
-  const transfersSection = (transfersSectionRes.data as HomepageSection | null) ?? null;
-  const transfers =
-    transfersSection?.is_enabled === false
-      ? []
-      : await getTransfers(transfersSection?.items_limit ?? 6);
+  const hero = (heroRes.data as unknown as Content) ?? null;
+  const sectionRows = (sectionsRes.data as HomepageSection[]) ?? [];
+
+  // Resolve each enabled section's items in parallel. `feature:social` has no
+  // UI yet (built in a later stage), so it is skipped here.
+  const resolved = await Promise.all(
+    sectionRows.map(async (section): Promise<HomeSectionItems | null> => {
+      if (section.kind === "category" && section.category_slug) {
+        const { data } = await base()
+          .eq("category_slug", section.category_slug)
+          .order("published_at", { ascending: false })
+          .limit(section.items_limit);
+        const content = ((data as Content[]) ?? []).filter((c) => c.id !== hero?.id);
+        return content.length > 0 ? { section, content, transfers: [] } : null;
+      }
+      if (section.key === "feature:doctor_transfers") {
+        const transfers = await getTransfers(section.items_limit);
+        return transfers.length > 0 ? { section, content: [], transfers } : null;
+      }
+      return null;
+    }),
+  );
 
   return {
-    hero: (hero.data as unknown as Content) ?? null,
-    breaking: (breaking.data as Content[]) ?? [],
-    kuwait: (kuwait.data as Content[]) ?? [],
-    videos: (videos.data as Content[]) ?? [],
-    economy: (economy.data as Content[]) ?? [],
-    investigations: (investigations.data as Content[]) ?? [],
-    lifestyle: (lifestyle.data as Content[]) ?? [],
-    gulfWorld: (gulfWorld.data as Content[]) ?? [],
-    transfers,
-    transfersSection,
+    hero,
+    breaking: (breakingRes.data as Content[]) ?? [],
+    videos: (videosRes.data as Content[]) ?? [],
+    sections: resolved.filter((s): s is HomeSectionItems => s !== null),
   };
 }
 

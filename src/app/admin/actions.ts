@@ -475,6 +475,81 @@ export async function softDeleteTransfer(formData: FormData) {
   revalidatePath("/transfers");
 }
 
+// ============ HOMEPAGE SECTIONS ============
+
+const DISPLAY_STYLES = ["carousel", "grid", "list", "featured"];
+
+/** Update the editable fields of a single homepage section. Kind/key/category
+ * are immutable (seeded), so they are not accepted here. */
+export async function saveHomepageSection(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return { error: "قسم غير معروف." };
+
+  const title_ar = String(formData.get("title_ar") ?? "").trim();
+  if (title_ar.length < 2) return { error: "عنوان القسم قصير جداً." };
+
+  const styleRaw = String(formData.get("display_style") ?? "carousel");
+  const display_style = DISPLAY_STYLES.includes(styleRaw) ? styleRaw : "carousel";
+  const limitRaw = Number(String(formData.get("items_limit") ?? "6"));
+  const items_limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 24) : 6;
+  const is_enabled = formData.get("is_enabled") === "on";
+  const show_view_all = formData.get("show_view_all") === "on";
+  const accent = String(formData.get("accent") ?? "").trim() || null;
+
+  const payload = {
+    title_ar,
+    display_style,
+    items_limit,
+    is_enabled,
+    show_view_all,
+    accent,
+  } satisfies Partial<TablesUpdate<"homepage_sections">>;
+
+  const { error } = await supabase
+    .from("homepage_sections")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update(payload as unknown as never)
+    .eq("id", id);
+  if (error) return { error: "تعذّر حفظ القسم." };
+
+  revalidatePath("/admin/homepage");
+  revalidatePath("/");
+  return null;
+}
+
+/** Swap a section's sort_order with its neighbour to move it up or down. */
+export async function moveHomepageSection(formData: FormData) {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id"));
+  const dir = String(formData.get("dir"));
+
+  const { data } = await supabase
+    .from("homepage_sections")
+    .select("id, sort_order")
+    .order("sort_order", { ascending: true });
+  const rows = (data as { id: string; sort_order: number }[]) ?? [];
+  const i = rows.findIndex((r) => r.id === id);
+  if (i === -1) return;
+  const j = dir === "up" ? i - 1 : i + 1;
+  if (j < 0 || j >= rows.length) return;
+
+  const a = rows[i];
+  const b = rows[j];
+  await Promise.all([
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase.from("homepage_sections").update({ sort_order: b.sort_order } as unknown as never).eq("id", a.id),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase.from("homepage_sections").update({ sort_order: a.sort_order } as unknown as never).eq("id", b.id),
+  ]);
+
+  revalidatePath("/admin/homepage");
+  revalidatePath("/");
+}
+
 // ============ URL → AI SYNTHESIS ============
 
 export type SynthResult = { error: string } | { ok: true; id: string; title: string } | null;

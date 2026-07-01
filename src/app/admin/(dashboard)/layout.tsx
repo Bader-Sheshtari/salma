@@ -4,6 +4,7 @@ import { logout } from "../auth-actions";
 
 const NAV = [
   { href: "/admin", label: "لوحة التحكم" },
+  { href: "/admin/homepage", label: "الصفحة الرئيسية" },
   { href: "/admin/content", label: "المحتوى" },
   { href: "/admin/content/new", label: "إضافة محتوى" },
   { href: "/admin/ingest", label: "جلب بالذكاء الاصطناعي" },

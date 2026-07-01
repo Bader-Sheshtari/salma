@@ -3,7 +3,7 @@ import type { ContentDetail, Category, Content } from "@/lib/queries";
 import { Cover, ListRow } from "./cards";
 import { ShareBar } from "./ShareBar";
 import { Comments } from "./Comments";
-import { timeAgoAr, embedUrl } from "@/lib/format";
+import { formatDateTimeAr, embedUrl } from "@/lib/format";
 import { contentJsonLd } from "@/lib/seo";
 
 /** Small, subtle source/credit line. Renders nothing when no name is given. */
@@ -70,7 +70,7 @@ export function ArticleView({
       <h1 className="mt-3 text-2xl font-bold leading-snug sm:text-3xl">{content.title}</h1>
 
       <div className="mt-2 flex items-center gap-3 font-sans text-[12px] text-gray">
-        <span>{timeAgoAr(content.published_at)}</span>
+        <span>{formatDateTimeAr(content.published_at)}</span>
         {content.read_minutes ? <span>· {content.read_minutes} دقائق قراءة</span> : null}
       </div>
 

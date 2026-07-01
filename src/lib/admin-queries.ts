@@ -194,3 +194,17 @@ export async function getTransferForEdit(id: string): Promise<DoctorTransfer | n
   const { data } = await supabase.from("doctor_transfers").select("*").eq("id", id).maybeSingle();
   return (data as DoctorTransfer | null) ?? null;
 }
+
+// ---- Homepage sections (admin) -----------------------------------------
+
+export type HomepageSection = Tables<"homepage_sections">;
+
+export async function listHomepageSections(): Promise<HomepageSection[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("homepage_sections")
+    .select("*")
+    .order("sort_order", { ascending: true })
+    .order("key");
+  return (data as HomepageSection[]) ?? [];
+}
