@@ -1,13 +1,16 @@
-import { listHomepageSections } from "@/lib/admin-queries";
-import { moveHomepageSection, setHomepageSectionPosition } from "../../actions";
+import { listHomepageSections, listHeroOptions } from "@/lib/admin-queries";
+import { moveHomepageSection, setHomepageSectionPosition, setMainContent } from "../../actions";
 import { HomepageSectionForm } from "./HomepageSectionForm";
 
 export const dynamic = "force-dynamic";
 
 const KIND_LABELS: Record<string, string> = { category: "قسم", feature: "ميزة" };
+const TYPE_LABELS: Record<string, string> = { article: "مقال", video: "فيديو" };
 
 export default async function HomepageSectionsPage() {
-  const sections = await listHomepageSections();
+  const [sections, heroOptions] = await Promise.all([listHomepageSections(), listHeroOptions()]);
+  // Mirror the homepage's hero pick: the newest featured item (options are newest-first).
+  const currentHeroId = heroOptions.find((c) => c.is_featured)?.id ?? "";
 
   return (
     <div>
@@ -19,6 +22,31 @@ export default async function HomepageSectionsPage() {
         أوقفها، وعدّل العنوان ونمط العرض وعدد العناصر وزر «عرض الكل».
       </p>
 
+      <section className="mb-6 rounded-2xl border border-line bg-white p-4 sm:p-5">
+        <h2 className="mb-1 text-[15px] font-bold">الخبر الرئيسي (الكبير في الأعلى)</h2>
+        <p className="mb-3 text-[13px] text-gray">
+          اختر المقال الذي يظهر كبيراً أعلى الصفحة الرئيسية. اترك الخيار فارغاً ليُختار تلقائياً أحدث خبر.
+        </p>
+        <form action={setMainContent} className="flex flex-wrap items-center gap-2">
+          <select
+            name="id"
+            defaultValue={currentHeroId}
+            className="min-w-0 flex-1 rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal sm:max-w-lg"
+          >
+            <option value="">— تلقائي (أحدث خبر) —</option>
+            {heroOptions.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.title} · {TYPE_LABELS[c.type] ?? c.type}
+              </option>
+            ))}
+          </select>
+          <button className="rounded-lg bg-teal px-5 py-2 text-[13px] font-bold text-white hover:opacity-90">
+            حفظ
+          </button>
+        </form>
+      </section>
+
+      <h2 className="mb-3 text-[15px] font-bold">ترتيب الأقسام</h2>
       <ul className="flex flex-col gap-3">
         {sections.map((s, i) => (
           <li

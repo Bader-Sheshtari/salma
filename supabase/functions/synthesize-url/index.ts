@@ -270,7 +270,11 @@ async function authorizeAdmin(req: Request, admin: SupabaseClient): Promise<bool
     .select("role,disabled")
     .eq("id", user.id)
     .maybeSingle();
-  return !!profile && profile.role === "admin" && !profile.disabled;
+  return (
+    !!profile &&
+    ["admin", "super_admin", "owner"].includes(profile.role) &&
+    !profile.disabled
+  );
 }
 
 Deno.serve(async (req: Request) => {

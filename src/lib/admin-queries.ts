@@ -215,6 +215,21 @@ export async function getTransferForEdit(id: string): Promise<DoctorTransfer | n
 
 // ---- Homepage sections (admin) -----------------------------------------
 
+export type HeroOption = { id: string; title: string; type: string; is_featured: boolean };
+
+/** Published, non-deleted content for the homepage-hero picker, newest first. */
+export async function listHeroOptions(): Promise<HeroOption[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("content")
+    .select("id,title,type,is_featured")
+    .eq("status", "published")
+    .is("deleted_at", null)
+    .order("published_at", { ascending: false })
+    .limit(100);
+  return (data as HeroOption[]) ?? [];
+}
+
 export type HomepageSection = Tables<"homepage_sections">;
 
 export async function listHomepageSections(): Promise<HomepageSection[]> {

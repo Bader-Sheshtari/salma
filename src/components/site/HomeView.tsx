@@ -4,6 +4,7 @@ import { BreakingTicker } from "./BreakingTicker";
 import { SectionTitle, Rail } from "./Section";
 import { HeroCard, ListRow, VideoCard } from "./cards";
 import { HomeSection } from "./HomeSection";
+import { NewsletterForm } from "./NewsletterForm";
 
 export function HomeView({ data }: { data: HomepageData }) {
   // Hero falls back to the first item of the first resolved section.
@@ -39,10 +40,10 @@ export function HomeView({ data }: { data: HomepageData }) {
         >
           <div className="text-lg font-bold">خلاصتك تبدأ من هنا</div>
           <div className="mt-1.5 text-[13px] leading-relaxed opacity-90">
-            اختر اهتماماتك وستعرض لك سلمى ما يهمّك أولاً — أخبار، فيديو، تحقيقات.
+            اشترك بنشرة سلمى ويصلك الأهم في الصحة — أخبار، فيديو، تحقيقات.
           </div>
           <span className="mt-4 inline-block rounded-lg bg-white px-4 py-2.5 text-[13.5px] font-bold text-teal">
-            اختر اهتماماتك ←
+            اشترك بالنشرة ←
           </span>
         </Link>
       </section>
@@ -84,20 +85,7 @@ export function HomeView({ data }: { data: HomepageData }) {
           <p className="mt-1.5 text-[12.5px] leading-relaxed text-gray">
             نُرسل لك الأهم في الصحة — أنت تتحكم بما يصلك.
           </p>
-          <form className="mt-4 flex gap-2">
-            <input
-              type="email"
-              placeholder="بريدك الإلكتروني"
-              dir="rtl"
-              className="flex-1 rounded-lg border border-gray/40 px-3.5 py-3 text-sm outline-none focus:border-teal"
-            />
-            <button
-              type="submit"
-              className="rounded-lg bg-teal px-5 py-3 text-sm font-bold text-white"
-            >
-              اشترك
-            </button>
-          </form>
+          <NewsletterForm />
         </div>
       </section>
     </>

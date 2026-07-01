@@ -17,8 +17,12 @@ export function Footer({ categories }: { categories: Category[] }) {
               {c.name_ar}
             </Link>
           ))}
-          <span>من نحن</span>
-          <span>اتصل بنا</span>
+          <Link href="/about" className="hover:text-white">
+            من نحن
+          </Link>
+          <Link href="/contact" className="hover:text-white">
+            اتصل بنا
+          </Link>
         </div>
         <div className="border-t border-white/15 pt-3.5 font-sans text-[11px] leading-relaxed text-white/50">
           المعايير التحريرية · مصادرنا: WHO · CDC · Mayo Clinic

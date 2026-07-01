@@ -418,7 +418,12 @@ async function authorize(
     .select("role,disabled")
     .eq("id", user.id)
     .maybeSingle();
-  if (profile && profile.role === "admin" && !profile.disabled) return "manual";
+  if (
+    profile &&
+    ["admin", "super_admin", "owner"].includes(profile.role) &&
+    !profile.disabled
+  )
+    return "manual";
   return null;
 }
 

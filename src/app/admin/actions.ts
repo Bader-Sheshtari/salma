@@ -80,6 +80,16 @@ export async function saveContent(_prev: SaveResult, formData: FormData): Promis
     contentId = (data as { id: string }).id;
   }
 
+  // Only one article may be the homepage hero: clear the flag on every other row.
+  if (is_featured) {
+    await supabase
+      .from("content")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update({ is_featured: false } as unknown as never)
+      .eq("is_featured", true)
+      .neq("id", contentId);
+  }
+
   // Replace sources: parallel arrays source_label[] / source_url[].
   const labels = formData.getAll("source_label").map((v) => String(v).trim());
   const urls = formData.getAll("source_url").map((v) => String(v).trim());
@@ -546,6 +556,34 @@ export async function moveHomepageSection(formData: FormData) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     supabase.from("homepage_sections").update({ sort_order: a.sort_order } as unknown as never).eq("id", b.id),
   ]);
+
+  revalidatePath("/admin/homepage");
+  revalidatePath("/");
+}
+
+/**
+ * Choose the homepage hero (the big article on top). Clears `is_featured` on all
+ * content, then sets it on the chosen row. An empty id restores automatic mode
+ * (the homepage falls back to the newest item of the first section).
+ */
+export async function setMainContent(formData: FormData) {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id") ?? "").trim();
+
+  await supabase
+    .from("content")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ is_featured: false } as unknown as never)
+    .eq("is_featured", true);
+
+  if (id) {
+    await supabase
+      .from("content")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update({ is_featured: true } as unknown as never)
+      .eq("id", id);
+  }
 
   revalidatePath("/admin/homepage");
   revalidatePath("/");

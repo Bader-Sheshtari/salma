@@ -15,6 +15,6 @@ export default async function Image({ params }: { params: Promise<{ slug: string
     title: content?.title ?? "سلمى",
     categoryName: category?.name_ar,
     accent: category?.accent,
-    isVideo: true,
+    isVideo: content?.type === "video",
   });
 }
