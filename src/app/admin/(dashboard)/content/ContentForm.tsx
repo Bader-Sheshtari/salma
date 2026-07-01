@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 import { saveContent, type SaveResult } from "../../actions";
+import { generateCoverImage } from "../../image-actions";
 import { uploadToMedia } from "@/lib/upload";
 import type { Content, ContentSource, ContentMedia, Category } from "@/lib/queries";
 
@@ -53,8 +54,11 @@ export function ContentForm({
   const [type, setType] = useState(content?.type ?? "news");
 
   // Cover
+  const formRef = useRef<HTMLFormElement>(null);
   const [coverUrl, setCoverUrl] = useState(content?.cover_image_url ?? "");
   const [coverBusy, setCoverBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
 
   // Media gallery
   const [items, setItems] = useState<MediaItem[]>(
@@ -86,6 +90,30 @@ export function ContentForm({
     }
   }
 
+  async function handleGenerateCover() {
+    const form = formRef.current;
+    if (!form) return;
+    const fd = new FormData(form);
+    const title = String(fd.get("title") ?? "").trim();
+    const excerpt = String(fd.get("excerpt") ?? "").trim();
+    const category = String(fd.get("category_slug") ?? "").trim();
+    if (title.length < 4) {
+      setAiError("أدخل عنوان الخبر أولاً لتُبنى الصورة عليه.");
+      return;
+    }
+    setAiError("");
+    setAiBusy(true);
+    try {
+      const r = await generateCoverImage({ title, excerpt, category });
+      if ("ok" in r) setCoverUrl(r.url);
+      else setAiError(r.error);
+    } catch {
+      setAiError("تعذّر توليد الصورة، حاول مرة أخرى.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
   async function handleItemUpload(i: number, file: File) {
     setUploadError("");
     setBusy(i);
@@ -100,7 +128,7 @@ export function ContentForm({
   }
 
   return (
-    <form action={formAction} className="flex max-w-2xl flex-col gap-4">
+    <form ref={formRef} action={formAction} className="flex max-w-2xl flex-col gap-4">
       {content?.id ? <input type="hidden" name="id" value={content.id} /> : null}
 
       <label className={label}>
@@ -170,7 +198,7 @@ export function ContentForm({
               type="file"
               accept="image/*"
               className="hidden"
-              disabled={coverBusy}
+              disabled={coverBusy || aiBusy}
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) handleCover(f);
@@ -178,6 +206,14 @@ export function ContentForm({
               }}
             />
           </label>
+          <button
+            type="button"
+            onClick={handleGenerateCover}
+            disabled={aiBusy || coverBusy}
+            className="rounded-lg border border-teal bg-teal/5 px-4 py-2 text-[13px] font-semibold text-teal hover:bg-teal/10 disabled:opacity-60"
+          >
+            {aiBusy ? "جارٍ التوليد…" : coverUrl ? "توليد صورة جديدة ✨" : "توليد صورة بالذكاء الاصطناعي ✨"}
+          </button>
           {coverUrl ? (
             <button
               type="button"
@@ -188,6 +224,10 @@ export function ContentForm({
             </button>
           ) : null}
         </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-gray">
+          تُبنى الصورة على عنوان الخبر ومقتطفه. إن لم تعجبك، اضغط «توليد صورة جديدة» للحصول على أخرى.
+        </p>
+        {aiError ? <div className="mt-2 text-[13px] text-coral">{aiError}</div> : null}
         <div className="mt-3 grid grid-cols-2 gap-3">
           <input
             name="cover_credit_name"
@@ -409,7 +449,7 @@ export function ContentForm({
 
       <button
         type="submit"
-        disabled={pending || coverBusy || busy !== null}
+        disabled={pending || coverBusy || aiBusy || busy !== null}
         className="self-start rounded-lg bg-teal px-6 py-2.5 text-sm font-bold text-white disabled:opacity-60"
       >
         {pending ? "جارٍ الحفظ…" : "حفظ"}

@@ -658,6 +658,7 @@ export async function synthesizeUrl(_prev: SynthResult, formData: FormData): Pro
   if (data.ok === false) {
     const reasons: Record<string, string> = {
       no_text: "تعذّر قراءة نص المقال من هذا الرابط. قد يكون الموقع محمياً أو يعرض محتواه عبر JavaScript؛ جرّب رابطاً آخر أو أضف المقال يدوياً.",
+      blocked: "يمنع هذا الموقع القراءة الآلية لصفحاته (حماية ضد الروبوتات)، لذا لا يمكن جلب المقال تلقائياً. انسخ نص المقال وأضفه يدوياً.",
       synthesis: "تعذّرت صياغة المقال. حاول مرة أخرى بعد قليل.",
     };
     return { error: reasons[String(data.reason)] ?? "تعذّرت معالجة الرابط. تأكد من صحته وإعدادات OpenRouter." };

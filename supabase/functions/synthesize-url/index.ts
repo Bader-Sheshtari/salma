@@ -131,11 +131,27 @@ type PageData = { title: string; text: string; image: string | null; siteName: s
 
 async function fetchPage(url: string): Promise<PageData> {
   const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; SalmaBot/1.0)" },
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+      "Accept-Language": "ar,en;q=0.9",
+    },
     signal: AbortSignal.timeout(12000),
   });
+  // 403/429/503 are how bot-protection services (e.g. Cloudflare) reject
+  // automated fetches — surface them as "blocked" so the caller can tell the
+  // admin the site can't be read automatically rather than a vague failure.
+  if (res.status === 403 || res.status === 429 || res.status === 503) {
+    throw new Error("blocked");
+  }
   if (!res.ok) throw new Error(`fetch failed (${res.status})`);
   const html = (await res.text()).slice(0, 400000);
+
+  // Some services return 200 with a JS "challenge" interstitial instead of the
+  // article — detect the common markers and treat them as a block too.
+  if (/Just a moment\.\.\.|cf-browser-verification|challenge-platform|_cf_chl_/i.test(html)) {
+    throw new Error("blocked");
+  }
 
   const ogTitle = metaContent(
     html,
@@ -396,6 +412,11 @@ Deno.serve(async (req: Request) => {
     return Response.json({ ok: true, id: contentId, title: draft.title });
   } catch (e) {
     const message = e instanceof Error ? e.message : "synthesis failed";
+    // Bot-protection block (Cloudflare etc.) — return 200 so the caller reads
+    // the reason and shows an accurate "site can't be fetched" message.
+    if (message === "blocked") {
+      return Response.json({ ok: false, reason: "blocked" });
+    }
     return Response.json({ ok: false, error: message }, { status: 500 });
   }
 });

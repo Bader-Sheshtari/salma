@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
 import { logout } from "../auth-actions";
 
+// `ownerOnly` links are only rendered for the owner (e.g. admin management).
 const NAV = [
   { href: "/admin", label: "لوحة التحكم" },
   { href: "/admin/homepage", label: "الصفحة الرئيسية" },
@@ -15,11 +16,12 @@ const NAV = [
   { href: "/admin/departments", label: "الأقسام" },
   { href: "/admin/doctors", label: "الأطباء" },
   { href: "/admin/transfers", label: "انتقال الأطباء" },
-  { href: "/admin/users", label: "إدارة الأدمن" },
+  { href: "/admin/users", label: "إدارة الأدمن", ownerOnly: true },
 ];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const admin = await requireAdmin();
+  const nav = NAV.filter((n) => !n.ownerOnly || admin.role === "owner");
 
   return (
     <div className="min-h-screen bg-sand">
@@ -36,7 +38,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               </span>
             </Link>
             <nav className="salma-scroll flex gap-2 overflow-x-auto md:flex-col md:gap-1">
-              {NAV.map((n) => (
+              {nav.map((n) => (
                 <Link
                   key={n.href}
                   href={n.href}

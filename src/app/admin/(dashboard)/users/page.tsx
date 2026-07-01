@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { requireAdmin, isManagerRole } from "@/lib/auth";
 import { listAdmins } from "@/lib/admin-queries";
 import { OwnPasswordForm } from "./OwnPasswordForm";
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 
 export default async function AdminUsersPage() {
   const actor = await requireAdmin();
+  // Admin management is owner-only; other admins are bounced back to the dashboard.
+  if (actor.role !== "owner") redirect("/admin");
   const canManage = isManagerRole(actor.role);
   const admins = canManage ? await listAdmins() : [];
 
