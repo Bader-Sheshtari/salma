@@ -12,7 +12,7 @@ export default async function Page() {
     <div className="mx-auto min-h-screen max-w-6xl bg-white shadow-[0_0_60px_rgba(46,46,45,.12)]">
       <Header categories={categories} />
       <main>
-        <HomeView data={data} />
+        <HomeView data={data} categories={categories} />
       </main>
       <Footer categories={categories} />
     </div>

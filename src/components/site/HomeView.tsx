@@ -1,11 +1,12 @@
 import Link from "next/link";
-import type { HomepageData } from "@/lib/queries";
+import type { HomepageData, Category } from "@/lib/queries";
 import { BreakingTicker } from "./BreakingTicker";
 import { SectionTitle, Rail } from "./Section";
 import { HeroCard, ListRow, VideoCard } from "./cards";
 import { HomeSection } from "./HomeSection";
+import { SectionsBrief } from "./SectionsBrief";
 
-export function HomeView({ data }: { data: HomepageData }) {
+export function HomeView({ data, categories }: { data: HomepageData; categories: Category[] }) {
   // Hero falls back to the first item of the first resolved section.
   const firstSectionContent = data.sections.find((s) => s.content.length > 0)?.content ?? [];
   const hero = data.hero ?? firstSectionContent[0] ?? null;
@@ -30,6 +31,9 @@ export function HomeView({ data }: { data: HomepageData }) {
           </div>
         </section>
       ) : null}
+
+      {/* SECTIONS OVERVIEW — brief for each navbar destination */}
+      <SectionsBrief categories={categories} />
 
       {/* FEED PROMPT */}
       <section className="px-4 py-5 sm:px-6">
