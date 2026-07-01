@@ -551,6 +551,41 @@ export async function moveHomepageSection(formData: FormData) {
   revalidatePath("/");
 }
 
+/** Move a section to an exact 1-based position, renumbering the rest to match. */
+export async function setHomepageSectionPosition(formData: FormData) {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id"));
+  const posRaw = Number(String(formData.get("position") ?? ""));
+  if (!id || !Number.isFinite(posRaw)) return;
+
+  const { data } = await supabase
+    .from("homepage_sections")
+    .select("id, sort_order")
+    .order("sort_order", { ascending: true });
+  const rows = (data as { id: string; sort_order: number }[]) ?? [];
+  const from = rows.findIndex((r) => r.id === id);
+  if (from === -1) return;
+  const to = Math.min(Math.max(Math.trunc(posRaw) - 1, 0), rows.length - 1);
+  if (to === from) return;
+
+  const [moved] = rows.splice(from, 1);
+  rows.splice(to, 0, moved);
+
+  await Promise.all(
+    rows.map((r, i) =>
+      supabase
+        .from("homepage_sections")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .update({ sort_order: i } as unknown as never)
+        .eq("id", r.id),
+    ),
+  );
+
+  revalidatePath("/admin/homepage");
+  revalidatePath("/");
+}
+
 // ============ URL → AI SYNTHESIS ============
 
 export type SynthResult = { error: string } | { ok: true; id: string; title: string } | null;
