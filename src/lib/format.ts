@@ -24,6 +24,31 @@ export function timeAgoAr(iso: string | null): string {
   return new Date(iso).toLocaleDateString("ar-KW", { year: "numeric", month: "long", day: "numeric" });
 }
 
+/**
+ * Absolute Arabic publish date + time, e.g. "نُشر في 1 يوليو 2026 - 3:45 مساءً".
+ * Western digits are used for readability; the 12-hour period is spelled out
+ * as صباحًا/مساءً to match the site's RTL Arabic voice.
+ */
+export function formatDateTimeAr(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+
+  const date = new Intl.DateTimeFormat("ar-KW", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    numberingSystem: "latn",
+  }).format(d);
+
+  const h24 = d.getHours();
+  const period = h24 < 12 ? "صباحًا" : "مساءً";
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  const mm = String(d.getMinutes()).padStart(2, "0");
+
+  return `نُشر في ${date} - ${h12}:${mm} ${period}`;
+}
+
 /** Repeating diagonal hatch used as an image placeholder. */
 export function hatch(a: string, b: string, px = 8): string {
   return `repeating-linear-gradient(45deg,${a},${a} ${px}px,${b} ${px}px,${b} ${px * 2}px)`;

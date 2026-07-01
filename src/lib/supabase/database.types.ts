@@ -348,40 +348,64 @@ export type Database = {
       }
       doctor_transfers: {
         Row: {
+          body: string | null
           created_at: string
           deleted_at: string | null
           department_id: string | null
           doctor_name: string
+          doctor_photo_url: string | null
           from_hospital: string | null
           id: string
           note: string | null
+          published_at: string | null
+          slug: string | null
+          source_name: string | null
+          source_url: string | null
+          specialty: string | null
           status: string
+          summary: string | null
           to_hospital: string | null
           transfer_date: string | null
           updated_at: string
         }
         Insert: {
+          body?: string | null
           created_at?: string
           deleted_at?: string | null
           department_id?: string | null
           doctor_name: string
+          doctor_photo_url?: string | null
           from_hospital?: string | null
           id?: string
           note?: string | null
+          published_at?: string | null
+          slug?: string | null
+          source_name?: string | null
+          source_url?: string | null
+          specialty?: string | null
           status?: string
+          summary?: string | null
           to_hospital?: string | null
           transfer_date?: string | null
           updated_at?: string
         }
         Update: {
+          body?: string | null
           created_at?: string
           deleted_at?: string | null
           department_id?: string | null
           doctor_name?: string
+          doctor_photo_url?: string | null
           from_hospital?: string | null
           id?: string
           note?: string | null
+          published_at?: string | null
+          slug?: string | null
+          source_name?: string | null
+          source_url?: string | null
+          specialty?: string | null
           status?: string
+          summary?: string | null
           to_hospital?: string | null
           transfer_date?: string | null
           updated_at?: string
@@ -479,6 +503,62 @@ export type Database = {
         }
         Relationships: []
       }
+      homepage_sections: {
+        Row: {
+          accent: string | null
+          category_slug: string | null
+          created_at: string
+          display_style: string
+          id: string
+          is_enabled: boolean
+          items_limit: number
+          key: string
+          kind: string
+          show_view_all: boolean
+          sort_order: number
+          title_ar: string
+          updated_at: string
+        }
+        Insert: {
+          accent?: string | null
+          category_slug?: string | null
+          created_at?: string
+          display_style?: string
+          id?: string
+          is_enabled?: boolean
+          items_limit?: number
+          key: string
+          kind: string
+          show_view_all?: boolean
+          sort_order?: number
+          title_ar: string
+          updated_at?: string
+        }
+        Update: {
+          accent?: string | null
+          category_slug?: string | null
+          created_at?: string
+          display_style?: string
+          id?: string
+          is_enabled?: boolean
+          items_limit?: number
+          key?: string
+          kind?: string
+          show_view_all?: boolean
+          sort_order?: number
+          title_ar?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "homepage_sections_category_slug_fkey"
+            columns: ["category_slug"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["slug"]
+          },
+        ]
+      }
       ingestion_runs: {
         Row: {
           created_at: string
@@ -527,32 +607,138 @@ export type Database = {
       profiles: {
         Row: {
           created_at: string
+          created_by: string | null
           disabled: boolean
           email: string | null
           full_name: string | null
           id: string
+          last_login_at: string | null
           notification_prefs: Json
           role: string
+          updated_at: string
         }
         Insert: {
           created_at?: string
+          created_by?: string | null
           disabled?: boolean
           email?: string | null
           full_name?: string | null
           id: string
+          last_login_at?: string | null
           notification_prefs?: Json
           role?: string
+          updated_at?: string
         }
         Update: {
           created_at?: string
+          created_by?: string | null
           disabled?: boolean
           email?: string | null
           full_name?: string | null
           id?: string
+          last_login_at?: string | null
           notification_prefs?: Json
           role?: string
+          updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "profiles_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      social_answers: {
+        Row: {
+          answer: string
+          approved_at: string | null
+          approved_by: string | null
+          created_at: string
+          id: string
+          is_featured: boolean
+          name_optional: string | null
+          question_id: string
+          status: string
+        }
+        Insert: {
+          answer: string
+          approved_at?: string | null
+          approved_by?: string | null
+          created_at?: string
+          id?: string
+          is_featured?: boolean
+          name_optional?: string | null
+          question_id: string
+          status?: string
+        }
+        Update: {
+          answer?: string
+          approved_at?: string | null
+          approved_by?: string | null
+          created_at?: string
+          id?: string
+          is_featured?: boolean
+          name_optional?: string | null
+          question_id?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "social_answers_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "social_answers_question_id_fkey"
+            columns: ["question_id"]
+            isOneToOne: false
+            referencedRelation: "social_questions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      social_questions: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          question: string
+          require_approval: boolean
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          question: string
+          require_approval?: boolean
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          question?: string
+          require_approval?: boolean
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "social_questions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {

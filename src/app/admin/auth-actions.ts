@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { isAdminRole } from "@/lib/auth";
 
 export type LoginResult = { error: string } | null;
 
@@ -22,7 +23,7 @@ export async function login(_prev: LoginResult, formData: FormData): Promise<Log
     .maybeSingle();
   const profile = profileRow as { role: string; disabled: boolean } | null;
 
-  if (!profile || profile.role !== "admin" || profile.disabled) {
+  if (!profile || !isAdminRole(profile.role) || profile.disabled) {
     await supabase.auth.signOut();
     return { error: "هذا الحساب لا يملك صلاحية الإدارة." };
   }

@@ -5,6 +5,14 @@ import type { Tables } from "@/lib/supabase/database.types";
 
 export type Profile = Tables<"profiles">;
 
+/** Roles that may access the admin dashboard. */
+export const ADMIN_ROLES = ["admin", "super_admin", "owner"] as const;
+
+/** True when the role grants admin-dashboard access. */
+export function isAdminRole(role: string | null | undefined): boolean {
+  return !!role && (ADMIN_ROLES as readonly string[]).includes(role);
+}
+
 /** Returns the signed-in admin profile, or null if not authenticated as an admin. */
 export async function getAdminProfile(): Promise<Profile | null> {
   const supabase = await createClient();
@@ -20,7 +28,7 @@ export async function getAdminProfile(): Promise<Profile | null> {
     .maybeSingle();
 
   const profile = data as Profile | null;
-  if (!profile || profile.role !== "admin" || profile.disabled) return null;
+  if (!profile || !isAdminRole(profile.role) || profile.disabled) return null;
   return profile;
 }
 
