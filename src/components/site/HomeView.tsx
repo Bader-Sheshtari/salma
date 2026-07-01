@@ -3,6 +3,7 @@ import type { HomepageData, Category } from "@/lib/queries";
 import { BreakingTicker } from "./BreakingTicker";
 import { SectionTitle, Rail } from "./Section";
 import { HeroCard, ListRow, ContentCard, VideoCard, Cover, hrefFor } from "./cards";
+import { TransferCard } from "./TransferCard";
 import { timeAgoAr } from "@/lib/format";
 
 export function HomeView({ data, categories }: { data: HomepageData; categories: Category[] }) {
@@ -66,6 +67,22 @@ export function HomeView({ data, categories }: { data: HomepageData; categories:
           <Rail
             cols="sm:grid-cols-2 lg:grid-cols-3"
             items={data.videos.map((c) => <VideoCard key={c.id} c={c} />)}
+          />
+        </section>
+      ) : null}
+
+      {/* DOCTOR TRANSFERS */}
+      {data.transfers.length > 0 ? (
+        <section className="px-4 py-5 sm:px-6">
+          <SectionTitle
+            title={data.transfersSection?.title_ar ?? "انتقال الأطباء"}
+            href="/transfers"
+            action={data.transfersSection?.show_view_all === false ? undefined : "عرض الكل ←"}
+          />
+          <Rail
+            cols="sm:grid-cols-2 lg:grid-cols-3"
+            itemWidth="w-[260px]"
+            items={data.transfers.map((t) => <TransferCard key={t.id} t={t} />)}
           />
         </section>
       ) : null}

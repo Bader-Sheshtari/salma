@@ -25,6 +25,8 @@ export async function getCategories(): Promise<Category[]> {
   return data ?? [];
 }
 
+export type HomepageSection = Tables<"homepage_sections">;
+
 export type HomepageData = {
   hero: Content | null;
   breaking: Content[];
@@ -34,6 +36,8 @@ export type HomepageData = {
   investigations: Content[];
   lifestyle: Content[];
   gulfWorld: Content[];
+  transfers: DoctorTransfer[];
+  transfersSection: HomepageSection | null;
 };
 
 export async function getHomepage(): Promise<HomepageData> {
@@ -46,17 +50,39 @@ export async function getHomepage(): Promise<HomepageData> {
       .eq("status", "published")
       .is("deleted_at", null);
 
-  const [hero, breaking, kuwait, videos, economy, investigations, lifestyle, gulfWorld] =
-    await Promise.all([
-      base().eq("is_featured", true).order("published_at", { ascending: false }).limit(1).maybeSingle(),
-      base().eq("is_breaking", true).order("published_at", { ascending: false }).limit(8),
-      base().eq("category_slug", "kuwait").eq("is_featured", false).order("published_at", { ascending: false }).limit(5),
-      base().eq("type", "video").order("published_at", { ascending: false }).limit(6),
-      base().eq("category_slug", "health-economy").order("published_at", { ascending: false }).limit(4),
-      base().eq("type", "investigation").order("published_at", { ascending: false }).limit(3),
-      base().eq("category_slug", "lifestyle").order("published_at", { ascending: false }).limit(6),
-      base().in("category_slug", ["gulf", "world"]).order("published_at", { ascending: false }).limit(4),
-    ]);
+  const transfersSectionQ = supabase
+    .from("homepage_sections")
+    .select("*")
+    .eq("key", "feature:doctor_transfers")
+    .maybeSingle();
+
+  const [
+    hero,
+    breaking,
+    kuwait,
+    videos,
+    economy,
+    investigations,
+    lifestyle,
+    gulfWorld,
+    transfersSectionRes,
+  ] = await Promise.all([
+    base().eq("is_featured", true).order("published_at", { ascending: false }).limit(1).maybeSingle(),
+    base().eq("is_breaking", true).order("published_at", { ascending: false }).limit(8),
+    base().eq("category_slug", "kuwait").eq("is_featured", false).order("published_at", { ascending: false }).limit(5),
+    base().eq("type", "video").order("published_at", { ascending: false }).limit(6),
+    base().eq("category_slug", "health-economy").order("published_at", { ascending: false }).limit(4),
+    base().eq("type", "investigation").order("published_at", { ascending: false }).limit(3),
+    base().eq("category_slug", "lifestyle").order("published_at", { ascending: false }).limit(6),
+    base().in("category_slug", ["gulf", "world"]).order("published_at", { ascending: false }).limit(4),
+    transfersSectionQ,
+  ]);
+
+  const transfersSection = (transfersSectionRes.data as HomepageSection | null) ?? null;
+  const transfers =
+    transfersSection?.is_enabled === false
+      ? []
+      : await getTransfers(transfersSection?.items_limit ?? 6);
 
   return {
     hero: (hero.data as unknown as Content) ?? null,
@@ -67,6 +93,8 @@ export async function getHomepage(): Promise<HomepageData> {
     investigations: (investigations.data as Content[]) ?? [],
     lifestyle: (lifestyle.data as Content[]) ?? [],
     gulfWorld: (gulfWorld.data as Content[]) ?? [],
+    transfers,
+    transfersSection,
   };
 }
 
@@ -231,27 +259,39 @@ export const getDoctorBySlug = cache(async (rawSlug: string): Promise<DoctorDeta
   };
 });
 
-export type TransferRow = DoctorTransfer & { department_name: string | null };
-
-/** Public transfer feed (انتقال الأطباء), newest first. */
-export async function getTransfers(): Promise<TransferRow[]> {
+/** Public transfer feed (انتقال الأطباء), newest first by publish time. */
+export async function getTransfers(limit?: number): Promise<DoctorTransfer[]> {
   const supabase = await createClient();
-  const [{ data: transfers }, departments] = await Promise.all([
-    supabase
-      .from("doctor_transfers")
-      .select("*")
-      .eq("status", "published")
-      .is("deleted_at", null)
-      .order("transfer_date", { ascending: false, nullsFirst: false })
-      .order("created_at", { ascending: false }),
-    getDepartments(),
-  ]);
-  const byId = new Map(departments.map((d) => [d.id, d.name_ar]));
-  return ((transfers as DoctorTransfer[]) ?? []).map((t) => ({
-    ...t,
-    department_name: t.department_id ? byId.get(t.department_id) ?? null : null,
-  }));
+  let q = supabase
+    .from("doctor_transfers")
+    .select("*")
+    .eq("status", "published")
+    .is("deleted_at", null)
+    .order("published_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false });
+  if (limit) q = q.limit(limit);
+  const { data } = await q;
+  return (data as DoctorTransfer[]) ?? [];
 }
+
+/** A single published transfer by slug, for the detail page. */
+export const getTransferBySlug = cache(async (rawSlug: string): Promise<DoctorTransfer | null> => {
+  let slug = rawSlug;
+  try {
+    slug = decodeURIComponent(rawSlug);
+  } catch {
+    // already decoded
+  }
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("doctor_transfers")
+    .select("*")
+    .eq("slug", slug)
+    .eq("status", "published")
+    .is("deleted_at", null)
+    .maybeSingle();
+  return (data as DoctorTransfer | null) ?? null;
+});
 
 export type SitemapEntry = Pick<Content, "slug" | "type" | "updated_at" | "published_at">;
 

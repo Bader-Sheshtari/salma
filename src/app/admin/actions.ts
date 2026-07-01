@@ -4,17 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
+import { slugify, ensureUniqueSlug } from "@/lib/slug";
 import type { TablesInsert, TablesUpdate } from "@/lib/supabase/database.types";
-
-function slugify(input: string): string {
-  return input
-    .trim()
-    .replace(/[\u064B-\u065F\u0610-\u061A]/g, "") // strip Arabic diacritics
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80)
-    .toLowerCase();
-}
 
 export type SaveResult = { error: string } | null;
 
@@ -409,21 +400,45 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
   const doctor_name = String(formData.get("doctor_name") ?? "").trim();
   if (doctor_name.length < 3) return { error: "اسم الطبيب قصير جداً." };
 
-  const department_id = String(formData.get("department_id") ?? "").trim() || null;
+  const specialty = String(formData.get("specialty") ?? "").trim() || null;
+  const doctor_photo_url = String(formData.get("doctor_photo_url") ?? "").trim() || null;
   const from_hospital = String(formData.get("from_hospital") ?? "").trim() || null;
   const to_hospital = String(formData.get("to_hospital") ?? "").trim() || null;
   const transfer_date = String(formData.get("transfer_date") ?? "").trim() || null;
-  const note = String(formData.get("note") ?? "").trim() || null;
+  const summary = String(formData.get("summary") ?? "").trim() || null;
+  const body = String(formData.get("body") ?? "").trim() || null;
+  const source_name = String(formData.get("source_name") ?? "").trim() || null;
+  const source_url = String(formData.get("source_url") ?? "").trim() || null;
   const status = String(formData.get("status") ?? "published");
+
+  // Published rows need a stable slug + timestamp; drafts/pending leave slug null
+  // (partial unique index ignores nulls) and only get a published_at when set.
+  const slug =
+    status === "published"
+      ? await ensureUniqueSlug("doctor_transfers", slugify(doctor_name), id || undefined)
+      : null;
+
+  const publishedRaw = String(formData.get("published_at") ?? "").trim();
+  const published_at = publishedRaw
+    ? new Date(publishedRaw).toISOString()
+    : status === "published"
+      ? new Date().toISOString()
+      : null;
 
   const payload = {
     doctor_name,
-    department_id,
+    specialty,
+    doctor_photo_url,
     from_hospital,
     to_hospital,
     transfer_date,
-    note,
+    summary,
+    body,
+    source_name,
+    source_url,
     status,
+    published_at,
+    ...(slug ? { slug } : {}),
   } satisfies Partial<TablesInsert<"doctor_transfers">>;
 
   if (id) {
@@ -443,6 +458,7 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
 
   revalidatePath("/admin/transfers");
   revalidatePath("/transfers");
+  revalidatePath("/");
   redirect("/admin/transfers");
 }
 

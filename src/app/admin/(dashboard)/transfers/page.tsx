@@ -24,22 +24,32 @@ export default async function TransfersList() {
           <ul className="divide-y divide-line">
             {transfers.map((t) => (
               <li key={t.id} className="flex flex-col gap-2 p-3.5 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-[14px] font-semibold">{t.doctor_name}</span>
-                    {t.department_name ? (
-                      <span className="rounded bg-cream px-1.5 py-0.5 font-sans text-[10px] font-semibold text-teal">
-                        {t.department_name}
-                      </span>
-                    ) : null}
-                    {t.status !== "published" ? (
-                      <span className="rounded bg-cream px-1.5 py-0.5 font-sans text-[10px] font-semibold text-gray">
-                        مسودة
-                      </span>
-                    ) : null}
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full border border-line bg-cream">
+                    {t.doctor_photo_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={t.doctor_photo_url} alt={t.doctor_name} className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="flex h-full w-full items-center justify-center text-lg text-gray">🩺</span>
+                    )}
                   </div>
-                  <div className="mt-1 font-sans text-[11px] text-gray">
-                    {t.from_hospital ?? "—"} ← {t.to_hospital ?? "—"} · {timeAgoAr(t.updated_at)}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[14px] font-semibold">{t.doctor_name}</span>
+                      {t.specialty ? (
+                        <span className="rounded bg-cream px-1.5 py-0.5 font-sans text-[10px] font-semibold text-teal">
+                          {t.specialty}
+                        </span>
+                      ) : null}
+                      {t.status !== "published" ? (
+                        <span className="rounded bg-cream px-1.5 py-0.5 font-sans text-[10px] font-semibold text-gray">
+                          {t.status === "pending" ? "قيد المراجعة" : "مسودة"}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 font-sans text-[11px] text-gray">
+                      {t.from_hospital ?? "—"} ← {t.to_hospital ?? "—"} · {timeAgoAr(t.updated_at)}
+                    </div>
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-1.5">
