@@ -28,6 +28,12 @@ export async function login(_prev: LoginResult, formData: FormData): Promise<Log
     return { error: "هذا الحساب لا يملك صلاحية الإدارة." };
   }
 
+  // Record the sign-in time (self-update, allowed by RLS).
+  await supabase
+    .from("profiles")
+    .update({ last_login_at: new Date().toISOString() } as never)
+    .eq("id", data.user.id);
+
   redirect("/admin");
 }
 

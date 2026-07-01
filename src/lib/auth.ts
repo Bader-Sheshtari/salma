@@ -8,9 +8,17 @@ export type Profile = Tables<"profiles">;
 /** Roles that may access the admin dashboard. */
 export const ADMIN_ROLES = ["admin", "super_admin", "owner"] as const;
 
+/** Roles that may manage other admins (the "إدارة الأدمن" page). */
+export const MANAGER_ROLES = ["super_admin", "owner"] as const;
+
 /** True when the role grants admin-dashboard access. */
 export function isAdminRole(role: string | null | undefined): boolean {
   return !!role && (ADMIN_ROLES as readonly string[]).includes(role);
+}
+
+/** True when the role may add/manage other admins. */
+export function isManagerRole(role: string | null | undefined): boolean {
+  return !!role && (MANAGER_ROLES as readonly string[]).includes(role);
 }
 
 /** Returns the signed-in admin profile, or null if not authenticated as an admin. */

@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { requireAdmin } from "@/lib/auth";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { requireAdmin, isManagerRole, type Profile } from "@/lib/auth";
 import { slugify, ensureUniqueSlug } from "@/lib/slug";
 import type { TablesInsert, TablesUpdate } from "@/lib/supabase/database.types";
 
@@ -591,4 +592,157 @@ export async function synthesizeUrl(_prev: SynthResult, formData: FormData): Pro
 
   revalidatePath("/admin/content");
   return { ok: true, id: String(data.id), title: String(data.title ?? "") };
+}
+
+/* ─────────────────────────  ADMIN USERS & PERMISSIONS  ───────────────────────── */
+
+export type AdminUserResult = { error: string } | { ok: string } | null;
+
+/** Roles a manager may hand out through the UI (never "owner"). */
+const ASSIGNABLE_ROLES = ["admin", "super_admin"] as const;
+
+/**
+ * Whether `actor` may act on `target` (suspend / delete / change role / reset
+ * password). Self is excluded (use the self-service password form) and the owner
+ * account is always protected. Owners manage admins and super admins; super
+ * admins manage only plain admins. Mirrors the spec's role hierarchy — and is the
+ * authoritative check, since the service-role client bypasses RLS and triggers.
+ */
+function canManage(actor: Profile, target: { id: string; role: string }): boolean {
+  if (target.id === actor.id) return false;
+  if (target.role === "owner") return false;
+  if (actor.role === "owner") return true;
+  if (actor.role === "super_admin") return target.role === "admin";
+  return false;
+}
+
+/** Create a new admin account (auth user + elevated profile) with a temp password. */
+export async function createAdmin(
+  _prev: AdminUserResult,
+  formData: FormData,
+): Promise<AdminUserResult> {
+  const actor = await requireAdmin();
+  if (!isManagerRole(actor.role)) return { error: "لا تملك صلاحية إضافة مدراء." };
+
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const password = String(formData.get("password") ?? "");
+  const full_name = String(formData.get("full_name") ?? "").trim() || null;
+  const role = String(formData.get("role") ?? "admin");
+
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: "أدخل بريداً إلكترونياً صحيحاً." };
+  if (password.length < 8) return { error: "كلمة المرور المؤقتة يجب ألا تقل عن 8 أحرف." };
+  if (!(ASSIGNABLE_ROLES as readonly string[]).includes(role)) return { error: "دور غير صالح." };
+  if (role === "super_admin" && actor.role !== "owner")
+    return { error: "فقط المالك يمكنه تعيين مشرف أعلى." };
+
+  const admin = createAdminClient();
+  const { data: created, error: createErr } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: full_name ? { full_name } : undefined,
+  });
+  if (createErr || !created?.user) {
+    if (/registered|already|exists/i.test(createErr?.message ?? ""))
+      return { error: "هذا البريد مسجّل بالفعل." };
+    return { error: "تعذّر إنشاء الحساب." };
+  }
+
+  // handle_new_user already inserted a profile (role=user); elevate it.
+  const { error: updErr } = await admin
+    .from("profiles")
+    .update({ role, full_name, created_by: actor.id } as never)
+    .eq("id", created.user.id);
+  if (updErr) {
+    await admin.auth.admin.deleteUser(created.user.id); // roll back the orphan
+    return { error: "تعذّر ضبط صلاحية الحساب." };
+  }
+
+  revalidatePath("/admin/users");
+  return { ok: "تم إنشاء الحساب بنجاح." };
+}
+
+/** Change a target admin's role (admin ⇄ super_admin). */
+export async function setAdminRole(formData: FormData) {
+  const actor = await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+  const role = String(formData.get("role") ?? "");
+  if (!(ASSIGNABLE_ROLES as readonly string[]).includes(role)) return;
+  if (role === "super_admin" && actor.role !== "owner") return;
+
+  const admin = createAdminClient();
+  const { data } = await admin.from("profiles").select("id, role").eq("id", id).maybeSingle();
+  const target = data as { id: string; role: string } | null;
+  if (!target || !canManage(actor, target)) return;
+
+  await admin.from("profiles").update({ role } as never).eq("id", id);
+  revalidatePath("/admin/users");
+}
+
+/** Suspend or re-activate a target admin. */
+export async function toggleAdminDisabled(formData: FormData) {
+  const actor = await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("profiles")
+    .select("id, role, disabled")
+    .eq("id", id)
+    .maybeSingle();
+  const target = data as { id: string; role: string; disabled: boolean } | null;
+  if (!target || !canManage(actor, target)) return;
+
+  await admin.from("profiles").update({ disabled: !target.disabled } as never).eq("id", id);
+  revalidatePath("/admin/users");
+}
+
+/** Permanently delete a target admin (cascades the profile via the auth FK). */
+export async function deleteAdmin(formData: FormData) {
+  const actor = await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+
+  const admin = createAdminClient();
+  const { data } = await admin.from("profiles").select("id, role").eq("id", id).maybeSingle();
+  const target = data as { id: string; role: string } | null;
+  if (!target || !canManage(actor, target)) return;
+
+  await admin.auth.admin.deleteUser(id);
+  revalidatePath("/admin/users");
+}
+
+/** Set a new temporary password for a target admin. */
+export async function resetAdminPassword(
+  _prev: AdminUserResult,
+  formData: FormData,
+): Promise<AdminUserResult> {
+  const actor = await requireAdmin();
+  if (!isManagerRole(actor.role)) return { error: "لا تملك صلاحية." };
+  const id = String(formData.get("id") ?? "");
+  const password = String(formData.get("password") ?? "");
+  if (password.length < 8) return { error: "كلمة المرور يجب ألا تقل عن 8 أحرف." };
+
+  const admin = createAdminClient();
+  const { data } = await admin.from("profiles").select("id, role").eq("id", id).maybeSingle();
+  const target = data as { id: string; role: string } | null;
+  if (!target || !canManage(actor, target)) return { error: "لا تملك صلاحية على هذا الحساب." };
+
+  const { error } = await admin.auth.admin.updateUserById(id, { password });
+  if (error) return { error: "تعذّر تغيير كلمة المرور." };
+  return { ok: "تم تحديث كلمة المرور." };
+}
+
+/** Any signed-in admin may change their own password. */
+export async function changeOwnPassword(
+  _prev: AdminUserResult,
+  formData: FormData,
+): Promise<AdminUserResult> {
+  await requireAdmin();
+  const password = String(formData.get("password") ?? "");
+  if (password.length < 8) return { error: "كلمة المرور يجب ألا تقل عن 8 أحرف." };
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) return { error: "تعذّر تغيير كلمة المرور." };
+  return { ok: "تم تغيير كلمة مرورك بنجاح." };
 }

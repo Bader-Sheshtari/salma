@@ -15,6 +15,24 @@ import type { Tables } from "@/lib/supabase/database.types";
 export type IngestionRun = Tables<"ingestion_runs">;
 export type RunArticle = { id: string; title: string; status: string };
 export type EditorialPolicy = Tables<"editorial_policy">;
+export type AdminUser = Tables<"profiles">;
+
+/** Rank used to sort the admins list: owner first, then super admins, then admins. */
+const ROLE_RANK: Record<string, number> = { owner: 0, super_admin: 1, admin: 2 };
+
+/** All dashboard-capable accounts (owner/super_admin/admin), highest role first. */
+export async function listAdmins(): Promise<AdminUser[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("profiles")
+    .select("*")
+    .in("role", ["owner", "super_admin", "admin"])
+    .order("created_at", { ascending: true });
+  const rows = (data as AdminUser[]) ?? [];
+  return rows.sort(
+    (a, b) => (ROLE_RANK[a.role] ?? 9) - (ROLE_RANK[b.role] ?? 9),
+  );
+}
 
 export type AdminCounts = {
   published: number;
