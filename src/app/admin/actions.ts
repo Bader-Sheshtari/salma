@@ -487,8 +487,15 @@ export async function synthesizeUrl(_prev: SynthResult, formData: FormData): Pro
     headers: { Authorization: `Bearer ${token}` },
   });
 
-  if (error || !data || data.ok === false) {
-    return { error: "تعذّرت معالجة الرابط. تأكد من صحته ومن إعدادات OpenRouter." };
+  if (error || !data) {
+    return { error: "تعذّر الاتصال بخدمة المعالجة. حاول مرة أخرى." };
+  }
+  if (data.ok === false) {
+    const reasons: Record<string, string> = {
+      no_text: "تعذّر قراءة نص المقال من هذا الرابط. قد يكون الموقع محمياً أو يعرض محتواه عبر JavaScript؛ جرّب رابطاً آخر أو أضف المقال يدوياً.",
+      synthesis: "تعذّرت صياغة المقال. حاول مرة أخرى بعد قليل.",
+    };
+    return { error: reasons[String(data.reason)] ?? "تعذّرت معالجة الرابط. تأكد من صحته وإعدادات OpenRouter." };
   }
 
   revalidatePath("/admin/content");

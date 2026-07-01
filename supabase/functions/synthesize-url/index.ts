@@ -107,6 +107,26 @@ function decodeEntities(s: string): string {
     .replace(/&nbsp;/g, " ");
 }
 
+// Pulls `articleBody` out of any schema.org NewsArticle/Article JSON-LD block.
+function jsonLdArticleBody(html: string): string | null {
+  const blocks = html.matchAll(
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+  );
+  for (const b of blocks) {
+    try {
+      const parsed = JSON.parse(b[1].trim());
+      const nodes = Array.isArray(parsed) ? parsed : [parsed, ...(parsed["@graph"] ?? [])];
+      for (const n of nodes) {
+        const body = n && typeof n === "object" ? String(n.articleBody ?? "").trim() : "";
+        if (body.length > 0) return body;
+      }
+    } catch {
+      // skip malformed JSON-LD
+    }
+  }
+  return null;
+}
+
 type PageData = { title: string; text: string; image: string | null; siteName: string | null };
 
 async function fetchPage(url: string): Promise<PageData> {
@@ -146,7 +166,7 @@ async function fetchPage(url: string): Promise<PageData> {
 
   // Strip scripts/styles, drop tags, collapse whitespace to get readable text.
   const body = html.match(/<body[\s\S]*?<\/body>/i)?.[0] ?? html;
-  const text = decodeEntities(
+  let text = decodeEntities(
     body
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -155,6 +175,24 @@ async function fetchPage(url: string): Promise<PageData> {
       .replace(/\s+/g, " ")
       .trim(),
   ).slice(0, 12000);
+
+  // Fallback for JS-rendered pages whose <body> ships almost no static text:
+  // try the JSON-LD `articleBody`, then the meta description.
+  if (text.length < 200) {
+    const fromLd = jsonLdArticleBody(html);
+    if (fromLd && fromLd.length > text.length) text = fromLd.slice(0, 12000);
+  }
+  if (text.length < 200) {
+    const desc = metaContent(
+      html,
+      [
+        /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i,
+        /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,
+      ],
+      url,
+    );
+    if (desc && desc.length > text.length) text = decodeEntities(desc);
+  }
 
   return { title, text, image, siteName: siteName ? decodeEntities(siteName) : null };
 }
@@ -279,10 +317,9 @@ Deno.serve(async (req: Request) => {
 
     const page = await fetchPage(url);
     if (page.text.length < 200) {
-      return Response.json(
-        { ok: false, error: "could not extract article text" },
-        { status: 422 },
-      );
+      // Return 200 so the caller can read the machine-readable reason and show
+      // an accurate message (this is a readable-content problem, not an error).
+      return Response.json({ ok: false, reason: "no_text" });
     }
 
     const raw = await chat(
@@ -296,9 +333,14 @@ Deno.serve(async (req: Request) => {
       { temperature: 0.3, maxTokens: 3000 },
     );
 
-    const draft = sanitize(extractJson(raw));
+    let draft: Draft | null = null;
+    try {
+      draft = sanitize(extractJson(raw));
+    } catch {
+      draft = null;
+    }
     if (!draft) {
-      return Response.json({ ok: false, error: "synthesis failed" }, { status: 502 });
+      return Response.json({ ok: false, reason: "synthesis" });
     }
 
     const sourceName = page.siteName || (() => {
