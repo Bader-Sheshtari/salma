@@ -16,7 +16,9 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = Deno.env.get("OPENROUTER_MODEL") || "openai/gpt-oss-20b:free";
 
-const VALID_CATEGORIES = [
+// Fallback set, used only if the categories table can't be read. The live list
+// is fetched from the DB per run so admin-created categories work too.
+const FALLBACK_CATEGORIES = [
   "kuwait",
   "gulf",
   "world",
@@ -24,6 +26,12 @@ const VALID_CATEGORIES = [
   "lifestyle",
   "investigations",
 ];
+
+async function fetchCategorySlugs(db: SupabaseClient): Promise<string[]> {
+  const { data } = await db.from("categories").select("slug").order("sort_order");
+  const slugs = (data as { slug: string }[] | null)?.map((c) => c.slug) ?? [];
+  return slugs.length > 0 ? slugs : FALLBACK_CATEGORIES;
+}
 
 const REGION_LABELS: Record<string, string> = {
   kuwait: "الكويت",
@@ -163,7 +171,7 @@ function extractJson(raw: string): unknown {
   return JSON.parse(text.slice(start, end + 1));
 }
 
-function buildSystem(policy: Policy): string {
+function buildSystem(policy: Policy, validCategories: string[]): string {
   const block = policy.block_topics.length
     ? policy.block_topics.map((t) => `- ${t}`).join("\n")
     : "- (لا قيود إضافية)";
@@ -181,7 +189,7 @@ function buildSystem(policy: Policy): string {
 ${block}
 - أعطِ الأولوية للمواضيع التالية:
 ${priority}
-- صنّف كل خبر إلى أحد الأقسام: kuwait, gulf, world, health-economy, lifestyle, investigations.
+- صنّف كل خبر إلى أحد الأقسام: ${validCategories.join(", ")}.
 - relevance_score: رقم 0-100 يقيس مدى أهمية الخبر لقارئ صحي في الكويت/الخليج.
 
 أعد النتيجة بصيغة JSON فقط دون أي نص إضافي.`;
@@ -194,8 +202,9 @@ function buildPrompt(regionLabel: string, count: number): string {
 {"items":[{"title":"العنوان بالعربية","excerpt":"موجز قصير","body":"النص المبسّط","category_slug":"world","read_minutes":3,"relevance_score":70,"original_title":"العنوان الأصلي بلغته","source_url":"https://..."}]}`;
 }
 
-function sanitize(items: unknown): Draft[] {
+function sanitize(items: unknown, validCategories: string[]): Draft[] {
   if (!Array.isArray(items)) return [];
+  const fallbackCat = validCategories.includes("world") ? "world" : validCategories[0] ?? "world";
   const out: Draft[] = [];
   for (const it of items) {
     if (!it || typeof it !== "object") continue;
@@ -207,9 +216,9 @@ function sanitize(items: unknown): Draft[] {
       title,
       excerpt: String(o.excerpt ?? "").trim(),
       body: String(o.body ?? "").trim(),
-      category_slug: VALID_CATEGORIES.includes(String(o.category_slug))
+      category_slug: validCategories.includes(String(o.category_slug))
         ? String(o.category_slug)
-        : "world",
+        : fallbackCat,
       read_minutes: Number(o.read_minutes) || 3,
       relevance_score: Math.min(Math.max(Number(o.relevance_score) || 0, 0), 100),
       original_title: String(o.original_title ?? "").trim(),
@@ -244,6 +253,7 @@ async function runIngestion(
     .maybeSingle();
   if (!policy) throw new Error("no editorial policy configured");
 
+  const validCategories = await fetchCategorySlugs(db);
   const regions: string[] = policy.regions?.length ? policy.regions : ["world"];
   const stats: RunStats = { found: 0, kept: 0, filtered: 0, duplicates: 0 };
 
@@ -330,7 +340,7 @@ async function runIngestion(
     try {
       result = await chatWeb(
         [
-          { role: "system", content: buildSystem(policy as Policy) },
+          { role: "system", content: buildSystem(policy as Policy, validCategories) },
           { role: "user", content: buildPrompt(regionLabel, perRegion) },
         ],
         { temperature: 0.3, maxTokens: 2600, maxResults: 8 },
@@ -355,7 +365,9 @@ async function runIngestion(
       return;
     }
 
-    await Promise.all(sanitize(parsed.items).map((draft) => processItem(draft, citations)));
+    await Promise.all(
+      sanitize(parsed.items, validCategories).map((draft) => processItem(draft, citations)),
+    );
   };
 
   try {

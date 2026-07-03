@@ -1,11 +1,10 @@
 import Link from "next/link";
 import type { Category } from "@/lib/queries";
 
-const NAV_ORDER = ["kuwait", "gulf", "world", "health-economy", "lifestyle", "investigations"];
-
 export function Header({ categories, active }: { categories: Category[]; active?: string }) {
-  const bySlug = new Map(categories.map((c) => [c.slug, c]));
-  const nav = NAV_ORDER.map((s) => bySlug.get(s)).filter(Boolean) as Category[];
+  // `categories` arrives ordered by sort_order; the nav shows only the ones
+  // an admin has flagged `show_in_nav` (managed from /admin/categories).
+  const nav = categories.filter((c) => c.show_in_nav);
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-white">

@@ -1,6 +1,7 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import type {
+  Category,
   Content,
   ContentSource,
   ContentMedia,
@@ -132,6 +133,19 @@ export async function listComments(status: string): Promise<Comment[]> {
     .eq("status", status)
     .order("created_at", { ascending: false });
   return (data as Comment[]) ?? [];
+}
+
+// ---- Categories (admin) ------------------------------------------------
+
+/** All site categories (nav lines + section topics), ordered as they appear. */
+export async function listCategories(): Promise<Category[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("categories")
+    .select("*")
+    .order("sort_order")
+    .order("name_ar");
+  return (data as Category[]) ?? [];
 }
 
 // ---- Doctors / departments / transfers (admin) -------------------------

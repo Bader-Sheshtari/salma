@@ -19,7 +19,9 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = Deno.env.get("OPENROUTER_MODEL") || "openai/gpt-oss-20b:free";
 
-const VALID_CATEGORIES = [
+// Fallback set, used only if the categories table can't be read. The live list
+// is fetched from the DB per request so admin-created categories work too.
+const FALLBACK_CATEGORIES = [
   "kuwait",
   "gulf",
   "world",
@@ -27,6 +29,12 @@ const VALID_CATEGORIES = [
   "lifestyle",
   "investigations",
 ];
+
+async function fetchCategorySlugs(admin: SupabaseClient): Promise<string[]> {
+  const { data } = await admin.from("categories").select("slug").order("sort_order");
+  const slugs = (data as { slug: string }[] | null)?.map((c) => c.slug) ?? [];
+  return slugs.length > 0 ? slugs : FALLBACK_CATEGORIES;
+}
 
 type Draft = {
   title: string;
@@ -234,30 +242,33 @@ function extractJson(raw: string): unknown {
   return JSON.parse(text.slice(start, end + 1));
 }
 
-const SYSTEM = `أنت محرّر صحي في منصة "سلمى" الإخبارية الكويتية. تتلقى نص مقال حقيقي (وعنوانه) وتعيد صياغته كمقال عربي فصيح مبسّط لقارئ عام في الكويت والخليج.
+function buildSystem(validCategories: string[]): string {
+  return `أنت محرّر صحي في منصة "سلمى" الإخبارية الكويتية. تتلقى نص مقال حقيقي (وعنوانه) وتعيد صياغته كمقال عربي فصيح مبسّط لقارئ عام في الكويت والخليج.
 
 قواعد صارمة:
 - استخدم فقط المعلومات الموجودة في نص المقال المرفق. لا تختلق أي حقائق أو أرقام أو أسماء أو روابط.
 - ترجم وبسّط مع الحفاظ على الدقة الكاملة.
-- صنّف المقال إلى أحد الأقسام: kuwait, gulf, world, health-economy, lifestyle, investigations.
+- صنّف المقال إلى أحد الأقسام: ${validCategories.join(", ")}.
 - اكتب نصاً وافياً ومنظّماً في فقرات.
 
 أعد النتيجة بصيغة JSON فقط دون أي نص إضافي بالشكل:
-{"title":"العنوان بالعربية","excerpt":"موجز قصير","body":"النص الكامل بالعربية","category_slug":"world","read_minutes":4}`;
+{"title":"العنوان بالعربية","excerpt":"موجز قصير","body":"النص الكامل بالعربية","category_slug":"${validCategories[0] ?? "world"}","read_minutes":4}`;
+}
 
-function sanitize(parsed: unknown): Draft | null {
+function sanitize(parsed: unknown, validCategories: string[]): Draft | null {
   if (!parsed || typeof parsed !== "object") return null;
   const o = parsed as Record<string, unknown>;
   const title = String(o.title ?? "").trim();
   const body = String(o.body ?? "").trim();
   if (title.length < 4 || body.length < 40) return null;
+  const fallbackCat = validCategories.includes("world") ? "world" : validCategories[0] ?? "world";
   return {
     title,
     excerpt: String(o.excerpt ?? "").trim(),
     body,
-    category_slug: VALID_CATEGORIES.includes(String(o.category_slug))
+    category_slug: validCategories.includes(String(o.category_slug))
       ? String(o.category_slug)
-      : "world",
+      : fallbackCat,
     read_minutes: Number(o.read_minutes) || 4,
   };
 }
@@ -342,9 +353,10 @@ Deno.serve(async (req: Request) => {
       return Response.json({ ok: false, reason: "no_text" });
     }
 
+    const validCategories = await fetchCategorySlugs(admin);
     const raw = await chat(
       [
-        { role: "system", content: SYSTEM },
+        { role: "system", content: buildSystem(validCategories) },
         {
           role: "user",
           content: `العنوان الأصلي: ${page.title}\n\nنص المقال:\n${page.text}`,
@@ -355,7 +367,7 @@ Deno.serve(async (req: Request) => {
 
     let draft: Draft | null = null;
     try {
-      draft = sanitize(extractJson(raw));
+      draft = sanitize(extractJson(raw), validCategories);
     } catch {
       draft = null;
     }

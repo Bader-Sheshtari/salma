@@ -37,6 +37,7 @@ export type Database = {
           accent: string
           name_ar: string
           name_en: string | null
+          show_in_nav: boolean
           slug: string
           sort_order: number
         }
@@ -44,6 +45,7 @@ export type Database = {
           accent?: string
           name_ar: string
           name_en?: string | null
+          show_in_nav?: boolean
           slug: string
           sort_order?: number
         }
@@ -51,6 +53,7 @@ export type Database = {
           accent?: string
           name_ar?: string
           name_en?: string | null
+          show_in_nav?: boolean
           slug?: string
           sort_order?: number
         }
@@ -604,6 +607,24 @@ export type Database = {
         }
         Relationships: []
       }
+      newsletter_subscribers: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id?: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -746,6 +767,7 @@ export type Database = {
     }
     Functions: {
       is_admin: { Args: never; Returns: boolean }
+      is_admin_manager: { Args: never; Returns: boolean }
       run_news_ingestion: { Args: never; Returns: undefined }
     }
     Enums: {

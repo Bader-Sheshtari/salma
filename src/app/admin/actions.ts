@@ -325,6 +325,99 @@ export async function deleteDepartment(formData: FormData) {
   revalidatePath("/doctors");
 }
 
+// ============ CATEGORIES ============
+
+/**
+ * Create or update a site category (a nav line + homepage topic, e.g. "الكويت").
+ * The category `slug` is the primary key and is referenced by content and
+ * homepage_sections, so it is immutable after creation — edits only touch the
+ * display fields. Creating a category also seeds a matching, *disabled*
+ * homepage_sections row so the admin can enable/position it when ready.
+ */
+export async function saveCategory(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+
+  // `original_slug` marks an edit; empty means create.
+  const original_slug = String(formData.get("original_slug") ?? "").trim();
+  const name_ar = String(formData.get("name_ar") ?? "").trim();
+  if (name_ar.length < 2) return { error: "اسم القسم قصير جداً." };
+  const name_en = String(formData.get("name_en") ?? "").trim() || null;
+  const accent = String(formData.get("accent") ?? "").trim() || "#449785";
+  const sortRaw = String(formData.get("sort_order") ?? "").trim();
+  const sort_order = sortRaw ? Number(sortRaw) || 0 : 0;
+  const show_in_nav = formData.get("show_in_nav") === "on";
+
+  if (original_slug) {
+    const payload = { name_ar, name_en, accent, sort_order, show_in_nav };
+    const { error } = await supabase
+      .from("categories")
+      .update(payload as unknown as never)
+      .eq("slug", original_slug);
+    if (error) return { error: "تعذّر حفظ القسم." };
+  } else {
+    const slug = String(formData.get("slug") ?? "").trim() || slugify(name_ar);
+    const payload = { slug, name_ar, name_en, accent, sort_order, show_in_nav };
+    const { error } = await supabase
+      .from("categories")
+      .insert(payload as unknown as never);
+    if (error) return { error: "تعذّر إنشاء القسم (تأكد أن الرابط فريد)." };
+
+    // Seed a disabled homepage section for the new category (admin enables later).
+    const { data: maxRow } = await supabase
+      .from("homepage_sections")
+      .select("sort_order")
+      .order("sort_order", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const nextSort = ((maxRow as { sort_order: number } | null)?.sort_order ?? 0) + 1;
+    const section = {
+      key: `category:${slug}`,
+      kind: "category",
+      category_slug: slug,
+      title_ar: name_ar,
+      is_enabled: false,
+      sort_order: nextSort,
+      accent,
+    };
+    await supabase.from("homepage_sections").insert(section as unknown as never);
+  }
+
+  revalidatePath("/admin/categories");
+  revalidatePath("/admin/homepage");
+  revalidatePath("/", "layout");
+  return null;
+}
+
+/**
+ * Delete a category. Blocked if any content is still filed under it (the FK
+ * would otherwise orphan articles); the admin must reassign content first.
+ * The matching homepage_sections row is removed alongside it.
+ */
+export async function deleteCategory(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const slug = String(formData.get("slug") ?? "").trim();
+  if (!slug) return null;
+
+  const { count } = await supabase
+    .from("content")
+    .select("*", { count: "exact", head: true })
+    .eq("category_slug", slug)
+    .is("deleted_at", null);
+  if ((count ?? 0) > 0) {
+    // Leave the category in place; content is still attached to it.
+    return { error: `لا يمكن حذف القسم لأنه يحتوي على ${count} مقالاً. انقل المقالات أو احذفها أولاً.` };
+  }
+
+  await supabase.from("homepage_sections").delete().eq("category_slug", slug);
+  await supabase.from("categories").delete().eq("slug", slug);
+  revalidatePath("/admin/categories");
+  revalidatePath("/admin/homepage");
+  revalidatePath("/", "layout");
+  return null;
+}
+
 // ============ DOCTORS ============
 
 export async function saveDoctor(_prev: SaveResult, formData: FormData): Promise<SaveResult> {

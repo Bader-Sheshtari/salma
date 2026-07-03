@@ -8,6 +8,7 @@ const NAV = [
   { href: "/admin/homepage", label: "الصفحة الرئيسية" },
   { href: "/admin/content", label: "المحتوى" },
   { href: "/admin/content/new", label: "إضافة محتوى" },
+  { href: "/admin/categories", label: "الأقسام والصفحات" },
   { href: "/admin/ingest", label: "جلب بالذكاء الاصطناعي" },
   { href: "/admin/ingest/runs", label: "سجلّ الجلب" },
   { href: "/admin/ingest/policy", label: "السياسة التحريرية" },
