@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import type { Metadata } from "next";
 import { Header } from "@/components/site/Header";
 import { Footer } from "@/components/site/Footer";
@@ -8,6 +8,12 @@ import { getCategories, getContentByCategory } from "@/lib/queries";
 export const revalidate = 60;
 
 type Props = { params: Promise<{ slug: string }> };
+
+/** Old category slugs that were renamed. Old shared links permanently redirect
+ * to their new slug so they keep working. */
+const LEGACY_SLUG_REDIRECTS: Record<string, string> = {
+  "شصاير-في-داوي": "dawi-news",
+};
 
 /** Route params arrive percent-encoded for non-ASCII (Arabic) slugs; decode
  * before matching the raw value stored in the DB. */
@@ -28,6 +34,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function CategoryPage({ params }: Props) {
   const slug = decodeSlug((await params).slug);
+  const redirectTo = LEGACY_SLUG_REDIRECTS[slug];
+  if (redirectTo) permanentRedirect(`/category/${redirectTo}`);
   const [categories, items] = await Promise.all([
     getCategories(),
     getContentByCategory(slug),
