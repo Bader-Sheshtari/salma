@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { saveCategory, type SaveResult } from "../../actions";
+import { suggestSlug } from "@/lib/translit";
 import type { Category } from "@/lib/queries";
 
 const field =
@@ -15,6 +16,15 @@ export function CategoryForm({
   compact?: boolean;
 }) {
   const [state, formAction, pending] = useActionState<SaveResult, FormData>(saveCategory, null);
+
+  // Live Latin-slug suggestion for the create form. `slugEdited` locks the
+  // suggestion off once the admin types their own slug, so we never overwrite
+  // a manual choice.
+  const [nameAr, setNameAr] = useState("");
+  const [nameEn, setNameEn] = useState("");
+  const [slug, setSlug] = useState("");
+  const [slugEdited, setSlugEdited] = useState(false);
+  const displayedSlug = slugEdited ? slug : suggestSlug(nameAr, nameEn);
 
   if (compact && category) {
     return (
@@ -66,14 +76,40 @@ export function CategoryForm({
     <form action={formAction} className="flex flex-col gap-3 rounded-2xl border border-line bg-white p-4">
       <div className="text-[13px] font-bold">إضافة قسم جديد</div>
       <div className="grid gap-3 sm:grid-cols-2">
-        <input name="name_ar" placeholder="اسم القسم بالعربية (مثال: أخبار داوي)" required className={field} />
-        <input name="name_en" placeholder="Name in English (optional)" dir="ltr" className={field} />
         <input
-          name="slug"
-          placeholder="الرابط (اختياري، مثال: dawi-news)"
+          name="name_ar"
+          value={nameAr}
+          onChange={(e) => setNameAr(e.target.value)}
+          placeholder="اسم القسم بالعربية (مثال: أخبار داوي)"
+          required
+          className={field}
+        />
+        <input
+          name="name_en"
+          value={nameEn}
+          onChange={(e) => setNameEn(e.target.value)}
+          placeholder="Name in English (optional)"
           dir="ltr"
           className={field}
         />
+        <div className="flex flex-col gap-1 sm:col-span-2">
+          <input
+            name="slug"
+            value={displayedSlug}
+            onChange={(e) => {
+              setSlug(e.target.value);
+              setSlugEdited(true);
+            }}
+            placeholder="الرابط (اختياري، مثال: dawi-news)"
+            dir="ltr"
+            className={field}
+          />
+          <span className="text-[11px] text-gray">
+            {slugEdited
+              ? "سيُستخدم هذا الرابط في عنوان الصفحة."
+              : "يُقترح تلقائياً بحروف لاتينية — يمكنك تعديله."}
+          </span>
+        </div>
         <input name="sort_order" type="number" placeholder="الترتيب" className={field} />
       </div>
       <div className="flex flex-wrap items-center gap-4">
