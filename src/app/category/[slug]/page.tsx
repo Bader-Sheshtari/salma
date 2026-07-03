@@ -9,15 +9,25 @@ export const revalidate = 60;
 
 type Props = { params: Promise<{ slug: string }> };
 
+/** Route params arrive percent-encoded for non-ASCII (Arabic) slugs; decode
+ * before matching the raw value stored in the DB. */
+function decodeSlug(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { slug } = await params;
+  const slug = decodeSlug((await params).slug);
   const categories = await getCategories();
   const cat = categories.find((c) => c.slug === slug);
   return { title: cat ? `${cat.name_ar} · سلمى` : "سلمى" };
 }
 
 export default async function CategoryPage({ params }: Props) {
-  const { slug } = await params;
+  const slug = decodeSlug((await params).slug);
   const [categories, items] = await Promise.all([
     getCategories(),
     getContentByCategory(slug),

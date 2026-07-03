@@ -1,6 +1,7 @@
 import { listHomepageSections, listHeroOptions } from "@/lib/admin-queries";
 import { moveHomepageSection, setHomepageSectionPosition, setMainContent } from "../../actions";
 import { HomepageSectionForm } from "./HomepageSectionForm";
+import { HomepageVisibilityToggle } from "./HomepageVisibilityToggle";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +52,7 @@ export default async function HomepageSectionsPage() {
         {sections.map((s, i) => (
           <li
             key={s.id}
-            className={`rounded-2xl border bg-white p-4 ${s.is_enabled ? "border-line" : "border-line/60 opacity-70"}`}
+            className="rounded-2xl border border-line bg-white p-4"
           >
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -101,6 +102,7 @@ export default async function HomepageSectionsPage() {
                 </form>
               </div>
             </div>
+            <HomepageVisibilityToggle section={s} />
             <HomepageSectionForm section={s} />
           </li>
         ))}

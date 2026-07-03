@@ -44,7 +44,7 @@ export function HomepageSectionForm({ section }: { section: HomepageSection }) {
         </label>
       </div>
 
-      <div className="grid items-end gap-3 sm:grid-cols-[7rem_1fr_auto_auto]">
+      <div className="grid items-end gap-3 sm:grid-cols-[7rem_1fr_auto]">
         <label className={label}>
           عدد العناصر
           <input
@@ -65,10 +65,6 @@ export function HomepageSectionForm({ section }: { section: HomepageSection }) {
             dir="ltr"
             className={`${field} mt-1`}
           />
-        </label>
-        <label className="flex items-center gap-2 text-[13px] font-semibold text-ink">
-          <input type="checkbox" name="is_enabled" defaultChecked={section.is_enabled} className="h-4 w-4 accent-teal" />
-          مُفعّل
         </label>
         <label className="flex items-center gap-2 text-[13px] font-semibold text-ink">
           <input type="checkbox" name="show_view_all" defaultChecked={section.show_view_all} className="h-4 w-4 accent-teal" />

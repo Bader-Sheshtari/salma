@@ -363,7 +363,8 @@ export async function saveCategory(_prev: SaveResult, formData: FormData): Promi
       .insert(payload as unknown as never);
     if (error) return { error: "تعذّر إنشاء القسم (تأكد أن الرابط فريد)." };
 
-    // Seed a disabled homepage section for the new category (admin enables later).
+    // Seed an enabled homepage section for the new category so it shows on the
+    // homepage immediately; the admin can hide/reorder it from /admin/homepage.
     const { data: maxRow } = await supabase
       .from("homepage_sections")
       .select("sort_order")
@@ -376,7 +377,7 @@ export async function saveCategory(_prev: SaveResult, formData: FormData): Promi
       kind: "category",
       category_slug: slug,
       title_ar: name_ar,
-      is_enabled: false,
+      is_enabled: true,
       sort_order: nextSort,
       accent,
     };
@@ -599,15 +600,16 @@ export async function saveHomepageSection(_prev: SaveResult, formData: FormData)
   const display_style = DISPLAY_STYLES.includes(styleRaw) ? styleRaw : "carousel";
   const limitRaw = Number(String(formData.get("items_limit") ?? "6"));
   const items_limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 24) : 6;
-  const is_enabled = formData.get("is_enabled") === "on";
   const show_view_all = formData.get("show_view_all") === "on";
   const accent = String(formData.get("accent") ?? "").trim() || null;
 
+  // Note: `is_enabled` (homepage visibility) is intentionally NOT updated here —
+  // it is owned exclusively by the dedicated toggle (toggleHomepageSection), so
+  // editing a section's title/style never accidentally hides or shows it.
   const payload = {
     title_ar,
     display_style,
     items_limit,
-    is_enabled,
     show_view_all,
     accent,
   } satisfies Partial<TablesUpdate<"homepage_sections">>;
@@ -622,6 +624,40 @@ export async function saveHomepageSection(_prev: SaveResult, formData: FormData)
   revalidatePath("/admin/homepage");
   revalidatePath("/");
   return null;
+}
+
+/** Result of the homepage-visibility toggle: a success or error message. */
+export type ToggleResult = { success?: string; error?: string } | null;
+
+/**
+ * Show/hide a homepage section on the public homepage. Owns `is_enabled`
+ * exclusively so visibility is a single, explicit action (separate from the
+ * section's content/style edits). `next` is the desired visibility state.
+ */
+export async function toggleHomepageSection(
+  _prev: ToggleResult,
+  formData: FormData,
+): Promise<ToggleResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return { error: "قسم غير معروف." };
+  const next = String(formData.get("next") ?? "") === "true";
+
+  const { error } = await supabase
+    .from("homepage_sections")
+    .update({ is_enabled: next } as unknown as never)
+    .eq("id", id);
+  if (error) return { error: "تعذّر تحديث حالة القسم." };
+
+  revalidatePath("/admin/homepage");
+  revalidatePath("/", "layout");
+  return {
+    success: next
+      ? "تم إظهار القسم في الصفحة الرئيسية"
+      : "تم إخفاء القسم من الصفحة الرئيسية",
+  };
 }
 
 /** Swap a section's sort_order with its neighbour to move it up or down. */
