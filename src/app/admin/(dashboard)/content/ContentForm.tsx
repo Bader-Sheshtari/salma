@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
-import { saveContent, type SaveResult } from "../../actions";
+import { useActionState, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { saveContent, setStatus, softDeleteContent, type ContentSaveResult } from "../../actions";
 import { generateCoverImage } from "../../image-actions";
 import { uploadToMedia } from "@/lib/upload";
 import type { Content, ContentSource, ContentMedia, Category } from "@/lib/queries";
@@ -45,13 +46,23 @@ export function ContentForm({
   media?: ContentMedia[];
   categories: Category[];
 }) {
-  const [state, formAction, pending] = useActionState<SaveResult, FormData>(saveContent, null);
+  const [state, formAction, pending] = useActionState<ContentSaveResult, FormData>(saveContent, null);
   const [rows, setRows] = useState<{ label: string; url: string }[]>(
     sources && sources.length > 0
       ? sources.map((s) => ({ label: s.label, url: s.url ?? "" }))
       : [{ label: "", url: "" }],
   );
   const [type, setType] = useState(content?.type ?? "news");
+
+  // After a successful save the action returns { ok, id, status } instead of
+  // redirecting, so we can offer next-action buttons. `savedId` lets a freshly
+  // created item keep editing the same row rather than inserting a duplicate.
+  const saved = state && "ok" in state ? state : null;
+  const savedId = saved?.id ?? content?.id ?? "";
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => {
+    if (state && "ok" in state) setDismissed(false);
+  }, [state]);
 
   // Cover
   const formRef = useRef<HTMLFormElement>(null);
@@ -128,8 +139,9 @@ export function ContentForm({
   }
 
   return (
+    <>
     <form ref={formRef} action={formAction} className="flex max-w-2xl flex-col gap-4">
-      {content?.id ? <input type="hidden" name="id" value={content.id} /> : null}
+      {savedId ? <input type="hidden" name="id" value={savedId} /> : null}
 
       <label className={label}>
         العنوان
@@ -174,6 +186,17 @@ export function ContentForm({
       <label className={label}>
         مقتطف
         <textarea name="excerpt" defaultValue={content?.excerpt ?? ""} rows={2} className={field} />
+      </label>
+
+      <label className={label}>
+        باختصار (ملخص سريع يظهر أعلى المقال)
+        <textarea
+          name="ai_summary"
+          defaultValue={content?.ai_summary ?? ""}
+          rows={3}
+          placeholder="نقاط سريعة تلخّص الخبر للقارئ المستعجل — اتركه فارغاً لإخفاء الصندوق."
+          className={field}
+        />
       </label>
 
       <label className={label}>
@@ -245,21 +268,38 @@ export function ContentForm({
         </div>
       </div>
 
+      {/* Video embed — available on any type so news/articles can carry a video
+          alongside their cover image, not just video-type posts. */}
+      <label className={label}>
+        رابط فيديو (يوتيوب/Vimeo) — اختياري
+        <input
+          name="video_url"
+          defaultValue={content?.video_url ?? ""}
+          dir="ltr"
+          placeholder="https://youtube.com/watch?v=…  أو  https://vimeo.com/…"
+          className={field}
+        />
+        <span className="mt-1 block text-[11px] leading-relaxed text-gray">
+          يظهر كفيديو مضمّن داخل صفحة المقال. اتركه فارغاً إن لم يكن هناك فيديو.
+        </span>
+      </label>
+
       {type === "video" ? (
-        <div className="grid grid-cols-2 gap-3">
-          <label className={label}>
-            رابط الفيديو (يوتيوب/Vimeo أو embed)
-            <input name="video_url" defaultValue={content?.video_url ?? ""} dir="ltr" className={field} />
-          </label>
-          <label className={label}>
-            المدة
-            <input name="video_duration" defaultValue={content?.video_duration ?? ""} dir="ltr" placeholder="3:12" className={field} />
-          </label>
-        </div>
+        <label className={label}>
+          مدة الفيديو
+          <input name="video_duration" defaultValue={content?.video_duration ?? ""} dir="ltr" placeholder="3:12" className={field} />
+        </label>
       ) : (
         <label className={label}>
-          دقائق القراءة
-          <input name="read_minutes" type="number" min={0} defaultValue={content?.read_minutes ?? ""} className={field} />
+          دقائق القراءة — اختياري
+          <input
+            name="read_minutes"
+            type="number"
+            min={0}
+            defaultValue={content?.read_minutes ?? ""}
+            placeholder="اتركه فارغاً لإخفاء وقت القراءة"
+            className={field}
+          />
         </label>
       )}
 
@@ -445,7 +485,9 @@ export function ContentForm({
         </button>
       </div>
 
-      {state?.error ? <div className="text-[13px] text-coral">{state.error}</div> : null}
+      {state && "error" in state ? (
+        <div className="text-[13px] text-coral">{state.error}</div>
+      ) : null}
 
       <button
         type="submit"
@@ -455,5 +497,44 @@ export function ContentForm({
         {pending ? "جارٍ الحفظ…" : "حفظ"}
       </button>
     </form>
+
+    {/* Post-save next actions. Kept OUTSIDE the editor form (HTML forbids nested
+        forms) so publish/delete submit to their own server actions. */}
+    {saved && !dismissed ? (
+      <div className="mt-4 max-w-2xl rounded-2xl border border-teal/40 bg-teal/5 p-4">
+        <div className="mb-3 text-[14px] font-bold text-teal">تم الحفظ بنجاح ✓</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/admin/content"
+            className="rounded-lg border border-line bg-white px-4 py-2 text-[13px] font-semibold text-ink hover:bg-cream"
+          >
+            العودة إلى قائمة المحتوى
+          </Link>
+          {saved.status !== "published" ? (
+            <form action={setStatus}>
+              <input type="hidden" name="id" value={saved.id} />
+              <input type="hidden" name="status" value="published" />
+              <button className="rounded-lg bg-teal px-4 py-2 text-[13px] font-bold text-white hover:opacity-90">
+                نشر الآن
+              </button>
+            </form>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            className="rounded-lg border border-line bg-white px-4 py-2 text-[13px] font-semibold text-ink hover:bg-cream"
+          >
+            متابعة التحرير
+          </button>
+          <form action={softDeleteContent}>
+            <input type="hidden" name="id" value={saved.id} />
+            <button className="rounded-lg border border-line bg-white px-4 py-2 text-[13px] font-semibold text-coral hover:bg-cream">
+              حذف
+            </button>
+          </form>
+        </div>
+      </div>
+    ) : null}
+    </>
   );
 }

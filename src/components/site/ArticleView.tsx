@@ -74,6 +74,23 @@ export function ArticleView({
         {content.read_minutes ? <span>· {content.read_minutes} دقائق قراءة</span> : null}
       </div>
 
+      {/* "باختصار" — quick summary box, shown near the top with a distinct tint */}
+      {content.ai_summary ? (
+        <aside className="mt-5 rounded-2xl border border-teal/25 bg-gradient-to-br from-teal/[0.08] to-green/[0.06] p-4 sm:p-5">
+          <span className="inline-flex items-center rounded-md bg-teal px-2.5 py-1 text-[11px] font-bold text-white">
+            باختصار
+          </span>
+          <div className="mt-2.5 flex flex-col gap-1.5 text-[14.5px] leading-loose text-ink">
+            {content.ai_summary
+              .split(/\n+/)
+              .filter((line) => line.trim())
+              .map((line, i) => (
+                <p key={i}>{line}</p>
+              ))}
+          </div>
+        </aside>
+      ) : null}
+
       {/* lead media */}
       {isVideo && content.video_url ? (
         <div className="mt-5 aspect-video w-full overflow-hidden rounded-2xl bg-ink">
@@ -98,6 +115,20 @@ export function ArticleView({
         <p className="mt-5 border-r-4 border-teal pr-4 text-[15px] font-medium leading-loose text-gray">
           {content.excerpt}
         </p>
+      ) : null}
+
+      {/* Embedded video for non-video articles (video-type posts show it as the
+          lead media above). Lets news/articles carry a video with their cover. */}
+      {!isVideo && content.video_url ? (
+        <div className="mt-5 aspect-video w-full overflow-hidden rounded-2xl bg-ink">
+          <iframe
+            src={embedUrl(content.video_url)}
+            title={content.title}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+            className="h-full w-full"
+          />
+        </div>
       ) : null}
 
       <div className="mt-4 flex flex-col gap-4 text-[16px] leading-loose text-ink">

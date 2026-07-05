@@ -10,8 +10,18 @@ import type { TablesInsert, TablesUpdate } from "@/lib/supabase/database.types";
 
 export type SaveResult = { error: string } | null;
 
+/** Result of `saveContent`: on success it carries the saved id + status so the
+ * editor can show next-action buttons instead of redirecting away. */
+export type ContentSaveResult =
+  | { error: string }
+  | { ok: true; id: string; status: string }
+  | null;
+
 /** Create or update a content item plus its sources. */
-export async function saveContent(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
+export async function saveContent(
+  _prev: ContentSaveResult,
+  formData: FormData,
+): Promise<ContentSaveResult> {
   await requireAdmin();
   const supabase = await createClient();
 
@@ -23,6 +33,7 @@ export async function saveContent(_prev: SaveResult, formData: FormData): Promis
   const status = String(formData.get("status") ?? "draft");
   const category_slug = String(formData.get("category_slug") ?? "") || null;
   const excerpt = String(formData.get("excerpt") ?? "").trim() || null;
+  const ai_summary = String(formData.get("ai_summary") ?? "").trim() || null;
   const body = String(formData.get("body") ?? "").trim() || null;
   const cover_image_url = String(formData.get("cover_image_url") ?? "").trim() || null;
   const cover_credit_name = String(formData.get("cover_credit_name") ?? "").trim() || null;
@@ -46,6 +57,7 @@ export async function saveContent(_prev: SaveResult, formData: FormData): Promis
     status,
     category_slug,
     excerpt,
+    ai_summary,
     body,
     cover_image_url,
     cover_credit_name,
@@ -134,7 +146,10 @@ export async function saveContent(_prev: SaveResult, formData: FormData): Promis
 
   revalidatePath("/admin/content");
   revalidatePath("/");
-  redirect("/admin/content");
+  // Stay on the editor and surface next-action buttons (return to list / publish
+  // / delete / continue editing). The saved id lets a freshly-created item keep
+  // editing the same row instead of inserting a duplicate.
+  return { ok: true, id: contentId, status };
 }
 
 export async function setStatus(formData: FormData) {
