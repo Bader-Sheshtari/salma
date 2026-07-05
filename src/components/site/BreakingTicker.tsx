@@ -8,21 +8,25 @@ export function BreakingTicker({ items }: { items: Content[] }) {
   const loop = [...items, ...items];
 
   return (
-    <div className="flex items-stretch overflow-hidden bg-ink text-white">
-      <div className="z-[2] flex shrink-0 items-center gap-1.5 bg-coral px-3 py-2.5 text-xs font-bold text-ink">
+    <div className="flex items-stretch overflow-hidden bg-coral text-ink">
+      <div className="z-[2] flex shrink-0 items-center gap-2 bg-ink px-4 py-3 text-[13px] font-bold text-white">
         <span
-          className="h-1.5 w-1.5 rounded-full bg-ink"
+          className="h-2 w-2 rounded-full bg-white"
           style={{ animation: "salmaPulse 1.1s infinite" }}
         />
         عاجل
       </div>
       <div className="flex flex-1 items-center overflow-hidden">
         <div
-          className="flex gap-9 whitespace-nowrap px-4 text-[12.5px] font-medium"
-          style={{ animation: "salmaMarquee 28s linear infinite" }}
+          className="flex gap-9 whitespace-nowrap px-4 text-[13px] font-semibold"
+          style={{ animation: "salmaMarquee 30s linear infinite" }}
         >
           {loop.map((c, i) => (
-            <Link key={`${c.id}-${i}`} href={hrefFor(c)} className="hover:text-gold">
+            <Link
+              key={`${c.id}-${i}`}
+              href={hrefFor(c)}
+              className="transition-colors hover:text-white"
+            >
               {c.title}
             </Link>
           ))}

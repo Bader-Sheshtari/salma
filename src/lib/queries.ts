@@ -37,6 +37,9 @@ export type HomeSectionItems = {
 
 export type HomepageData = {
   hero: Content | null;
+  /** Ordered pool the homepage hero rotates through: the featured pick first,
+   * then the most recent published articles. Deduped, videos excluded. */
+  heroPool: Content[];
   breaking: Content[];
   videos: Content[];
   sections: HomeSectionItems[];
@@ -52,8 +55,9 @@ export async function getHomepage(): Promise<HomepageData> {
       .eq("status", "published")
       .is("deleted_at", null);
 
-  const [heroRes, breakingRes, videosRes, sectionsRes] = await Promise.all([
+  const [heroRes, latestRes, breakingRes, videosRes, sectionsRes] = await Promise.all([
     base().eq("is_featured", true).order("published_at", { ascending: false }).limit(1).maybeSingle(),
+    base().neq("type", "video").order("published_at", { ascending: false }).limit(6),
     base().eq("is_breaking", true).order("published_at", { ascending: false }).limit(8),
     base().eq("type", "video").order("published_at", { ascending: false }).limit(6),
     supabase
@@ -65,6 +69,18 @@ export async function getHomepage(): Promise<HomepageData> {
 
   const hero = (heroRes.data as unknown as Content) ?? null;
   const sectionRows = (sectionsRes.data as HomepageSection[]) ?? [];
+
+  // Build the hero rotation pool: featured pick first, then latest articles,
+  // deduped, capped at 5 so the rotation stays focused on the top stories.
+  const latest = (latestRes.data as Content[]) ?? [];
+  const heroPool: Content[] = [];
+  const seen = new Set<string>();
+  for (const c of [...(hero ? [hero] : []), ...latest]) {
+    if (seen.has(c.id)) continue;
+    seen.add(c.id);
+    heroPool.push(c);
+    if (heroPool.length >= 5) break;
+  }
 
   // Resolve each enabled section's items in parallel. `feature:social` has no
   // UI yet (built in a later stage), so it is skipped here.
@@ -88,6 +104,7 @@ export async function getHomepage(): Promise<HomepageData> {
 
   return {
     hero,
+    heroPool,
     breaking: (breakingRes.data as Content[]) ?? [],
     videos: (videosRes.data as Content[]) ?? [],
     sections: resolved.filter((s): s is HomeSectionItems => s !== null),

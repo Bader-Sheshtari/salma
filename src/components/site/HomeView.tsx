@@ -2,26 +2,34 @@ import Link from "next/link";
 import type { HomepageData } from "@/lib/queries";
 import { BreakingTicker } from "./BreakingTicker";
 import { SectionTitle, Rail } from "./Section";
-import { HeroCard, ListRow, VideoCard } from "./cards";
+import { ListRow, VideoCard } from "./cards";
+import { RotatingHero } from "./RotatingHero";
 import { HomeSection } from "./HomeSection";
 import { NewsletterForm } from "./NewsletterForm";
 
 export function HomeView({ data }: { data: HomepageData }) {
-  // Hero falls back to the first item of the first resolved section.
+  // Hero rotates through the top-stories pool; fall back to the featured pick or
+  // the first item of the first resolved section when the pool is empty.
   const firstSectionContent = data.sections.find((s) => s.content.length > 0)?.content ?? [];
-  const hero = data.hero ?? firstSectionContent[0] ?? null;
-  const secondary = firstSectionContent.filter((c) => c.id !== hero?.id).slice(0, 3);
+  const heroPool =
+    data.heroPool.length > 0
+      ? data.heroPool
+      : data.hero
+        ? [data.hero]
+        : firstSectionContent.slice(0, 1);
+  const heroIds = new Set(heroPool.map((c) => c.id));
+  const secondary = firstSectionContent.filter((c) => !heroIds.has(c.id)).slice(0, 3);
 
   return (
     <>
       <BreakingTicker items={data.breaking} />
 
-      {/* HERO + secondary */}
-      {hero ? (
+      {/* HERO (auto-rotating) + secondary */}
+      {heroPool.length > 0 ? (
         <section className="px-4 pt-5 sm:px-6">
           <div className="grid gap-5 lg:grid-cols-3">
             <div className="lg:col-span-2">
-              <HeroCard c={hero} />
+              <RotatingHero items={heroPool} />
             </div>
             <div className="flex flex-col divide-y divide-line">
               {secondary.map((c) => (

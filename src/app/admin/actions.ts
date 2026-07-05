@@ -753,6 +753,30 @@ export async function setHomepageSectionPosition(formData: FormData) {
   revalidatePath("/");
 }
 
+/**
+ * Persist a full drag-and-drop reorder: `orderedIds` is the sections in their
+ * new top-to-bottom order; each row's sort_order is set to its index. Called
+ * directly from the client after a drag ends.
+ */
+export async function reorderHomepageSections(orderedIds: string[]) {
+  await requireAdmin();
+  const supabase = await createClient();
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) return;
+
+  await Promise.all(
+    orderedIds.map((id, i) =>
+      supabase
+        .from("homepage_sections")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .update({ sort_order: i } as unknown as never)
+        .eq("id", String(id)),
+    ),
+  );
+
+  revalidatePath("/admin/homepage");
+  revalidatePath("/");
+}
+
 // ============ URL → AI SYNTHESIS ============
 
 export type SynthResult = { error: string } | { ok: true; id: string; title: string } | null;
