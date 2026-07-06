@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Content } from "@/lib/queries";
-import { Cover, hrefFor } from "./cards";
+import { Cover, coverFor, hrefFor } from "./cards";
 import { timeAgoAr } from "@/lib/format";
 
 const ROTATE_MS = 6500;
@@ -49,7 +49,7 @@ export function RotatingHero({ items }: { items: Content[] }) {
               i === index ? "opacity-100" : "pointer-events-none opacity-0"
             }`}
           >
-            <Cover src={c.cover_image_url} alt="صورة رئيسية" className="absolute inset-0" />
+            <Cover src={coverFor(c)} alt="صورة رئيسية" className="absolute inset-0" />
             <span className="absolute right-3 top-3 rounded-md bg-teal px-2.5 py-1 text-[11px] font-semibold text-white">
               الأبرز
             </span>

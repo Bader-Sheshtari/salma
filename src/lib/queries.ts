@@ -14,7 +14,7 @@ export type DoctorRating = Tables<"doctor_ratings">;
 export type DoctorTransfer = Tables<"doctor_transfers">;
 
 const CARD_FIELDS =
-  "id,type,title,slug,excerpt,category_slug,cover_image_url,video_duration,read_minutes,published_at,is_breaking";
+  "id,type,title,slug,excerpt,category_slug,cover_image_url,video_url,video_duration,read_minutes,published_at,is_breaking";
 
 export async function getCategories(): Promise<Category[]> {
   const supabase = await createClient();

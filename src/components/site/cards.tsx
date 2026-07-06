@@ -1,11 +1,17 @@
 import Link from "next/link";
 import Image from "next/image";
 import type { Content } from "@/lib/queries";
-import { hatch, timeAgoAr } from "@/lib/format";
+import { hatch, timeAgoAr, videoThumbnail } from "@/lib/format";
 
 /** True for images served from our Supabase Storage (optimizable by next/image). */
 export function isStorageImage(src: string): boolean {
   return src.includes(".supabase.co/storage/v1/object/public/");
+}
+
+/** Effective cover for a card: a manually set cover always wins; otherwise fall
+ * back to the video's thumbnail (YouTube only) when the item carries a video. */
+export function coverFor(c: Pick<Content, "cover_image_url" | "video_url">): string | null {
+  return c.cover_image_url || videoThumbnail(c.video_url);
 }
 
 /** Route for a content item based on its type. */
@@ -64,7 +70,7 @@ export function HeroCard({ c }: { c: Content }) {
   return (
     <Link href={hrefFor(c)} className="group block overflow-hidden rounded-2xl border border-line">
       <div className="relative flex aspect-[16/10] items-end">
-        <Cover src={c.cover_image_url} alt="صورة رئيسية" className="absolute inset-0" />
+        <Cover src={coverFor(c)} alt="صورة رئيسية" className="absolute inset-0" />
         <span className="absolute right-3 top-3 rounded-md bg-teal px-2.5 py-1 text-[11px] font-semibold text-white">
           عاجل
         </span>
@@ -92,7 +98,7 @@ export function ListRow({
   return (
     <Link href={hrefFor(c)} className="flex items-center gap-3 py-3">
       <div className="h-14 w-20 shrink-0 overflow-hidden rounded-lg sm:h-16 sm:w-24">
-        <Cover src={c.cover_image_url} alt="صورة" />
+        <Cover src={coverFor(c)} alt="صورة" />
       </div>
       <div className="min-w-0">
         <div className="text-sm font-semibold leading-relaxed sm:text-[15px]">{c.title}</div>
@@ -109,7 +115,7 @@ export function ContentCard({ c }: { c: Content }) {
   return (
     <Link href={hrefFor(c)} className="block overflow-hidden rounded-2xl bg-white">
       <div className="aspect-[16/10] w-full overflow-hidden">
-        <Cover src={c.cover_image_url} alt="صورة" />
+        <Cover src={coverFor(c)} alt="صورة" />
       </div>
       <div className="px-3 py-3">
         <div className="text-[13.5px] font-semibold leading-relaxed sm:text-sm">{c.title}</div>
@@ -126,7 +132,7 @@ export function VideoCard({ c }: { c: Content }) {
   return (
     <Link href={hrefFor(c)} className="block">
       <div className="relative flex aspect-video items-center justify-center overflow-hidden rounded-xl">
-        <Cover src={c.cover_image_url} alt="فيديو" dark className="absolute inset-0" />
+        <Cover src={coverFor(c)} alt="فيديو" dark className="absolute inset-0" />
         <span className="relative flex h-11 w-11 items-center justify-center rounded-full bg-white/90 pr-0.5 text-teal">
           ▶
         </span>

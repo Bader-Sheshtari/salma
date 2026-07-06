@@ -98,3 +98,43 @@ export function embedUrl(url: string): string {
 
   return raw;
 }
+
+/**
+ * Best-effort poster image for a video URL, used as an automatic cover fallback
+ * when no cover image has been uploaded. YouTube exposes a static thumbnail
+ * (img.youtube.com/vi/<id>/hqdefault.jpg); Vimeo does not (its thumbnails need
+ * an authenticated oEmbed call), so we return null and let the caller fall back
+ * to the placeholder or a manually uploaded cover.
+ */
+export function videoThumbnail(url: string | null): string | null {
+  if (!url) return null;
+  const raw = url.trim();
+  if (!raw) return null;
+
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+
+  const host = u.hostname.replace(/^www\./, "");
+
+  if (host === "youtu.be") {
+    const id = u.pathname.slice(1);
+    return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : null;
+  }
+
+  if (host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") {
+    if (u.pathname === "/watch") {
+      const id = u.searchParams.get("v");
+      return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : null;
+    }
+    const m = u.pathname.match(/^\/(?:shorts|embed)\/([^/?]+)/);
+    if (m) return `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg`;
+    return null;
+  }
+
+  // Vimeo and everything else: no static thumbnail available.
+  return null;
+}

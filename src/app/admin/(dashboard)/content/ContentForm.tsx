@@ -156,6 +156,10 @@ export function ContentForm({
               <option key={t.v} value={t.v}>{t.l}</option>
             ))}
           </select>
+          <span className="mt-1 block text-[11px] leading-relaxed text-gray">
+            «فيديو» يظهر في قسم «فيديو وتبسيط طبي» بالصفحة الرئيسية. لإضافة فيديو داخل خبر أو مقال
+            يبقى في قسمه المختار فقط، اختر «خبر» أو «مقال» والصق الرابط في حقل «رابط فيديو» أدناه.
+          </span>
         </label>
         <label className={label}>
           الحالة
@@ -281,6 +285,8 @@ export function ContentForm({
         />
         <span className="mt-1 block text-[11px] leading-relaxed text-gray">
           يظهر كفيديو مضمّن داخل صفحة المقال. اتركه فارغاً إن لم يكن هناك فيديو.
+          روابط يوتيوب تُستخدم صورتها المصغّرة كصورة غلاف تلقائياً عند عدم رفع صورة،
+          بينما تحتاج روابط Vimeo إلى رفع صورة غلاف يدوياً.
         </span>
       </label>
 
