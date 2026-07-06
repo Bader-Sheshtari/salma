@@ -6,6 +6,7 @@ import { ListRow, VideoCard } from "./cards";
 import { RotatingHero } from "./RotatingHero";
 import { HomeSection } from "./HomeSection";
 import { NewsletterForm } from "./NewsletterForm";
+import { SearchBox } from "./SearchBox";
 
 export function HomeView({ data }: { data: HomepageData }) {
   // Hero rotates through the top-stories pool; fall back to the featured pick or
@@ -23,6 +24,11 @@ export function HomeView({ data }: { data: HomepageData }) {
   return (
     <>
       <BreakingTicker items={data.breaking} />
+
+      {/* INTERNAL SEARCH */}
+      <section className="px-4 pt-5 sm:px-6">
+        <SearchBox variant="hero" />
+      </section>
 
       {/* HERO (auto-rotating) + secondary */}
       {heroPool.length > 0 ? (

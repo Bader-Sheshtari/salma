@@ -1,7 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
-import type { Content } from "@/lib/queries";
-import { hatch, timeAgoAr, videoThumbnail } from "@/lib/format";
+import type { Content, SearchResult } from "@/lib/queries";
+import { formatDateTimeAr, hatch, timeAgoAr, videoThumbnail } from "@/lib/format";
 
 /** True for images served from our Supabase Storage (optimizable by next/image). */
 export function isStorageImage(src: string): boolean {
@@ -122,6 +122,37 @@ export function ContentCard({ c }: { c: Content }) {
         {c.read_minutes ? (
           <div className="mt-1.5 text-[11px] text-green">{c.read_minutes} دقائق قراءة</div>
         ) : null}
+      </div>
+    </Link>
+  );
+}
+
+/** A unified search result: thumbnail + type/category + title + summary + meta. */
+export function SearchResultRow({ r }: { r: SearchResult }) {
+  const date = formatDateTimeAr(r.publishedAt);
+  return (
+    <Link href={r.href} className="flex gap-3 py-4 sm:gap-4">
+      <div className="h-20 w-28 shrink-0 overflow-hidden rounded-xl sm:h-24 sm:w-36">
+        <Cover src={r.image} alt={r.title} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <span className="rounded-md bg-teal/10 px-2 py-0.5 text-[11px] font-bold text-teal">
+            {r.typeLabel}
+          </span>
+          {r.categoryName ? (
+            <span className="text-[11.5px] font-semibold text-green">{r.categoryName}</span>
+          ) : null}
+        </div>
+        <div className="text-[15px] font-bold leading-snug text-ink">{r.title}</div>
+        {r.summary ? (
+          <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-gray">{r.summary}</p>
+        ) : null}
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-gray">
+          {date ? <span>{date}</span> : null}
+          {date && r.source ? <span aria-hidden>·</span> : null}
+          {r.source ? <span>المصدر: {r.source}</span> : null}
+        </div>
       </div>
     </Link>
   );

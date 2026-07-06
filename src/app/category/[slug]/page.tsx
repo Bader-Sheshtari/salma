@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { Header } from "@/components/site/Header";
 import { Footer } from "@/components/site/Footer";
 import { ContentCard } from "@/components/site/cards";
+import { SearchBox } from "@/components/site/SearchBox";
 import { getCategories, getContentByCategory } from "@/lib/queries";
 
 export const revalidate = 60;
@@ -50,6 +51,9 @@ export default async function CategoryPage({ params }: Props) {
         <div className="mb-5 flex items-center gap-2.5">
           <span className="h-7 w-1.5 rounded-sm" style={{ background: cat.accent }} />
           <h1 className="text-2xl font-bold sm:text-3xl">{cat.name_ar}</h1>
+        </div>
+        <div className="mb-6">
+          <SearchBox />
         </div>
         {items.length === 0 ? (
           <p className="text-[14px] text-gray">لا يوجد محتوى منشور في هذا القسم بعد.</p>

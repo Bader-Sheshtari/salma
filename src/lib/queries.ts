@@ -2,6 +2,8 @@ import "server-only";
 import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import type { Tables } from "@/lib/supabase/database.types";
+import { scoreFields } from "@/lib/search";
+import { videoThumbnail } from "@/lib/format";
 
 export type Content = Tables<"content">;
 export type Category = Tables<"categories">;
@@ -174,20 +176,194 @@ export async function getContentByCategory(slug: string): Promise<Content[]> {
   return (data as Content[]) ?? [];
 }
 
-export async function searchContent(query: string): Promise<Content[]> {
+/** A single unified search hit across all content types Salma publishes. */
+export type SearchResult = {
+  id: string;
+  kind: "content" | "transfer" | "category" | "doctor";
+  typeLabel: string;
+  title: string;
+  href: string;
+  categoryName: string | null;
+  image: string | null;
+  summary: string | null;
+  publishedAt: string | null;
+  source: string | null;
+  score: number;
+};
+
+const CONTENT_TYPE_LABEL: Record<string, string> = {
+  news: "خبر",
+  article: "مقال",
+  video: "فيديو",
+  investigation: "تحقيق",
+  study: "دراسة",
+};
+
+/**
+ * Internal, Arabic-aware search across everything published on Salma: content
+ * (news/articles/studies/videos), doctor transfers, categories, and doctors.
+ * The DB only fetches the (small) published corpus; normalization, typo-tolerant
+ * fuzzy matching and cross-type ranking happen in JS via `scoreFields`, so the
+ * search never leaves Salma and never touches the internet. Results are ranked
+ * by relevance, then recency.
+ */
+export async function searchAll(query: string): Promise<SearchResult[]> {
   const q = query.trim();
-  if (!q) return [];
+  if (q.length < 2) return [];
   const supabase = await createClient();
-  const escaped = q.replace(/[%_,]/g, " ");
-  const { data } = await supabase
-    .from("content")
-    .select(CARD_FIELDS)
-    .eq("status", "published")
-    .is("deleted_at", null)
-    .or(`title.ilike.%${escaped}%,excerpt.ilike.%${escaped}%,body.ilike.%${escaped}%`)
-    .order("published_at", { ascending: false })
-    .limit(40);
-  return (data as Content[]) ?? [];
+
+  const [contentRes, transfersRes, categoriesRes, doctorsRes, departmentsRes] = await Promise.all([
+    supabase
+      .from("content")
+      .select(
+        "id,type,title,slug,excerpt,ai_summary,body,category_slug,cover_image_url,video_url,source_name,published_at",
+      )
+      .eq("status", "published")
+      .is("deleted_at", null),
+    supabase
+      .from("doctor_transfers")
+      .select(
+        "id,doctor_name,specialty,from_hospital,to_hospital,summary,body,source_name,doctor_photo_url,slug,published_at",
+      )
+      .eq("status", "published")
+      .is("deleted_at", null),
+    supabase.from("categories").select("slug,name_ar,name_en"),
+    supabase
+      .from("doctors")
+      .select("id,name_ar,title_ar,hospital,bio,department_id,photo_url,slug,created_at")
+      .is("deleted_at", null),
+    supabase.from("departments").select("id,name_ar"),
+  ]);
+
+  type CatRow = { slug: string; name_ar: string; name_en: string | null };
+  type DeptRow = { id: string; name_ar: string };
+  type ContentRow = {
+    id: string; type: string; title: string; slug: string;
+    excerpt: string | null; ai_summary: string | null; body: string | null;
+    category_slug: string | null; cover_image_url: string | null;
+    video_url: string | null; source_name: string | null; published_at: string | null;
+  };
+  type TransferRow = {
+    id: string; doctor_name: string; specialty: string | null;
+    from_hospital: string | null; to_hospital: string | null;
+    summary: string | null; body: string | null; source_name: string | null;
+    doctor_photo_url: string | null; slug: string; published_at: string | null;
+  };
+  type DoctorRow = {
+    id: string; name_ar: string; title_ar: string | null; hospital: string | null;
+    bio: string | null; department_id: string | null; photo_url: string | null;
+    slug: string; created_at: string | null;
+  };
+
+  const categories = (categoriesRes.data as CatRow[]) ?? [];
+  const catName = new Map(categories.map((c) => [c.slug, c.name_ar]));
+  const departments = (departmentsRes.data as DeptRow[]) ?? [];
+  const deptName = new Map(departments.map((d) => [d.id, d.name_ar]));
+
+  const results: SearchResult[] = [];
+
+  for (const c of (contentRes.data as ContentRow[]) ?? []) {
+    const category = c.category_slug ? catName.get(c.category_slug) ?? null : null;
+    const score = scoreFields(q, [
+      { text: c.title, weight: 3 },
+      { text: c.excerpt, weight: 1.5 },
+      { text: c.ai_summary, weight: 1.5 },
+      { text: category, weight: 1 },
+      { text: c.source_name, weight: 1 },
+      { text: c.body, weight: 0.5, fuzzy: false },
+    ]);
+    if (score <= 0) continue;
+    results.push({
+      id: c.id,
+      kind: "content",
+      typeLabel: CONTENT_TYPE_LABEL[c.type] ?? "محتوى",
+      title: c.title,
+      href: c.type === "video" ? `/video/${c.slug}` : `/article/${c.slug}`,
+      categoryName: category,
+      image: c.cover_image_url || videoThumbnail(c.video_url),
+      summary: c.ai_summary || c.excerpt || null,
+      publishedAt: c.published_at,
+      source: c.source_name,
+      score,
+    });
+  }
+
+  for (const t of (transfersRes.data as TransferRow[]) ?? []) {
+    const score = scoreFields(q, [
+      { text: t.doctor_name, weight: 3 },
+      { text: t.specialty, weight: 1.5 },
+      { text: t.from_hospital, weight: 1 },
+      { text: t.to_hospital, weight: 1 },
+      { text: t.summary, weight: 1.5 },
+      { text: t.source_name, weight: 1 },
+      { text: t.body, weight: 0.5, fuzzy: false },
+    ]);
+    if (score <= 0) continue;
+    results.push({
+      id: t.id,
+      kind: "transfer",
+      typeLabel: "انتقال طبيب",
+      title: t.doctor_name,
+      href: `/transfers/${t.slug}`,
+      categoryName: t.specialty,
+      image: t.doctor_photo_url,
+      summary: t.summary,
+      publishedAt: t.published_at,
+      source: t.source_name,
+      score,
+    });
+  }
+
+  for (const cat of categories) {
+    const score = scoreFields(q, [
+      { text: cat.name_ar, weight: 3 },
+      { text: cat.name_en, weight: 2 },
+    ]);
+    if (score <= 0) continue;
+    results.push({
+      id: cat.slug,
+      kind: "category",
+      typeLabel: "قسم",
+      title: cat.name_ar,
+      href: `/category/${cat.slug}`,
+      categoryName: null,
+      image: null,
+      summary: null,
+      publishedAt: null,
+      source: null,
+      score,
+    });
+  }
+
+  for (const d of (doctorsRes.data as DoctorRow[]) ?? []) {
+    const specialty = d.department_id ? deptName.get(d.department_id) ?? null : null;
+    const score = scoreFields(q, [
+      { text: d.name_ar, weight: 3 },
+      { text: specialty, weight: 1.5 },
+      { text: d.title_ar, weight: 1.5 },
+      { text: d.hospital, weight: 1 },
+      { text: d.bio, weight: 0.5, fuzzy: false },
+    ]);
+    if (score <= 0) continue;
+    results.push({
+      id: d.id,
+      kind: "doctor",
+      typeLabel: "طبيب",
+      title: d.name_ar,
+      href: `/doctors/${d.slug}`,
+      categoryName: specialty,
+      image: d.photo_url,
+      summary: d.bio,
+      publishedAt: null,
+      source: d.hospital,
+      score,
+    });
+  }
+
+  results.sort(
+    (a, b) => b.score - a.score || (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""),
+  );
+  return results.slice(0, 40);
 }
 
 export async function getRelated(content: Content, limit = 4): Promise<Content[]> {
