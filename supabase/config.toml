@@ -1,0 +1,10 @@
+# Supabase project configuration.
+# Only settings Salma needs to pin are listed here; everything else uses
+# Supabase defaults.
+
+# The AI cover-image generator spends real OpenRouter credit, so the Supabase
+# gateway must reject any request without a valid signed user JWT before our
+# code runs. Pinned here so every future deploy preserves JWT verification
+# (in addition to setting it at deploy time).
+[functions.generate-image]
+verify_jwt = true

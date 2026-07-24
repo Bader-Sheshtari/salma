@@ -70,6 +70,9 @@ export function ContentForm({
   const [coverBusy, setCoverBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [aiOptions, setAiOptions] = useState<string[]>([]);
+  const [aiQuality, setAiQuality] = useState<"fast" | "premium">("fast");
+  const [aiCount, setAiCount] = useState(1);
 
   // Media gallery
   const [items, setItems] = useState<MediaItem[]>(
@@ -94,6 +97,8 @@ export function ContentForm({
     try {
       const up = await uploadToMedia(file);
       setCoverUrl(up.url);
+      // A manual upload overrides AI images: drop the generated option set.
+      setAiOptions([]);
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : "تعذّر رفع الصورة.");
     } finally {
@@ -107,6 +112,7 @@ export function ContentForm({
     const fd = new FormData(form);
     const title = String(fd.get("title") ?? "").trim();
     const excerpt = String(fd.get("excerpt") ?? "").trim();
+    const summary = String(fd.get("ai_summary") ?? "").trim();
     const category = String(fd.get("category_slug") ?? "").trim();
     if (title.length < 4) {
       setAiError("أدخل عنوان الخبر أولاً لتُبنى الصورة عليه.");
@@ -115,11 +121,16 @@ export function ContentForm({
     setAiError("");
     setAiBusy(true);
     try {
-      const r = await generateCoverImage({ title, excerpt, category });
-      if ("ok" in r) setCoverUrl(r.url);
-      else setAiError(r.error);
+      const r = await generateCoverImage({ title, excerpt, summary, category, quality: aiQuality, count: aiCount });
+      if ("ok" in r) {
+        setAiOptions(r.urls);
+        // Preselect the first option as the cover; the admin can pick another.
+        if (r.urls[0]) setCoverUrl(r.urls[0]);
+      } else {
+        setAiError(r.error);
+      }
     } catch {
-      setAiError("تعذّر توليد الصورة، حاول مرة أخرى.");
+      setAiError("تعذّر توليد الصور، حاول مرة أخرى.");
     } finally {
       setAiBusy(false);
     }
@@ -239,8 +250,52 @@ export function ContentForm({
             disabled={aiBusy || coverBusy}
             className="rounded-lg border border-teal bg-teal/5 px-4 py-2 text-[13px] font-semibold text-teal hover:bg-teal/10 disabled:opacity-60"
           >
-            {aiBusy ? "جارٍ التوليد…" : coverUrl ? "توليد صورة جديدة ✨" : "توليد صورة بالذكاء الاصطناعي ✨"}
+            {aiBusy
+              ? `جارٍ التوليد${aiCount > 1 ? ` (${aiCount})` : ""}…`
+              : aiOptions.length > 0
+                ? "توليد صور أخرى ✨"
+                : `توليد ${aiCount > 1 ? `${aiCount} صور` : "صورة"} بالذكاء الاصطناعي ✨`}
           </button>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-semibold text-gray">الوضع:</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-line text-[12px] font-semibold">
+              <button
+                type="button"
+                onClick={() => setAiQuality("fast")}
+                disabled={aiBusy || coverBusy}
+                aria-pressed={aiQuality === "fast"}
+                className={`px-3 py-2 transition ${aiQuality === "fast" ? "bg-teal text-white" : "text-teal hover:bg-cream"}`}
+              >
+                توليد سريع
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiQuality("premium")}
+                disabled={aiBusy || coverBusy}
+                aria-pressed={aiQuality === "premium"}
+                className={`px-3 py-2 transition ${aiQuality === "premium" ? "bg-teal text-white" : "text-teal hover:bg-cream"}`}
+              >
+                جودة عالية
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-semibold text-gray">عدد الصور:</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-line text-[12px] font-semibold">
+              {[1, 2, 3].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setAiCount(n)}
+                  disabled={aiBusy || coverBusy}
+                  aria-pressed={aiCount === n}
+                  className={`px-3 py-2 transition ${aiCount === n ? "bg-teal text-white" : "text-teal hover:bg-cream"}`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
           {coverUrl ? (
             <button
               type="button"
@@ -252,9 +307,41 @@ export function ContentForm({
           ) : null}
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-gray">
-          تُبنى الصورة على عنوان الخبر ومقتطفه. إن لم تعجبك، اضغط «توليد صورة جديدة» للحصول على أخرى.
+          تُبنى الصور على عنوان الخبر ومقتطفه و«باختصار» والقسم. اختر وضعاً واحداً فقط: «توليد سريع»
+          أسرع وأقل تكلفة، أو «جودة عالية» أبطأ وأعلى تكلفة وجودة — لا يعملان معاً. عدد الصور الافتراضي
+          واحدة، ويمكنك اختيار حتى 3. إن ولّدت أكثر من صورة، اختر واحدة لتصبح الغلاف. رفع صورة يدوياً يلغي
+          صور الذكاء الاصطناعي.
         </p>
         {aiError ? <div className="mt-2 text-[13px] text-coral">{aiError}</div> : null}
+        {aiOptions.length > 0 ? (
+          <div className="mt-3">
+            <div className="mb-2 text-[11px] font-semibold text-gray">اختر صورة الغلاف:</div>
+            <div className="grid grid-cols-3 gap-2">
+              {aiOptions.map((url, i) => {
+                const selected = url === coverUrl;
+                return (
+                  <button
+                    key={url}
+                    type="button"
+                    onClick={() => setCoverUrl(url)}
+                    aria-pressed={selected}
+                    className={`relative overflow-hidden rounded-lg border-2 transition ${
+                      selected ? "border-teal ring-2 ring-teal/30" : "border-line hover:border-teal/50"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={url} alt={`خيار ${i + 1}`} className="aspect-[16/9] w-full object-cover" />
+                    {selected ? (
+                      <span className="absolute bottom-1 left-1 rounded bg-teal px-1.5 py-0.5 text-[10px] font-bold text-white">
+                        الغلاف ✓
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
         <div className="mt-3 grid grid-cols-2 gap-3">
           <input
             name="cover_credit_name"
