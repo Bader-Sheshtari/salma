@@ -20,7 +20,17 @@ function toLocalInput(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function TransferForm({ transfer }: { transfer?: DoctorTransfer }) {
+export function TransferForm({
+  transfer,
+  canSeeSource = false,
+  internalSourceNote = null,
+  sourceLoadError = false,
+}: {
+  transfer?: DoctorTransfer;
+  canSeeSource?: boolean;
+  internalSourceNote?: string | null;
+  sourceLoadError?: boolean;
+}) {
   const [state, formAction, pending] = useActionState<SaveResult, FormData>(saveTransfer, null);
   const [photoUrl, setPhotoUrl] = useState(transfer?.doctor_photo_url ?? "");
   const [photoBusy, setPhotoBusy] = useState(false);
@@ -125,16 +135,38 @@ export function TransferForm({ transfer }: { transfer?: DoctorTransfer }) {
         <textarea name="body" defaultValue={transfer?.body ?? ""} rows={6} className={field} />
       </label>
 
-      <div className="grid grid-cols-2 gap-3">
-        <label className={label}>
-          اسم المصدر (اختياري)
-          <input name="source_name" defaultValue={transfer?.source_name ?? ""} className={field} />
-        </label>
-        <label className={label}>
-          رابط المصدر (اختياري)
-          <input name="source_url" defaultValue={transfer?.source_url ?? ""} dir="ltr" className={field} />
-        </label>
-      </div>
+      {canSeeSource ? (
+        <div className="rounded-2xl border border-[#e0b84a]/60 bg-[#fdf6e3] p-4">
+          {sourceLoadError ? (
+            <p className="text-[13px] font-semibold text-coral">
+              تعذّر تحميل المصدر الداخلي. لم يتم إجراء أي تغيير عليه.
+            </p>
+          ) : (
+            <>
+              <input type="hidden" name="internal_source_present" value="1" />
+              <label className={label}>
+                مصدر داخلي — لا يظهر للجمهور
+                <textarea
+                  name="internal_source_note"
+                  defaultValue={internalSourceNote ?? ""}
+                  rows={2}
+                  placeholder="مصدر سرّي للإدارة فقط"
+                  className={field}
+                />
+              </label>
+              {internalSourceNote ? (
+                <label className="mt-2 flex items-center gap-2 text-[13px] font-semibold text-coral">
+                  <input type="checkbox" name="clear_internal_source" value="1" />
+                  مسح المصدر الداخلي
+                </label>
+              ) : null}
+              <p className="mt-2 text-[12px] text-gray">
+                ترك الحقل فارغاً لا يحذف المصدر — للحذف فعّل خانة «مسح المصدر الداخلي».
+              </p>
+            </>
+          )}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-3">
         <label className={label}>

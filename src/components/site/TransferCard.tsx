@@ -1,10 +1,10 @@
 import Link from "next/link";
-import type { DoctorTransfer } from "@/lib/queries";
+import type { PublicDoctorTransfer } from "@/lib/queries";
 import { timeAgoAr } from "@/lib/format";
 
 /** Premium doctor-transfer card used on the /transfers grid and the homepage
  * carousel. Links to the detail page when a slug exists. */
-export function TransferCard({ t }: { t: DoctorTransfer }) {
+export function TransferCard({ t }: { t: PublicDoctorTransfer }) {
   const href = t.slug ? `/transfers/${t.slug}` : null;
   const when = timeAgoAr(t.published_at ?? t.created_at);
 

@@ -227,6 +227,27 @@ export async function getTransferForEdit(id: string): Promise<DoctorTransfer | n
   return (data as DoctorTransfer | null) ?? null;
 }
 
+/**
+ * Result of loading a transfer's confidential internal source. A read/permission
+ * error must NOT be silently treated as "no source exists" — callers distinguish
+ * `{ ok: false }` (could not load; leave the stored value untouched) from
+ * `{ ok: true, note: null }` (loaded, but there is genuinely no source).
+ */
+export type PrivateSourceLoad = { ok: true; note: string | null } | { ok: false };
+
+/** Manager-only: load the confidential internal source note for a transfer. */
+export async function getTransferPrivate(id: string): Promise<PrivateSourceLoad> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("doctor_transfer_private")
+    .select("internal_source_note")
+    .eq("transfer_id", id)
+    .maybeSingle();
+  if (error) return { ok: false };
+  const row = data as { internal_source_note: string | null } | null;
+  return { ok: true, note: row?.internal_source_note ?? null };
+}
+
 // ---- Homepage sections (admin) -----------------------------------------
 
 export type HeroOption = { id: string; title: string; type: string; is_featured: boolean };

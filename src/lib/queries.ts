@@ -15,6 +15,18 @@ export type Doctor = Tables<"doctors">;
 export type DoctorRating = Tables<"doctor_ratings">;
 export type DoctorTransfer = Tables<"doctor_transfers">;
 
+/** Exactly the columns the public transfer queries select — no confidential
+ * fields (note/source_name/source_url) exist on this type. */
+export type PublicDoctorTransfer = Pick<
+  Tables<"doctor_transfers">,
+  | "id" | "doctor_name" | "specialty" | "from_hospital" | "to_hospital"
+  | "transfer_date" | "summary" | "body" | "doctor_photo_url" | "status"
+  | "slug" | "published_at" | "created_at" | "updated_at"
+>;
+
+const TRANSFER_PUBLIC_FIELDS =
+  "id,doctor_name,specialty,from_hospital,to_hospital,transfer_date,summary,body,doctor_photo_url,status,slug,published_at,created_at,updated_at";
+
 const CARD_FIELDS =
   "id,type,title,slug,excerpt,category_slug,cover_image_url,video_url,video_duration,read_minutes,published_at,is_breaking";
 
@@ -34,7 +46,7 @@ export type HomepageSection = Tables<"homepage_sections">;
 export type HomeSectionItems = {
   section: HomepageSection;
   content: Content[];
-  transfers: DoctorTransfer[];
+  transfers: PublicDoctorTransfer[];
 };
 
 export type HomepageData = {
@@ -223,7 +235,7 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
     supabase
       .from("doctor_transfers")
       .select(
-        "id,doctor_name,specialty,from_hospital,to_hospital,summary,body,source_name,doctor_photo_url,slug,published_at",
+        "id,doctor_name,specialty,from_hospital,to_hospital,summary,body,doctor_photo_url,slug,published_at",
       )
       .eq("status", "published")
       .is("deleted_at", null),
@@ -246,7 +258,7 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
   type TransferRow = {
     id: string; doctor_name: string; specialty: string | null;
     from_hospital: string | null; to_hospital: string | null;
-    summary: string | null; body: string | null; source_name: string | null;
+    summary: string | null; body: string | null;
     doctor_photo_url: string | null; slug: string; published_at: string | null;
   };
   type DoctorRow = {
@@ -295,7 +307,6 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
       { text: t.from_hospital, weight: 1 },
       { text: t.to_hospital, weight: 1 },
       { text: t.summary, weight: 1.5 },
-      { text: t.source_name, weight: 1 },
       { text: t.body, weight: 0.5, fuzzy: false },
     ]);
     if (score <= 0) continue;
@@ -309,7 +320,7 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
       image: t.doctor_photo_url,
       summary: t.summary,
       publishedAt: t.published_at,
-      source: t.source_name,
+      source: null,
       score,
     });
   }
@@ -449,22 +460,22 @@ export const getDoctorBySlug = cache(async (rawSlug: string): Promise<DoctorDeta
 });
 
 /** Public transfer feed (انتقال الأطباء), newest first by publish time. */
-export async function getTransfers(limit?: number): Promise<DoctorTransfer[]> {
+export async function getTransfers(limit?: number): Promise<PublicDoctorTransfer[]> {
   const supabase = await createClient();
   let q = supabase
     .from("doctor_transfers")
-    .select("*")
+    .select(TRANSFER_PUBLIC_FIELDS)
     .eq("status", "published")
     .is("deleted_at", null)
     .order("published_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false });
   if (limit) q = q.limit(limit);
   const { data } = await q;
-  return (data as DoctorTransfer[]) ?? [];
+  return (data as PublicDoctorTransfer[]) ?? [];
 }
 
 /** A single published transfer by slug, for the detail page. */
-export const getTransferBySlug = cache(async (rawSlug: string): Promise<DoctorTransfer | null> => {
+export const getTransferBySlug = cache(async (rawSlug: string): Promise<PublicDoctorTransfer | null> => {
   let slug = rawSlug;
   try {
     slug = decodeURIComponent(rawSlug);
@@ -474,12 +485,12 @@ export const getTransferBySlug = cache(async (rawSlug: string): Promise<DoctorTr
   const supabase = await createClient();
   const { data } = await supabase
     .from("doctor_transfers")
-    .select("*")
+    .select(TRANSFER_PUBLIC_FIELDS)
     .eq("slug", slug)
     .eq("status", "published")
     .is("deleted_at", null)
     .maybeSingle();
-  return (data as DoctorTransfer | null) ?? null;
+  return (data as PublicDoctorTransfer | null) ?? null;
 });
 
 export type SitemapEntry = Pick<Content, "slug" | "type" | "updated_at" | "published_at">;

@@ -1,12 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { DoctorTransfer } from "@/lib/queries";
+import type { PublicDoctorTransfer } from "@/lib/queries";
 import { SPECIALTIES, ALL_SPECIALTIES } from "@/lib/specialties";
 import { TransferCard } from "./TransferCard";
 
 /** Client-side search + specialty filter over the published transfers list. */
-export function TransfersBrowser({ transfers }: { transfers: DoctorTransfer[] }) {
+export function TransfersBrowser({ transfers }: { transfers: PublicDoctorTransfer[] }) {
   const [query, setQuery] = useState("");
   const [specialty, setSpecialty] = useState(ALL_SPECIALTIES);
 

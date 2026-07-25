@@ -14,6 +14,42 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_image_usage: {
+        Row: {
+          actual_image_count: number
+          completed_at: string | null
+          created_at: string
+          failure_reason: string | null
+          id: number
+          quality: string
+          requested_image_count: number
+          status: string
+          user_id: string
+        }
+        Insert: {
+          actual_image_count?: number
+          completed_at?: string | null
+          created_at?: string
+          failure_reason?: string | null
+          id?: never
+          quality: string
+          requested_image_count: number
+          status?: string
+          user_id: string
+        }
+        Update: {
+          actual_image_count?: number
+          completed_at?: string | null
+          created_at?: string
+          failure_reason?: string | null
+          id?: never
+          quality?: string
+          requested_image_count?: number
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       app_config: {
         Row: {
           key: string
@@ -345,6 +381,32 @@ export type Database = {
             columns: ["doctor_id"]
             isOneToOne: false
             referencedRelation: "doctors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      doctor_transfer_private: {
+        Row: {
+          internal_source_note: string | null
+          transfer_id: string
+          updated_at: string
+        }
+        Insert: {
+          internal_source_note?: string | null
+          transfer_id: string
+          updated_at?: string
+        }
+        Update: {
+          internal_source_note?: string | null
+          transfer_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "doctor_transfer_private_transfer_id_fkey"
+            columns: ["transfer_id"]
+            isOneToOne: true
+            referencedRelation: "doctor_transfers"
             referencedColumns: ["id"]
           },
         ]
@@ -766,8 +828,39 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      complete_ai_image: {
+        Args: {
+          p_actual: number
+          p_failure_reason: string
+          p_reservation_id: number
+          p_status: string
+          p_user_id: string
+        }
+        Returns: undefined
+      }
+      create_transfer_with_private: {
+        Args: { p_internal_source?: string; p_payload: Json }
+        Returns: string
+      }
       is_admin: { Args: never; Returns: boolean }
       is_admin_manager: { Args: never; Returns: boolean }
+      reserve_ai_image: {
+        Args: {
+          p_max_images_global_24h: number
+          p_max_images_user_24h: number
+          p_max_premium_global_24h: number
+          p_max_req_per_min: number
+          p_quality: string
+          p_requested: number
+          p_stale_seconds: number
+          p_user_id: string
+        }
+        Returns: {
+          allowed: boolean
+          reason: string
+          reservation_id: number
+        }[]
+      }
       run_news_ingestion: { Args: never; Returns: undefined }
     }
     Enums: {

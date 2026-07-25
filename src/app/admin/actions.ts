@@ -513,7 +513,7 @@ export async function moderateRating(formData: FormData) {
 // ============ DOCTOR TRANSFERS (انتقال الأطباء) ============
 
 export async function saveTransfer(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
-  await requireAdmin();
+  const actor = await requireAdmin();
   const supabase = await createClient();
 
   const id = String(formData.get("id") ?? "").trim();
@@ -527,9 +527,18 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
   const transfer_date = String(formData.get("transfer_date") ?? "").trim() || null;
   const summary = String(formData.get("summary") ?? "").trim() || null;
   const body = String(formData.get("body") ?? "").trim() || null;
-  const source_name = String(formData.get("source_name") ?? "").trim() || null;
-  const source_url = String(formData.get("source_url") ?? "").trim() || null;
   const status = String(formData.get("status") ?? "published");
+
+  // Confidential internal source is manager-only and never part of the public
+  // payload. The form only submits the source fields when the manager UI was
+  // actually shown (`internal_source_present`), so a regular admin — or a load
+  // error that suppressed the field — can never overwrite or clear it.
+  const canSource =
+    isManagerRole(actor.role) && formData.get("internal_source_present") === "1";
+  const internalSource = canSource
+    ? String(formData.get("internal_source_note") ?? "").trim() || null
+    : null;
+  const clearSource = canSource && formData.get("clear_internal_source") === "1";
 
   // Published rows need a stable slug + timestamp; drafts/pending leave slug null
   // (partial unique index ignores nulls) and only get a published_at when set.
@@ -554,12 +563,16 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
     transfer_date,
     summary,
     body,
-    source_name,
-    source_url,
     status,
     published_at,
     ...(slug ? { slug } : {}),
   } satisfies Partial<TablesInsert<"doctor_transfers">>;
+
+  const revalidatePublic = () => {
+    revalidatePath("/admin/transfers");
+    revalidatePath("/transfers");
+    revalidatePath("/");
+  };
 
   if (id) {
     const { error } = await supabase
@@ -568,17 +581,55 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
       .update(payload as unknown as never)
       .eq("id", id);
     if (error) return { error: "تعذّر حفظ التعديلات." };
+
+    // Only managers touch the confidential note, and only when the form carried
+    // the source UI. Public data is already saved above, so a private-write
+    // failure reports a scoped error without discarding the public save.
+    if (canSource) {
+      if (clearSource) {
+        const { error: delErr } = await supabase
+          .from("doctor_transfer_private")
+          .delete()
+          .eq("transfer_id", id);
+        if (delErr) {
+          revalidatePublic();
+          return {
+            error:
+              "حُفظت بيانات الانتقال، لكن تعذّر حذف المصدر الداخلي. البيانات العامة محفوظة — أعد المحاولة لحذف المصدر فقط.",
+          };
+        }
+      } else if (internalSource) {
+        const { error: upErr } = await supabase
+          .from("doctor_transfer_private")
+          .upsert({ transfer_id: id, internal_source_note: internalSource } as unknown as never);
+        if (upErr) {
+          revalidatePublic();
+          return {
+            error:
+              "حُفظت بيانات الانتقال، لكن تعذّر حفظ المصدر الداخلي. البيانات العامة محفوظة — أعد المحاولة لحفظ المصدر فقط.",
+          };
+        }
+      }
+      // else: blank field with no clear flag → preserve the stored note untouched.
+    }
   } else {
-    const { error } = await supabase
-      .from("doctor_transfers")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .insert(payload as unknown as never);
-    if (error) return { error: "تعذّر إنشاء الانتقال." };
+    // Atomic create: the RPC inserts the transfer and (optionally) the private
+    // note in one transaction under the caller's RLS, so a non-manager or a
+    // failed private write rolls the whole thing back — no orphaned public row.
+    const { data: newId, error } = await supabase.rpc(
+      "create_transfer_with_private",
+      { p_payload: payload, p_internal_source: internalSource } as unknown as never,
+    );
+    if (error || !newId) {
+      return {
+        error: internalSource
+          ? "تعذّر إنشاء الانتقال مع المصدر الداخلي. لم يتم حفظ أي بيانات، حاول مرة أخرى."
+          : "تعذّر إنشاء الانتقال.",
+      };
+    }
   }
 
-  revalidatePath("/admin/transfers");
-  revalidatePath("/transfers");
-  revalidatePath("/");
+  revalidatePublic();
   redirect("/admin/transfers");
 }
 

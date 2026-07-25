@@ -69,24 +69,6 @@ export default async function TransferDetailPage({ params }: Props) {
           <div className="mt-4 whitespace-pre-line text-[14.5px] leading-loose text-ink">{transfer.body}</div>
         ) : null}
 
-        {transfer.source_name || transfer.source_url ? (
-          <div className="mt-6 text-[13px] text-gray">
-            المصدر:{" "}
-            {transfer.source_url ? (
-              <a
-                href={transfer.source_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-semibold text-teal hover:underline"
-              >
-                {transfer.source_name || transfer.source_url}
-              </a>
-            ) : (
-              <span className="font-semibold text-ink">{transfer.source_name}</span>
-            )}
-          </div>
-        ) : null}
-
         <div className="mt-6 border-t border-line pt-4">
           <ShareBar title={`انتقال ${transfer.doctor_name}`} />
         </div>
