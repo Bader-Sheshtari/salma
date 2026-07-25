@@ -9,7 +9,6 @@ import type {
   Department,
   Doctor,
   DoctorRating,
-  DoctorTransfer,
 } from "@/lib/queries";
 import type { Tables } from "@/lib/supabase/database.types";
 
@@ -202,29 +201,36 @@ export async function listRatings(status: string): Promise<RatingRow[]> {
   }));
 }
 
-export type AdminTransferRow = DoctorTransfer & { department_name: string | null };
+/** The admin-side transfer shape: only the minimal factual fields the admin
+ * list and edit form use. Legacy columns (transfer_date, summary, body,
+ * source_name, source_url, note, slug, department_id) are never selected. */
+export type AdminDoctorTransfer = Pick<
+  Tables<"doctor_transfers">,
+  | "id" | "doctor_name" | "specialty" | "from_hospital" | "to_hospital"
+  | "doctor_photo_url" | "status" | "published_at" | "created_at" | "updated_at"
+>;
 
-export async function listTransfers(): Promise<AdminTransferRow[]> {
+const ADMIN_TRANSFER_FIELDS =
+  "id,doctor_name,specialty,from_hospital,to_hospital,doctor_photo_url,status,published_at,created_at,updated_at";
+
+export async function listTransfers(): Promise<AdminDoctorTransfer[]> {
   const supabase = await createClient();
-  const [{ data }, departments] = await Promise.all([
-    supabase
-      .from("doctor_transfers")
-      .select("*")
-      .is("deleted_at", null)
-      .order("updated_at", { ascending: false }),
-    listDepartments(),
-  ]);
-  const byId = new Map(departments.map((d) => [d.id, d.name_ar]));
-  return ((data as DoctorTransfer[]) ?? []).map((t) => ({
-    ...t,
-    department_name: t.department_id ? byId.get(t.department_id) ?? null : null,
-  }));
+  const { data } = await supabase
+    .from("doctor_transfers")
+    .select(ADMIN_TRANSFER_FIELDS)
+    .is("deleted_at", null)
+    .order("updated_at", { ascending: false });
+  return (data as AdminDoctorTransfer[]) ?? [];
 }
 
-export async function getTransferForEdit(id: string): Promise<DoctorTransfer | null> {
+export async function getTransferForEdit(id: string): Promise<AdminDoctorTransfer | null> {
   const supabase = await createClient();
-  const { data } = await supabase.from("doctor_transfers").select("*").eq("id", id).maybeSingle();
-  return (data as DoctorTransfer | null) ?? null;
+  const { data } = await supabase
+    .from("doctor_transfers")
+    .select(ADMIN_TRANSFER_FIELDS)
+    .eq("id", id)
+    .maybeSingle();
+  return (data as AdminDoctorTransfer | null) ?? null;
 }
 
 /**

@@ -1,14 +1,12 @@
-import Link from "next/link";
 import type { PublicDoctorTransfer } from "@/lib/queries";
 import { timeAgoAr } from "@/lib/format";
 
 /** Premium doctor-transfer card used on the /transfers grid and the homepage
- * carousel. Links to the detail page when a slug exists. */
+ * carousel. A lightweight factual card — no detail page. */
 export function TransferCard({ t }: { t: PublicDoctorTransfer }) {
-  const href = t.slug ? `/transfers/${t.slug}` : null;
   const when = timeAgoAr(t.published_at ?? t.created_at);
 
-  const inner = (
+  return (
     <div className="flex h-full overflow-hidden rounded-2xl border border-line bg-white transition hover:border-teal/50 hover:shadow-[0_4px_20px_rgba(46,46,45,.08)]">
       {/* Photo — leading (right in RTL), ~half the card */}
       <div className="w-1/2 shrink-0 self-stretch overflow-hidden bg-cream">
@@ -46,20 +44,8 @@ export function TransferCard({ t }: { t: PublicDoctorTransfer }) {
           </div>
         </div>
 
-        {t.summary ? (
-          <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-gray">{t.summary}</p>
-        ) : null}
-
         <div className="mt-auto pt-3 font-sans text-[11px] text-gray">{when}</div>
       </div>
     </div>
-  );
-
-  return href ? (
-    <Link href={href} className="block h-full">
-      {inner}
-    </Link>
-  ) : (
-    inner
   );
 }

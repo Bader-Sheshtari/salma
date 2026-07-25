@@ -17,6 +17,13 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  // The transfer detail route was removed (transfers are now a lightweight
+  // factual feed). Old /transfers/:slug URLs permanently redirect to the grid.
+  async redirects() {
+    return [
+      { source: "/transfers/:slug", destination: "/transfers", permanent: true },
+    ];
+  },
 };
 
 export default nextConfig;

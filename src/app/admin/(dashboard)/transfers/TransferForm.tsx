@@ -4,21 +4,11 @@ import { useActionState, useState } from "react";
 import { saveTransfer, type SaveResult } from "../../actions";
 import { uploadToMedia } from "@/lib/upload";
 import { SPECIALTIES } from "@/lib/specialties";
-import type { DoctorTransfer } from "@/lib/queries";
+import type { AdminDoctorTransfer } from "@/lib/admin-queries";
 
 const field =
   "mt-1.5 w-full rounded-lg border border-gray/40 px-3.5 py-2.5 text-sm outline-none focus:border-teal";
 const label = "block text-[13px] font-semibold text-ink";
-
-/** Convert a stored ISO timestamp to the `YYYY-MM-DDTHH:mm` shape a
- * datetime-local input expects, in local time. */
-function toLocalInput(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 export function TransferForm({
   transfer,
@@ -26,7 +16,7 @@ export function TransferForm({
   internalSourceNote = null,
   sourceLoadError = false,
 }: {
-  transfer?: DoctorTransfer;
+  transfer?: AdminDoctorTransfer;
   canSeeSource?: boolean;
   internalSourceNote?: string | null;
   sourceLoadError?: boolean;
@@ -58,27 +48,21 @@ export function TransferForm({
         <input name="doctor_name" defaultValue={transfer?.doctor_name ?? ""} required className={field} />
       </label>
 
-      <div className="grid grid-cols-2 gap-3">
-        <label className={label}>
-          تخصص الطبيب
-          <input
-            name="specialty"
-            defaultValue={transfer?.specialty ?? ""}
-            list="specialty-options"
-            placeholder="اكتب أو اختر تخصصاً"
-            className={field}
-          />
-          <datalist id="specialty-options">
-            {SPECIALTIES.map((s) => (
-              <option key={s} value={s} />
-            ))}
-          </datalist>
-        </label>
-        <label className={label}>
-          تاريخ الانتقال
-          <input type="date" name="transfer_date" defaultValue={transfer?.transfer_date ?? ""} dir="ltr" className={field} />
-        </label>
-      </div>
+      <label className={label}>
+        تخصص الطبيب
+        <input
+          name="specialty"
+          defaultValue={transfer?.specialty ?? ""}
+          list="specialty-options"
+          placeholder="اكتب أو اختر تخصصاً"
+          className={field}
+        />
+        <datalist id="specialty-options">
+          {SPECIALTIES.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+      </label>
 
       <div className="grid grid-cols-2 gap-3">
         <label className={label}>
@@ -125,16 +109,6 @@ export function TransferForm({
         {uploadError ? <div className="mt-2 text-[13px] text-coral">{uploadError}</div> : null}
       </div>
 
-      <label className={label}>
-        مقتطف (يظهر في البطاقة)
-        <textarea name="summary" defaultValue={transfer?.summary ?? ""} rows={2} className={field} />
-      </label>
-
-      <label className={label}>
-        التفاصيل
-        <textarea name="body" defaultValue={transfer?.body ?? ""} rows={6} className={field} />
-      </label>
-
       {canSeeSource ? (
         <div className="rounded-2xl border border-[#e0b84a]/60 bg-[#fdf6e3] p-4">
           {sourceLoadError ? (
@@ -168,26 +142,13 @@ export function TransferForm({
         </div>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3">
-        <label className={label}>
-          تاريخ ووقت النشر
-          <input
-            type="datetime-local"
-            name="published_at"
-            defaultValue={toLocalInput(transfer?.published_at ?? null)}
-            dir="ltr"
-            className={field}
-          />
-        </label>
-        <label className={label}>
-          الحالة
-          <select name="status" defaultValue={transfer?.status ?? "published"} className={field}>
-            <option value="published">منشور</option>
-            <option value="pending">قيد المراجعة</option>
-            <option value="draft">مسودة</option>
-          </select>
-        </label>
-      </div>
+      <label className={label}>
+        الحالة
+        <select name="status" defaultValue={transfer?.status ?? "published"} className={field}>
+          <option value="published">منشور</option>
+          <option value="draft">مسودة</option>
+        </select>
+      </label>
 
       {state?.error ? <div className="text-[13px] text-coral">{state.error}</div> : null}
 

@@ -24,7 +24,7 @@ export function TransfersBrowser({ transfers }: { transfers: PublicDoctorTransfe
     return transfers.filter((t) => {
       if (specialty !== ALL_SPECIALTIES && t.specialty !== specialty) return false;
       if (!q) return true;
-      const hay = `${t.doctor_name} ${t.specialty ?? ""} ${t.from_hospital ?? ""} ${t.to_hospital ?? ""} ${t.summary ?? ""}`;
+      const hay = `${t.doctor_name} ${t.specialty ?? ""} ${t.from_hospital ?? ""} ${t.to_hospital ?? ""}`;
       return hay.includes(q);
     });
   }, [transfers, query, specialty]);

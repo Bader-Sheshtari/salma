@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, isManagerRole, type Profile } from "@/lib/auth";
-import { slugify, ensureUniqueSlug } from "@/lib/slug";
+import { slugify } from "@/lib/slug";
 import type { TablesInsert, TablesUpdate } from "@/lib/supabase/database.types";
 
 export type SaveResult = { error: string } | null;
@@ -524,10 +524,14 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
   const doctor_photo_url = String(formData.get("doctor_photo_url") ?? "").trim() || null;
   const from_hospital = String(formData.get("from_hospital") ?? "").trim() || null;
   const to_hospital = String(formData.get("to_hospital") ?? "").trim() || null;
-  const transfer_date = String(formData.get("transfer_date") ?? "").trim() || null;
-  const summary = String(formData.get("summary") ?? "").trim() || null;
-  const body = String(formData.get("body") ?? "").trim() || null;
-  const status = String(formData.get("status") ?? "published");
+
+  // Strict status validation: only draft/published are ever accepted. A missing,
+  // malformed, or forged value is rejected — never coerced into published.
+  const rawStatus = String(formData.get("status") ?? "");
+  if (rawStatus !== "draft" && rawStatus !== "published") {
+    return { error: "حالة غير صالحة." };
+  }
+  const status = rawStatus;
 
   // Confidential internal source is manager-only and never part of the public
   // payload. The form only submits the source fields when the manager UI was
@@ -540,34 +544,6 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
     : null;
   const clearSource = canSource && formData.get("clear_internal_source") === "1";
 
-  // Published rows need a stable slug + timestamp; drafts/pending leave slug null
-  // (partial unique index ignores nulls) and only get a published_at when set.
-  const slug =
-    status === "published"
-      ? await ensureUniqueSlug("doctor_transfers", slugify(doctor_name), id || undefined)
-      : null;
-
-  const publishedRaw = String(formData.get("published_at") ?? "").trim();
-  const published_at = publishedRaw
-    ? new Date(publishedRaw).toISOString()
-    : status === "published"
-      ? new Date().toISOString()
-      : null;
-
-  const payload = {
-    doctor_name,
-    specialty,
-    doctor_photo_url,
-    from_hospital,
-    to_hospital,
-    transfer_date,
-    summary,
-    body,
-    status,
-    published_at,
-    ...(slug ? { slug } : {}),
-  } satisfies Partial<TablesInsert<"doctor_transfers">>;
-
   const revalidatePublic = () => {
     revalidatePath("/admin/transfers");
     revalidatePath("/transfers");
@@ -575,6 +551,35 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
   };
 
   if (id) {
+    // Load the current publication timestamp so publish/edit/unpublish all
+    // preserve it. A read failure must stop the save — never assume null, which
+    // would wipe or reset the publication date.
+    const { data: existing, error: readErr } = await supabase
+      .from("doctor_transfers")
+      .select("published_at")
+      .eq("id", id)
+      .maybeSingle();
+    if (readErr) return { error: "تعذّر تحميل بيانات الانتقال الحالية." };
+    if (!existing) return { error: "الانتقال غير موجود." };
+    const prior = (existing as { published_at: string | null }).published_at;
+    // First publication stamps now(); republishing/editing keeps the original;
+    // unpublishing (→ draft) preserves the stored date.
+    const published_at =
+      status === "published" ? prior ?? new Date().toISOString() : prior;
+
+    // Slug is no longer generated in A2 (kept null for new rows elsewhere); the
+    // update omits it so existing slugs are preserved untouched. Legacy content
+    // columns are likewise never written.
+    const payload = {
+      doctor_name,
+      specialty,
+      doctor_photo_url,
+      from_hospital,
+      to_hospital,
+      status,
+      published_at,
+    } satisfies Partial<TablesUpdate<"doctor_transfers">>;
+
     const { error } = await supabase
       .from("doctor_transfers")
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -613,12 +618,21 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
       // else: blank field with no clear flag → preserve the stored note untouched.
     }
   } else {
-    // Atomic create: the RPC inserts the transfer and (optionally) the private
-    // note in one transaction under the caller's RLS, so a non-manager or a
-    // failed private write rolls the whole thing back — no orphaned public row.
+    // Atomic create via the hardened RPC: it re-validates status, stamps
+    // published_at, generates no slug, and writes the optional private note in
+    // one transaction under the caller's RLS — a non-manager or a failed private
+    // write rolls the whole thing back, leaving no orphaned public row.
     const { data: newId, error } = await supabase.rpc(
       "create_transfer_with_private",
-      { p_payload: payload, p_internal_source: internalSource } as unknown as never,
+      {
+        p_doctor_name: doctor_name,
+        p_specialty: specialty ?? undefined,
+        p_doctor_photo_url: doctor_photo_url ?? undefined,
+        p_from_hospital: from_hospital ?? undefined,
+        p_to_hospital: to_hospital ?? undefined,
+        p_status: status,
+        p_internal_source: internalSource ?? undefined,
+      } as unknown as never,
     );
     if (error || !newId) {
       return {

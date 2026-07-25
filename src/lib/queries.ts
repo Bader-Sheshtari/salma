@@ -15,17 +15,17 @@ export type Doctor = Tables<"doctors">;
 export type DoctorRating = Tables<"doctor_ratings">;
 export type DoctorTransfer = Tables<"doctor_transfers">;
 
-/** Exactly the columns the public transfer queries select — no confidential
- * fields (note/source_name/source_url) exist on this type. */
+/** Exactly the columns the public transfer queries select — the minimal
+ * factual feed. No confidential fields (note/source_name/source_url) and no
+ * long-form content (summary/body) or slug are exposed on this type. */
 export type PublicDoctorTransfer = Pick<
   Tables<"doctor_transfers">,
   | "id" | "doctor_name" | "specialty" | "from_hospital" | "to_hospital"
-  | "transfer_date" | "summary" | "body" | "doctor_photo_url" | "status"
-  | "slug" | "published_at" | "created_at" | "updated_at"
+  | "doctor_photo_url" | "status" | "published_at" | "created_at" | "updated_at"
 >;
 
 const TRANSFER_PUBLIC_FIELDS =
-  "id,doctor_name,specialty,from_hospital,to_hospital,transfer_date,summary,body,doctor_photo_url,status,slug,published_at,created_at,updated_at";
+  "id,doctor_name,specialty,from_hospital,to_hospital,doctor_photo_url,status,published_at,created_at,updated_at";
 
 const CARD_FIELDS =
   "id,type,title,slug,excerpt,category_slug,cover_image_url,video_url,video_duration,read_minutes,published_at,is_breaking";
@@ -235,7 +235,7 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
     supabase
       .from("doctor_transfers")
       .select(
-        "id,doctor_name,specialty,from_hospital,to_hospital,summary,body,doctor_photo_url,slug,published_at",
+        "id,doctor_name,specialty,from_hospital,to_hospital,doctor_photo_url,published_at",
       )
       .eq("status", "published")
       .is("deleted_at", null),
@@ -258,8 +258,7 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
   type TransferRow = {
     id: string; doctor_name: string; specialty: string | null;
     from_hospital: string | null; to_hospital: string | null;
-    summary: string | null; body: string | null;
-    doctor_photo_url: string | null; slug: string; published_at: string | null;
+    doctor_photo_url: string | null; published_at: string | null;
   };
   type DoctorRow = {
     id: string; name_ar: string; title_ar: string | null; hospital: string | null;
@@ -306,8 +305,6 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
       { text: t.specialty, weight: 1.5 },
       { text: t.from_hospital, weight: 1 },
       { text: t.to_hospital, weight: 1 },
-      { text: t.summary, weight: 1.5 },
-      { text: t.body, weight: 0.5, fuzzy: false },
     ]);
     if (score <= 0) continue;
     results.push({
@@ -315,10 +312,10 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
       kind: "transfer",
       typeLabel: "انتقال طبيب",
       title: t.doctor_name,
-      href: `/transfers/${t.slug}`,
+      href: "/transfers",
       categoryName: t.specialty,
       image: t.doctor_photo_url,
-      summary: t.summary,
+      summary: null,
       publishedAt: t.published_at,
       source: null,
       score,
@@ -473,25 +470,6 @@ export async function getTransfers(limit?: number): Promise<PublicDoctorTransfer
   const { data } = await q;
   return (data as PublicDoctorTransfer[]) ?? [];
 }
-
-/** A single published transfer by slug, for the detail page. */
-export const getTransferBySlug = cache(async (rawSlug: string): Promise<PublicDoctorTransfer | null> => {
-  let slug = rawSlug;
-  try {
-    slug = decodeURIComponent(rawSlug);
-  } catch {
-    // already decoded
-  }
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("doctor_transfers")
-    .select(TRANSFER_PUBLIC_FIELDS)
-    .eq("slug", slug)
-    .eq("status", "published")
-    .is("deleted_at", null)
-    .maybeSingle();
-  return (data as PublicDoctorTransfer | null) ?? null;
-});
 
 export type SitemapEntry = Pick<Content, "slug" | "type" | "updated_at" | "published_at">;
 

@@ -839,7 +839,15 @@ export type Database = {
         Returns: undefined
       }
       create_transfer_with_private: {
-        Args: { p_internal_source?: string; p_payload: Json }
+        Args: {
+          p_doctor_name: string
+          p_doctor_photo_url?: string
+          p_from_hospital?: string
+          p_internal_source?: string
+          p_specialty?: string
+          p_status?: string
+          p_to_hospital?: string
+        }
         Returns: string
       }
       is_admin: { Args: never; Returns: boolean }
