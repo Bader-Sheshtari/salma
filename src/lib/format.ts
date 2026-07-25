@@ -49,6 +49,26 @@ export function formatDateTimeAr(iso: string | null): string {
   return `نُشر في ${date} - ${h12}:${mm} ${period}`;
 }
 
+/**
+ * Absolute Arabic publication date only (no time), e.g. "نُشر في 25 يوليو 2026".
+ * Represents the platform publish date, not the real transfer date. Western
+ * digits for readability, matching `formatDateTimeAr`.
+ */
+export function formatDateAr(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+
+  const date = new Intl.DateTimeFormat("ar-KW", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    numberingSystem: "latn",
+  }).format(d);
+
+  return `نُشر في ${date}`;
+}
+
 /** Repeating diagonal hatch used as an image placeholder. */
 export function hatch(a: string, b: string, px = 8): string {
   return `repeating-linear-gradient(45deg,${a},${a} ${px}px,${b} ${px}px,${b} ${px * 2}px)`;

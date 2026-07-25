@@ -1,51 +1,85 @@
 import type { PublicDoctorTransfer } from "@/lib/queries";
-import { timeAgoAr } from "@/lib/format";
+import { formatDateAr } from "@/lib/format";
 
-/** Premium doctor-transfer card used on the /transfers grid and the homepage
- * carousel. A lightweight factual card — no detail page. */
+/** First-name initial for the no-photo fallback monogram (honorific dropped). */
+function monogram(name: string): string {
+  const cleaned = name.replace(/^د\.?\s*/u, "").trim();
+  return cleaned.charAt(0) || name.charAt(0) || "؟";
+}
+
+/** Premium, non-interactive doctor-transfer card used on the /transfers grid
+ * and the homepage rail. A lightweight factual news item: large portrait,
+ * name, optional specialty, a prominent "من ← إلى" movement row, and a subtle
+ * platform publication date. It is intentionally NOT a link. */
 export function TransferCard({ t }: { t: PublicDoctorTransfer }) {
-  const when = timeAgoAr(t.published_at ?? t.created_at);
+  const when = formatDateAr(t.published_at ?? t.created_at);
 
   return (
-    <div className="flex h-full overflow-hidden rounded-2xl border border-line bg-white transition hover:border-teal/50 hover:shadow-[0_4px_20px_rgba(46,46,45,.08)]">
-      {/* Photo — leading (right in RTL), ~half the card */}
-      <div className="w-1/2 shrink-0 self-stretch overflow-hidden bg-cream">
+    <article className="flex h-full flex-col overflow-hidden rounded-2xl border border-line bg-white shadow-[0_1px_3px_rgba(46,46,45,.05)]">
+      {/* Large editorial portrait — dominant, consistent 4:5 area */}
+      <div className="aspect-[4/5] w-full overflow-hidden bg-cream">
         {t.doctor_photo_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={t.doctor_photo_url}
             alt={t.doctor_name}
-            className="h-full min-h-40 w-full object-cover"
+            className="h-full w-full object-cover"
           />
         ) : (
-          <span className="flex h-full min-h-40 w-full items-center justify-center text-5xl text-gray">
-            🩺
-          </span>
+          <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_50%_35%,#fff,var(--salma-cream))]">
+            <span className="font-serif text-6xl font-bold text-teal/70">
+              {monogram(t.doctor_name)}
+            </span>
+          </div>
         )}
       </div>
 
-      {/* Details — trailing (left in RTL) */}
-      <div className="flex min-w-0 flex-1 flex-col p-4">
-        <div className="line-clamp-2 text-[15px] font-bold text-ink">{t.doctor_name}</div>
+      {/* Body */}
+      <div className="flex flex-1 flex-col p-4">
+        <h3 className="line-clamp-2 text-[17px] font-bold leading-snug text-ink">
+          {t.doctor_name}
+        </h3>
         {t.specialty ? (
-          <span className="mt-1 inline-block self-start rounded bg-cream px-1.5 py-0.5 font-sans text-[11px] font-semibold text-teal">
-            {t.specialty}
-          </span>
+          <p className="mt-1 text-[12.5px] leading-tight text-gray">{t.specialty}</p>
         ) : null}
 
-        <div className="mt-2.5 rounded-xl border border-line bg-cream/50 p-2.5">
-          <div className="flex items-center gap-1.5">
-            <span className="font-sans text-[10px] font-bold text-gray">من</span>
-            <span className="truncate text-[15px] font-bold text-ink">{t.from_hospital ?? "—"}</span>
+        {/* THE NEWS: من (physical right) ← إلى (physical left). Explicit grid
+            columns + dir=rtl guarantee the physical placement regardless of
+            flex auto-ordering. */}
+        <div
+          dir="rtl"
+          className="mt-3 grid items-center gap-1.5 rounded-xl border border-line bg-cream/40 p-3"
+          style={{ gridTemplateColumns: "minmax(0,1fr) auto minmax(0,1fr)" }}
+        >
+          <div style={{ gridColumn: 1 }} className="min-w-0 text-right">
+            <span className="block font-sans text-[12.5px] font-semibold text-gray">
+              من
+            </span>
+            <span className="mt-0.5 block break-words text-[14.5px] font-bold leading-snug text-ink">
+              {t.from_hospital ?? "غير محدد"}
+            </span>
           </div>
-          <div className="mt-1 flex items-center gap-1.5">
-            <span className="font-sans text-[10px] font-bold text-teal">إلى</span>
-            <span className="truncate text-[15px] font-bold text-teal">{t.to_hospital ?? "—"}</span>
+
+          <span
+            style={{ gridColumn: 2 }}
+            aria-hidden
+            className="px-1 text-xl font-bold text-teal"
+          >
+            ←
+          </span>
+
+          <div style={{ gridColumn: 3 }} className="min-w-0 text-left">
+            <span className="block font-sans text-[12.5px] font-semibold text-teal">
+              إلى
+            </span>
+            <span className="mt-0.5 block break-words text-[14.5px] font-bold leading-snug text-teal">
+              {t.to_hospital ?? "غير محدد"}
+            </span>
           </div>
         </div>
 
         <div className="mt-auto pt-3 font-sans text-[11px] text-gray">{when}</div>
       </div>
-    </div>
+    </article>
   );
 }
