@@ -26,7 +26,7 @@ export function NewsletterForm() {
           placeholder="بريدك الإلكتروني"
           dir="rtl"
           required
-          className="flex-1 rounded-lg border border-gray/40 px-3.5 py-3 text-sm outline-none focus:border-teal"
+          className="flex-1 rounded-lg border border-gray/40 bg-white px-3.5 py-3 text-sm outline-none focus:border-teal"
         />
         <button
           type="submit"

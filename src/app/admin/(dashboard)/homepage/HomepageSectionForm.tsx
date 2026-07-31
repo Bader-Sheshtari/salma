@@ -5,7 +5,7 @@ import { saveHomepageSection, type SaveResult } from "../../actions";
 import type { HomepageSection } from "@/lib/admin-queries";
 
 const field =
-  "w-full rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal";
+  "w-full rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal";
 const label = "block text-[12px] font-semibold text-gray";
 
 const STYLE_LABELS: Record<string, string> = {

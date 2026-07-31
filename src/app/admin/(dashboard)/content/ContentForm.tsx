@@ -21,10 +21,10 @@ const STATUSES = [
 ];
 
 const field =
-  "mt-1.5 w-full rounded-lg border border-gray/40 px-3.5 py-2.5 text-sm outline-none focus:border-teal";
+  "mt-1.5 w-full rounded-lg border border-gray/40 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-teal";
 const label = "block text-[13px] font-semibold text-ink";
 const subField =
-  "w-full rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal";
+  "w-full rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal";
 
 type MediaItem = {
   type: "image" | "video";
@@ -444,7 +444,7 @@ export function ContentForm({
                   onChange={(e) =>
                     patchItem(i, { type: e.target.value as MediaItem["type"] })
                   }
-                  className="rounded-lg border border-gray/40 px-2.5 py-1.5 text-[13px] outline-none focus:border-teal"
+                  className="rounded-lg border border-gray/40 bg-white px-2.5 py-1.5 text-[13px] outline-none focus:border-teal"
                 >
                   <option value="image">صورة</option>
                   <option value="video">فيديو</option>
@@ -553,7 +553,7 @@ export function ContentForm({
                   setRows((rs) => rs.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))
                 }
                 placeholder="اسم المصدر"
-                className="flex-1 rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal"
+                className="flex-1 rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal"
               />
               <input
                 name="source_url"
@@ -563,7 +563,7 @@ export function ContentForm({
                 }
                 placeholder="https://"
                 dir="ltr"
-                className="flex-1 rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal"
+                className="flex-1 rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal"
               />
               <button
                 type="button"

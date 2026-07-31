@@ -30,7 +30,7 @@ function Field({
         name={name}
         defaultValue={defaultValue.join("\n")}
         rows={Math.max(defaultValue.length + 1, 4)}
-        className="mt-1.5 w-full rounded-lg border border-gray/40 px-3.5 py-2.5 text-sm leading-relaxed outline-none focus:border-teal"
+        className="mt-1.5 w-full rounded-lg border border-gray/40 bg-white px-3.5 py-2.5 text-sm leading-relaxed outline-none focus:border-teal"
       />
     </label>
   );

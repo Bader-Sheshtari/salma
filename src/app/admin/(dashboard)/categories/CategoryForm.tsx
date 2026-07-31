@@ -6,7 +6,7 @@ import { suggestSlug } from "@/lib/translit";
 import type { Category } from "@/lib/queries";
 
 const field =
-  "w-full rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal";
+  "w-full rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal";
 
 export function CategoryForm({
   category,
@@ -41,7 +41,7 @@ export function CategoryForm({
           defaultValue={category.name_en ?? ""}
           placeholder="EN"
           dir="ltr"
-          className="w-28 rounded-lg border border-gray/40 px-2 py-2 text-sm outline-none focus:border-teal"
+          className="w-28 rounded-lg border border-gray/40 bg-white px-2 py-2 text-sm outline-none focus:border-teal"
         />
         <input
           name="accent"
@@ -55,7 +55,7 @@ export function CategoryForm({
           type="number"
           defaultValue={category.sort_order}
           title="الترتيب"
-          className="w-16 rounded-lg border border-gray/40 px-2 py-2 text-sm outline-none focus:border-teal"
+          className="w-16 rounded-lg border border-gray/40 bg-white px-2 py-2 text-sm outline-none focus:border-teal"
         />
         <label className="flex items-center gap-1 text-[12px] text-gray">
           <input type="checkbox" name="show_in_nav" defaultChecked={category.show_in_nav} />

@@ -16,7 +16,7 @@ export function LoginForm() {
           required
           dir="ltr"
           autoComplete="username"
-          className="mt-1.5 w-full rounded-lg border border-gray/40 px-3.5 py-2.5 text-sm outline-none focus:border-teal"
+          className="mt-1.5 w-full rounded-lg border border-gray/40 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-teal"
         />
       </label>
       <label className="text-[13px] font-semibold text-ink">
@@ -26,7 +26,7 @@ export function LoginForm() {
           type="password"
           required
           autoComplete="current-password"
-          className="mt-1.5 w-full rounded-lg border border-gray/40 px-3.5 py-2.5 text-sm outline-none focus:border-teal"
+          className="mt-1.5 w-full rounded-lg border border-gray/40 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-teal"
         />
       </label>
       {state?.error ? <div className="text-[12.5px] text-coral">{state.error}</div> : null}

@@ -18,7 +18,7 @@ const ROLE_LABEL: Record<string, string> = {
   admin: "مدير",
 };
 const field =
-  "rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal";
+  "rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal";
 
 /** Client mirror of the server-side `canManage` gate — the server stays authoritative. */
 function manageable(actorRole: string, actorId: string, u: AdminUser): boolean {

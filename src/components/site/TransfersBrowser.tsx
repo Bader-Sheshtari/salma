@@ -38,12 +38,12 @@ export function TransfersBrowser({ transfers }: { transfers: PublicDoctorTransfe
           onChange={(e) => setQuery(e.target.value)}
           placeholder="ابحث باسم الطبيب أو الجهة…"
           dir="rtl"
-          className="flex-1 rounded-lg border border-gray/40 px-3.5 py-3 text-sm outline-none focus:border-teal"
+          className="flex-1 rounded-lg border border-gray/40 bg-white px-3.5 py-3 text-sm outline-none focus:border-teal"
         />
         <select
           value={specialty}
           onChange={(e) => setSpecialty(e.target.value)}
-          className="rounded-lg border border-gray/40 px-3.5 py-3 text-sm outline-none focus:border-teal sm:w-56"
+          className="rounded-lg border border-gray/40 bg-white px-3.5 py-3 text-sm outline-none focus:border-teal sm:w-56"
         >
           {options.map((s) => (
             <option key={s} value={s}>

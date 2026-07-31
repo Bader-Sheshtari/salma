@@ -5,7 +5,7 @@ import { useActionState } from "react";
 import { synthesizeUrl, type SynthResult } from "../../actions";
 
 const field =
-  "w-full rounded-lg border border-gray/40 px-3.5 py-2.5 text-sm outline-none focus:border-teal";
+  "w-full rounded-lg border border-gray/40 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-teal";
 
 export function SynthesizeForm() {
   const [state, formAction, pending] = useActionState<SynthResult, FormData>(synthesizeUrl, null);

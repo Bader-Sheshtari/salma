@@ -42,14 +42,14 @@ export function RatingForm({ doctorId }: { doctorId: string }) {
         placeholder="اسمك"
         dir="rtl"
         required
-        className="mb-2.5 w-full rounded-lg border border-gray/40 px-3.5 py-2.5 text-sm outline-none focus:border-teal"
+        className="mb-2.5 w-full rounded-lg border border-gray/40 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-teal"
       />
       <textarea
         name="body"
         placeholder="شاركنا تجربتك (اختياري)…"
         dir="rtl"
         rows={3}
-        className="mb-1 w-full resize-y rounded-lg border border-gray/40 px-3.5 py-2.5 text-sm outline-none focus:border-teal"
+        className="mb-1 w-full resize-y rounded-lg border border-gray/40 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-teal"
       />
       {state && !state.ok ? <div className="mb-2 text-[12.5px] text-coral">{state.error}</div> : null}
       <div className="flex items-center justify-between gap-3">

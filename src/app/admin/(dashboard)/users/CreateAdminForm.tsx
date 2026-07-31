@@ -4,7 +4,7 @@ import { useActionState, useEffect, useRef } from "react";
 import { createAdmin, type AdminUserResult } from "../../actions";
 
 const field =
-  "w-full rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal";
+  "w-full rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal";
 const label = "block text-[12px] font-semibold text-gray";
 
 export function CreateAdminForm({ canAssignSuperAdmin }: { canAssignSuperAdmin: boolean }) {

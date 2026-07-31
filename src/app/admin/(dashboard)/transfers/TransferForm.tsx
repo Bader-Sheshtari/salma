@@ -7,7 +7,7 @@ import { SPECIALTIES } from "@/lib/specialties";
 import type { AdminDoctorTransfer } from "@/lib/admin-queries";
 
 const field =
-  "mt-1.5 w-full rounded-lg border border-gray/40 px-3.5 py-2.5 text-sm outline-none focus:border-teal";
+  "mt-1.5 w-full rounded-lg border border-gray/40 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-teal";
 const label = "block text-[13px] font-semibold text-ink";
 
 export function TransferForm({

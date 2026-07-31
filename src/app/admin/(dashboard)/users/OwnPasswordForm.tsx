@@ -4,7 +4,7 @@ import { useActionState } from "react";
 import { changeOwnPassword, type AdminUserResult } from "../../actions";
 
 const field =
-  "w-full rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal";
+  "w-full rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal";
 
 export function OwnPasswordForm() {
   const [state, action, pending] = useActionState<AdminUserResult, FormData>(

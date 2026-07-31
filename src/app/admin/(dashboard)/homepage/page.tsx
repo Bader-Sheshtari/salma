@@ -30,7 +30,7 @@ export default async function HomepageSectionsPage() {
           <select
             name="id"
             defaultValue={currentHeroId}
-            className="min-w-0 flex-1 rounded-lg border border-gray/40 px-3 py-2 text-sm outline-none focus:border-teal sm:max-w-lg"
+            className="min-w-0 flex-1 rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal sm:max-w-lg"
           >
             <option value="">— تلقائي (أحدث خبر) —</option>
             {heroOptions.map((c) => (
