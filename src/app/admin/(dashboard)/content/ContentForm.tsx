@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 import Link from "next/link";
 import { saveContent, setStatus, softDeleteContent, type ContentSaveResult } from "../../actions";
 import { generateCoverImage } from "../../image-actions";
@@ -60,9 +60,15 @@ export function ContentForm({
   const saved = state && "ok" in state ? state : null;
   const savedId = saved?.id ?? content?.id ?? "";
   const [dismissed, setDismissed] = useState(false);
-  useEffect(() => {
+  // Re-show the success panel whenever a new save result arrives. Tracking the
+  // previous `state` and adjusting during render (instead of in an effect)
+  // avoids the extra render pass the set-state-in-effect rule warns about while
+  // keeping identical behavior: reset only on a fresh "ok" result, never on mount.
+  const [prevState, setPrevState] = useState(state);
+  if (state !== prevState) {
+    setPrevState(state);
     if (state && "ok" in state) setDismissed(false);
-  }, [state]);
+  }
 
   // Cover
   const formRef = useRef<HTMLFormElement>(null);

@@ -77,14 +77,12 @@ export async function saveContent(
   if (id) {
     const { error } = await supabase
       .from("content")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .update(payload as unknown as never)
       .eq("id", id);
     if (error) return { error: "تعذّر حفظ التعديلات." };
   } else {
     const { data, error } = await supabase
       .from("content")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .insert(payload as unknown as never)
       .select("id")
       .single();
@@ -96,7 +94,6 @@ export async function saveContent(
   if (is_featured) {
     await supabase
       .from("content")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .update({ is_featured: false } as unknown as never)
       .eq("is_featured", true)
       .neq("id", contentId);
@@ -111,7 +108,6 @@ export async function saveContent(
   }
   await supabase.from("content_sources").delete().eq("content_id", contentId);
   if (rows.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await supabase.from("content_sources").insert(rows as unknown as never);
   }
 
@@ -140,7 +136,6 @@ export async function saveContent(
   }
   await supabase.from("content_media").delete().eq("content_id", contentId);
   if (mediaRows.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await supabase.from("content_media").insert(mediaRows as unknown as never);
   }
 
@@ -161,7 +156,6 @@ export async function setStatus(formData: FormData) {
     status === "published"
       ? { status, published_at: new Date().toISOString() }
       : { status };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await supabase.from("content").update(patch as unknown as never).eq("id", id);
   revalidatePath("/admin/content");
   revalidatePath("/");
@@ -173,7 +167,6 @@ export async function softDeleteContent(formData: FormData) {
   const id = String(formData.get("id"));
   await supabase
     .from("content")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .update({ deleted_at: new Date().toISOString() } as unknown as never)
     .eq("id", id);
   revalidatePath("/admin/content");
@@ -290,7 +283,6 @@ export async function moderateComment(formData: FormData) {
     await supabase.from("comments").delete().eq("id", id);
   } else {
     const status = action === "approve" ? "approved" : "rejected";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await supabase.from("comments").update({ status } as unknown as never).eq("id", id);
   }
   revalidatePath("/admin/comments");
@@ -314,14 +306,12 @@ export async function saveDepartment(_prev: SaveResult, formData: FormData): Pro
   if (id) {
     const { error } = await supabase
       .from("departments")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .update(payload as unknown as never)
       .eq("id", id);
     if (error) return { error: "تعذّر حفظ القسم." };
   } else {
     const { error } = await supabase
       .from("departments")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .insert(payload as unknown as never);
     if (error) return { error: "تعذّر إنشاء القسم (تأكد أن الرابط فريد)." };
   }
@@ -464,14 +454,12 @@ export async function saveDoctor(_prev: SaveResult, formData: FormData): Promise
   if (id) {
     const { error } = await supabase
       .from("doctors")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .update(payload as unknown as never)
       .eq("id", id);
     if (error) return { error: "تعذّر حفظ التعديلات." };
   } else {
     const { error } = await supabase
       .from("doctors")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .insert(payload as unknown as never);
     if (error) return { error: "تعذّر إنشاء الطبيب (تأكد أن الرابط فريد)." };
   }
@@ -487,7 +475,6 @@ export async function softDeleteDoctor(formData: FormData) {
   const id = String(formData.get("id"));
   await supabase
     .from("doctors")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .update({ deleted_at: new Date().toISOString() } as unknown as never)
     .eq("id", id);
   revalidatePath("/admin/doctors");
@@ -503,7 +490,6 @@ export async function moderateRating(formData: FormData) {
     await supabase.from("doctor_ratings").delete().eq("id", id);
   } else {
     const status = action === "approve" ? "approved" : "rejected";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await supabase.from("doctor_ratings").update({ status } as unknown as never).eq("id", id);
   }
   revalidatePath("/admin/doctors/ratings");
@@ -582,7 +568,6 @@ export async function saveTransfer(_prev: SaveResult, formData: FormData): Promi
 
     const { error } = await supabase
       .from("doctor_transfers")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .update(payload as unknown as never)
       .eq("id", id);
     if (error) return { error: "تعذّر حفظ التعديلات." };
@@ -653,7 +638,6 @@ export async function softDeleteTransfer(formData: FormData) {
   const id = String(formData.get("id"));
   await supabase
     .from("doctor_transfers")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .update({ deleted_at: new Date().toISOString() } as unknown as never)
     .eq("id", id);
   revalidatePath("/admin/transfers");
@@ -696,7 +680,6 @@ export async function saveHomepageSection(_prev: SaveResult, formData: FormData)
 
   const { error } = await supabase
     .from("homepage_sections")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .update(payload as unknown as never)
     .eq("id", id);
   if (error) return { error: "تعذّر حفظ القسم." };
@@ -783,9 +766,7 @@ export async function moveHomepageSection(formData: FormData) {
   const a = rows[i];
   const b = rows[j];
   await Promise.all([
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     supabase.from("homepage_sections").update({ sort_order: b.sort_order } as unknown as never).eq("id", a.id),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     supabase.from("homepage_sections").update({ sort_order: a.sort_order } as unknown as never).eq("id", b.id),
   ]);
 
@@ -805,14 +786,12 @@ export async function setMainContent(formData: FormData) {
 
   await supabase
     .from("content")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .update({ is_featured: false } as unknown as never)
     .eq("is_featured", true);
 
   if (id) {
     await supabase
       .from("content")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .update({ is_featured: true } as unknown as never)
       .eq("id", id);
   }
@@ -846,7 +825,6 @@ export async function setHomepageSectionPosition(formData: FormData) {
     rows.map((r, i) =>
       supabase
         .from("homepage_sections")
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .update({ sort_order: i } as unknown as never)
         .eq("id", r.id),
     ),
@@ -870,7 +848,6 @@ export async function reorderHomepageSections(orderedIds: string[]) {
     orderedIds.map((id, i) =>
       supabase
         .from("homepage_sections")
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .update({ sort_order: i } as unknown as never)
         .eq("id", String(id)),
     ),

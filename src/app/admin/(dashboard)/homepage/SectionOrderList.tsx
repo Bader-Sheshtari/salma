@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   DndContext,
   closestCenter,
@@ -83,10 +83,15 @@ export function SectionOrderList({ sections }: { sections: HomepageSection[] }) 
   const [items, setItems] = useState(sections);
 
   // Keep local order in sync when the server sends a fresh list (e.g. after a
-  // visibility toggle revalidates the page).
-  useEffect(() => {
+  // visibility toggle revalidates the page). Tracking the previous `sections`
+  // prop and resetting during render (instead of in an effect) avoids the extra
+  // render pass the set-state-in-effect rule warns about, with identical sync
+  // semantics: local order snaps to the server list whenever its reference changes.
+  const [prevSections, setPrevSections] = useState(sections);
+  if (sections !== prevSections) {
+    setPrevSections(sections);
     setItems(sections);
-  }, [sections]);
+  }
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
