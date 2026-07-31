@@ -710,6 +710,15 @@ export async function saveHomepageSection(_prev: SaveResult, formData: FormData)
 export type ToggleResult = { success?: string; error?: string } | null;
 
 /**
+ * Feature sections whose public resolver is implemented in `getHomepage`, so
+ * they may be enabled. Any other `feature:*` key (e.g. `feature:social`, whose
+ * UI is postponed) has no renderer yet — enabling it would produce a misleading
+ * "visible" state that shows nothing to visitors, so it is blocked below.
+ * Category sections are always enable-able.
+ */
+const ENABLEABLE_FEATURE_KEYS = new Set(["feature:doctor_transfers"]);
+
+/**
  * Show/hide a homepage section on the public homepage. Owns `is_enabled`
  * exclusively so visibility is a single, explicit action (separate from the
  * section's content/style edits). `next` is the desired visibility state.
@@ -724,6 +733,20 @@ export async function toggleHomepageSection(
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return { error: "قسم غير معروف." };
   const next = String(formData.get("next") ?? "") === "true";
+
+  // Guard: unsupported feature sections cannot be enabled (disabling is always
+  // allowed). Authoritative check — never trust the client-disabled button.
+  if (next) {
+    const { data: row } = await supabase
+      .from("homepage_sections")
+      .select("key, kind")
+      .eq("id", id)
+      .maybeSingle();
+    const s = row as { key: string; kind: string } | null;
+    if (s && s.kind === "feature" && !ENABLEABLE_FEATURE_KEYS.has(s.key)) {
+      return { error: "لا يمكن تفعيل هذا القسم بعد — الميزة قيد الإنشاء." };
+    }
+  }
 
   const { error } = await supabase
     .from("homepage_sections")

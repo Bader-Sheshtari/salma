@@ -307,15 +307,20 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
       { text: t.to_hospital, weight: 1 },
     ]);
     if (score <= 0) continue;
+    // Convey the actual transfer news in the result itself (transfers have no
+    // detail page — the row links to the /transfers section). RTL order places
+    // "من" on the physical right and "إلى" on the physical left, arrow between.
+    const fromOrg = t.from_hospital?.trim() || "غير محدد";
+    const toOrg = t.to_hospital?.trim() || "غير محدد";
     results.push({
       id: t.id,
       kind: "transfer",
-      typeLabel: "انتقال طبيب",
+      typeLabel: "انتقالات الأطباء",
       title: t.doctor_name,
       href: "/transfers",
       categoryName: t.specialty,
       image: t.doctor_photo_url,
-      summary: null,
+      summary: `من: ${fromOrg} ← إلى: ${toOrg}`,
       publishedAt: t.published_at,
       source: null,
       score,

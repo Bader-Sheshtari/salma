@@ -15,6 +15,33 @@ export function HomepageVisibilityToggle({ section }: { section: HomepageSection
     null,
   );
   const enabled = section.is_enabled;
+  // Feature sections whose public UI is not built yet cannot be enabled. When
+  // such a section is already hidden, we show a clear "unavailable" state
+  // instead of a misleading actionable toggle. (Server enforces this too.)
+  const unavailable = section.key === "feature:social" && !enabled;
+
+  if (unavailable) {
+    return (
+      <div className="mb-4 rounded-xl border border-gold bg-cream p-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="inline-flex items-center gap-2 rounded-full bg-gray/15 px-3 py-1 text-[12.5px] font-bold text-gray">
+            <span className="h-2 w-2 rounded-full bg-gray" />
+            غير متاحة بعد
+          </span>
+          <span
+            aria-disabled
+            title="الميزة قيد الإنشاء"
+            className="cursor-not-allowed rounded-lg bg-gray/20 px-4 py-2 text-[13px] font-bold text-gray/70"
+          >
+            التفعيل غير متاح
+          </span>
+        </div>
+        <p className="mt-2 text-[12px] text-gray">
+          لا يمكن تفعيل هذا القسم بعد — ميزة «مساحة التواصل» قيد الإنشاء وستُتاح في مرحلة لاحقة.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div
