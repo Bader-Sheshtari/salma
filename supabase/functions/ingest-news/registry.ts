@@ -34,6 +34,20 @@ export function isRejectionReason(v: unknown): v is RejectionReason {
   return typeof v === "string" && (REJECTION_REASONS as readonly string[]).includes(v);
 }
 
+// Duplicate outcomes are not model-facing rejection reasons, but they must still
+// be recorded on the audit row so a rejected duplicate is never logged with a
+// null reason (E1.1.1).
+export const DUPLICATE_REASONS = ["duplicate_url", "duplicate_existing_content"] as const;
+export type DuplicateReason = (typeof DUPLICATE_REASONS)[number];
+
+// Any reason that may appear on an ingestion_decisions row.
+export type DecisionReason = RejectionReason | DuplicateReason;
+
+// Every accepted candidate is written as an editorial draft awaiting review; the
+// ingestion agent never publishes. Kept here as the single source of truth so
+// the invariant is enforced (and unit-testable) in one place.
+export const DRAFT_STATUS = "pending" as const;
+
 /**
  * Normalize a host exactly like the DB `normalize_host` function and the admin
  * action: lowercase, drop scheme, a leading "www.", and any path/port/query.
@@ -104,8 +118,11 @@ export type FinalPick =
  * Choose the strongest usable final source among the candidate URLs behind a
  * story. Rules:
  *  - blocked sources are never used;
- *  - a Tier-1 primary (ministry/regulator/journal) beats a Tier-2/3 or an
- *    unregistered aggregator;
+ *  - a Tier-1 primary (ministry/regulator/journal) beats a Tier-2/3 source;
+ *  - the final source MUST match an active registry entry that is final-allowed;
+ *    unregistered domains are discovery/context only and can never be the final
+ *    cited source. A story discovered via an unregistered domain is only kept
+ *    when its citations include a registered final-allowed source (E1.1.1);
  *  - sources flagged final_source_allowed = false may only be context, not final;
  *  - when the registry is unavailable we fall back to the first real candidate.
  */
@@ -116,8 +133,9 @@ export function pickFinalSource(candidates: Candidate[], registryAvailable: bool
   const nonBlocked = candidates.filter((c) => c.source?.tier !== "blocked");
   if (nonBlocked.length === 0) return { chosen: null, reason: "weak_or_unverified_source" };
 
-  // Eligible as FINAL: unregistered (unknown) or explicitly final-allowed.
-  const eligible = nonBlocked.filter((c) => !c.source || c.source.final_source_allowed);
+  // Eligible as FINAL: must match an active registry source that is explicitly
+  // final-allowed. Unregistered domains (source === null) are excluded here.
+  const eligible = nonBlocked.filter((c) => !!c.source && c.source.final_source_allowed);
   if (eligible.length === 0) return { chosen: null, reason: "stronger_primary_source_required" };
 
   eligible.sort((a, b) => {

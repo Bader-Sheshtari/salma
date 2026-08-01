@@ -16,7 +16,9 @@ import {
   blockedDomains,
   buildRegistryIndex,
   type Candidate,
+  type DecisionReason,
   discoveryDomains,
+  DRAFT_STATUS,
   failsPrGate,
   hostFromUrl,
   isRejectionReason,
@@ -398,7 +400,7 @@ async function runIngestion(
     draft: Draft,
     chosen: Candidate | null,
     accepted: boolean,
-    reason: RejectionReason | null,
+    reason: DecisionReason | null,
   ): void => {
     const url = chosen?.url ?? draft.primary_source_url ?? draft.source_url;
     decisions.push({
@@ -473,7 +475,7 @@ async function runIngestion(
       .eq("dedupe_key", key)
       .maybeSingle();
     if (existing) {
-      logDecision(draft, chosen, false, null);
+      logDecision(draft, chosen, false, "duplicate_existing_content");
       stats.duplicates++;
       return;
     }
@@ -487,7 +489,7 @@ async function runIngestion(
       title: draft.title,
       slug,
       type: "news",
-      status: "pending",
+      status: DRAFT_STATUS,
       origin: "ai",
       category_slug: draft.category_slug,
       excerpt: draft.excerpt || null,
@@ -511,7 +513,7 @@ async function runIngestion(
     if (error || !data) {
       // 23505 = unique_violation: another concurrent item won the same key.
       if ((error as { code?: string } | null)?.code === "23505") {
-        logDecision(draft, chosen, false, null);
+        logDecision(draft, chosen, false, "duplicate_url");
         stats.duplicates++;
       } else {
         logDecision(draft, chosen, false, null);

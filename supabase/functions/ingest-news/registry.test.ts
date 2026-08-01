@@ -10,6 +10,7 @@ import {
   blockedDomains,
   buildRegistryIndex,
   discoveryDomains,
+  DRAFT_STATUS,
   failsPrGate,
   hostFromUrl,
   matchSource,
@@ -17,6 +18,7 @@ import {
   pickFinalSource,
   registryUsable,
   type Candidate,
+  type DecisionReason,
   type RegistrySource,
   type RejectionReason,
 } from "./registry.ts";
@@ -46,6 +48,14 @@ const REGISTRY: RegistrySource[] = [
     source_type: "research",
   }),
   src({ name: "Reuters", domain: "reuters.com", tier: "2", trust_score: 78, source_type: "media" }),
+  src({
+    name: "Emirates News Agency (WAM)",
+    domain: "wam.ae",
+    tier: "2",
+    trust_score: 72,
+    region: "gulf",
+    source_type: "media",
+  }),
   src({
     name: "Discovery-only wire",
     domain: "context-only.example",
@@ -180,13 +190,15 @@ type MockDraft = {
 };
 
 type EvalResult =
-  | { accepted: true; chosen: Candidate }
-  | { accepted: false; reason: RejectionReason };
+  | { accepted: true; chosen: Candidate; status: typeof DRAFT_STATUS }
+  | { accepted: false; reason: DecisionReason };
 
 function evaluate(
   draft: MockDraft,
   realCitations: Set<string>,
   idx: Map<string, RegistrySource>,
+  // Dedupe keys already present (prior content / earlier same-run drafts).
+  existingKeys: Set<string> = new Set(),
 ): EvalResult {
   if (draft.rejection_reason) return { accepted: false, reason: draft.rejection_reason };
   if (failsPrGate(draft.editorial_value_score, draft.institutional_pr_score))
@@ -203,7 +215,14 @@ function evaluate(
   }
   const pick = pickFinalSource(candidates, true);
   if (!pick.chosen) return { accepted: false, reason: pick.reason };
-  return { accepted: true, chosen: pick.chosen };
+
+  // Duplicate step mirrors index.ts: a chosen final URL whose dedupe key already
+  // exists is a rejected duplicate with an explicit reason (never null).
+  const finalKey = dedupeKeyFromUrl(pick.chosen.url);
+  if (finalKey && existingKeys.has(finalKey))
+    return { accepted: false, reason: "duplicate_existing_content" };
+
+  return { accepted: true, chosen: pick.chosen, status: DRAFT_STATUS };
 }
 
 test("SIM: official conference participation is rejected (PR gate)", () => {
@@ -311,4 +330,144 @@ test("SIM: registry unavailability yields no usable registry (no drafts)", () =>
   assert.equal(registryUsable(false, 5), false); // failed even if a stale count leaks
   assert.equal(registryUsable(true, 0), false); // loaded but empty -> cannot verify
   assert.equal(registryUsable(true, 5), true); // healthy
+});
+
+// ---------------------------------------------------------------------------
+// E1.1.1 — Strict final-source enforcement.
+// ---------------------------------------------------------------------------
+
+test("E1.1.1: an unregistered domain can never be the final source", () => {
+  const candidates: Candidate[] = [
+    { url: "https://okaz.com.sa/health/story", source: matchSource("okaz.com.sa", index) },
+    { url: "https://elwatannews.com/news/story", source: matchSource("elwatannews.com", index) },
+  ];
+  // Both are unregistered (source === null); none is eligible as final.
+  assert.equal(candidates.every((c) => c.source === null), true);
+  const pick = pickFinalSource(candidates, true);
+  assert.equal(pick.chosen, null);
+  assert.equal(pick.reason, "stronger_primary_source_required");
+});
+
+test("E1.1.1: an unregistered discovery domain yields to a registered Tier-1 citation", () => {
+  const candidates: Candidate[] = [
+    { url: "https://okaz.com.sa/health/coverage", source: matchSource("okaz.com.sa", index) },
+    { url: "https://who.int/news/item/original", source: matchSource("who.int", index) },
+  ];
+  const pick = pickFinalSource(candidates, true);
+  assert.ok(pick.chosen);
+  assert.equal(pick.chosen.source?.name, "WHO");
+  assert.equal(pick.chosen.source?.tier, "1");
+});
+
+test("SIM: an unregistered-only story is rejected with stronger_primary_source_required", () => {
+  const citations = new Set(["https://elwatannews.com/news/aggregated-report"]);
+  const result = evaluate(
+    {
+      editorial_value_score: 80,
+      institutional_pr_score: 15,
+      rejection_reason: null,
+      candidateUrls: ["https://elwatannews.com/news/aggregated-report"],
+    },
+    citations,
+    index,
+  );
+  assert.equal(result.accepted, false);
+  assert.equal((result as { reason: string }).reason, "stronger_primary_source_required");
+});
+
+test("SIM: an unregistered discovery article selects the registered Tier-1 primary", () => {
+  // Story surfaced via a wire aggregator but the plugin also returned the NEJM
+  // original study; the registered Tier-1 primary must become the final source.
+  const citations = new Set([
+    "https://okaz.com.sa/health/coverage",
+    "https://nejm.org/doi/original-study",
+  ]);
+  const result = evaluate(
+    {
+      editorial_value_score: 82,
+      institutional_pr_score: 12,
+      rejection_reason: null,
+      candidateUrls: [
+        "https://okaz.com.sa/health/coverage",
+        "https://nejm.org/doi/original-study",
+      ],
+    },
+    citations,
+    index,
+  );
+  assert.equal(result.accepted, true);
+  assert.equal((result as { chosen: Candidate }).chosen.source?.name, "New England Journal of Medicine");
+});
+
+test("E1.1.1: wam.ae is a registered final-allowed source but stays subject to the PR filter", () => {
+  const wam = matchSource("wam.ae", index);
+  assert.ok(wam);
+  assert.equal(wam.final_source_allowed, true);
+  assert.equal(wam.tier, "2");
+
+  // A genuine WAM story (low PR, real news value) is accepted as final.
+  const kept = evaluate(
+    {
+      editorial_value_score: 75,
+      institutional_pr_score: 15,
+      rejection_reason: null,
+      candidateUrls: ["https://wam.ae/en/details/real-health-measure"],
+    },
+    new Set(["https://wam.ae/en/details/real-health-measure"]),
+    index,
+  );
+  assert.equal(kept.accepted, true);
+  assert.equal((kept as { chosen: Candidate }).chosen.source?.name, "Emirates News Agency (WAM)");
+
+  // A promotional WAM release (high PR, low editorial value) is still filtered.
+  const filtered = evaluate(
+    {
+      editorial_value_score: 25,
+      institutional_pr_score: 75,
+      rejection_reason: null,
+      candidateUrls: ["https://wam.ae/en/details/ceremonial-launch"],
+    },
+    new Set(["https://wam.ae/en/details/ceremonial-launch"]),
+    index,
+  );
+  assert.equal(filtered.accepted, false);
+  assert.equal((filtered as { reason: string }).reason, "ceremonial_or_promotional");
+});
+
+test("SIM: a duplicate candidate is rejected with an explicit reason (never null)", () => {
+  const url = "https://who.int/news/item/repeat-alert";
+  const citations = new Set([url]);
+  const draft = {
+    editorial_value_score: 85,
+    institutional_pr_score: 10,
+    rejection_reason: null,
+    candidateUrls: [url],
+  };
+  // First time through: accepted.
+  const first = evaluate(draft, citations, index);
+  assert.equal(first.accepted, true);
+  // Same final URL already stored -> rejected duplicate with a concrete reason.
+  const existing = new Set([dedupeKeyFromUrl(url)!]);
+  const second = evaluate(draft, citations, index, existing);
+  assert.equal(second.accepted, false);
+  const reason = (second as { reason: string }).reason;
+  assert.notEqual(reason, null);
+  assert.equal(reason, "duplicate_existing_content");
+});
+
+test("E1.1.1: accepted content is always the pending draft status (never published)", () => {
+  assert.equal(DRAFT_STATUS, "pending");
+  const citations = new Set(["https://who.int/news/item/accepted-alert"]);
+  const result = evaluate(
+    {
+      editorial_value_score: 88,
+      institutional_pr_score: 10,
+      rejection_reason: null,
+      candidateUrls: ["https://who.int/news/item/accepted-alert"],
+    },
+    citations,
+    index,
+  );
+  assert.equal(result.accepted, true);
+  assert.equal((result as { status: string }).status, "pending");
 });
