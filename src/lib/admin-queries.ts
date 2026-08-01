@@ -15,6 +15,7 @@ import type { Tables } from "@/lib/supabase/database.types";
 export type IngestionRun = Tables<"ingestion_runs">;
 export type RunArticle = { id: string; title: string; status: string };
 export type EditorialPolicy = Tables<"editorial_policy">;
+export type NewsSource = Tables<"news_sources">;
 export type AdminUser = Tables<"profiles">;
 
 /** Rank used to sort the admins list: owner first, then super admins, then admins. */
@@ -122,6 +123,22 @@ export async function getEditorialPolicy(): Promise<EditorialPolicy | null> {
   const supabase = await createClient();
   const { data } = await supabase.from("editorial_policy").select("*").limit(1).maybeSingle();
   return (data as EditorialPolicy | null) ?? null;
+}
+
+/**
+ * The structured source registry that is authoritative for source ranking in
+ * the ingestion agent. Ordered tier-first (1 → blocked), then region and name,
+ * so the admin list reads top-authority sources first.
+ */
+export async function listNewsSources(): Promise<NewsSource[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("news_sources")
+    .select("*")
+    .order("tier", { ascending: true })
+    .order("region", { ascending: true })
+    .order("name", { ascending: true });
+  return (data as NewsSource[]) ?? [];
 }
 
 export async function listComments(status: string): Promise<Comment[]> {

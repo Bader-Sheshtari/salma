@@ -624,6 +624,65 @@ export type Database = {
           },
         ]
       }
+      ingestion_decisions: {
+        Row: {
+          accepted: boolean
+          created_at: string
+          editorial_value_score: number | null
+          id: string
+          institutional_pr_score: number | null
+          model: string | null
+          prompt_version: string | null
+          rejection_reason: string | null
+          run_id: string | null
+          source_domain: string | null
+          source_tier: string | null
+          source_trust_score: number | null
+          source_url: string | null
+          title: string | null
+        }
+        Insert: {
+          accepted?: boolean
+          created_at?: string
+          editorial_value_score?: number | null
+          id?: string
+          institutional_pr_score?: number | null
+          model?: string | null
+          prompt_version?: string | null
+          rejection_reason?: string | null
+          run_id?: string | null
+          source_domain?: string | null
+          source_tier?: string | null
+          source_trust_score?: number | null
+          source_url?: string | null
+          title?: string | null
+        }
+        Update: {
+          accepted?: boolean
+          created_at?: string
+          editorial_value_score?: number | null
+          id?: string
+          institutional_pr_score?: number | null
+          model?: string | null
+          prompt_version?: string | null
+          rejection_reason?: string | null
+          run_id?: string | null
+          source_domain?: string | null
+          source_tier?: string | null
+          source_trust_score?: number | null
+          source_url?: string | null
+          title?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ingestion_decisions_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "ingestion_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ingestion_runs: {
         Row: {
           created_at: string
@@ -666,6 +725,57 @@ export type Database = {
           sources?: string[]
           status?: string
           trigger?: string
+        }
+        Relationships: []
+      }
+      news_sources: {
+        Row: {
+          active: boolean
+          created_at: string
+          discovery_enabled: boolean
+          domain: string
+          feed_url: string | null
+          final_source_allowed: boolean
+          id: string
+          name: string
+          notes: string | null
+          region: string
+          source_type: string
+          tier: string
+          trust_score: number
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          discovery_enabled?: boolean
+          domain: string
+          feed_url?: string | null
+          final_source_allowed?: boolean
+          id?: string
+          name: string
+          notes?: string | null
+          region: string
+          source_type: string
+          tier?: string
+          trust_score?: number
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          discovery_enabled?: boolean
+          domain?: string
+          feed_url?: string | null
+          final_source_allowed?: boolean
+          id?: string
+          name?: string
+          notes?: string | null
+          region?: string
+          source_type?: string
+          tier?: string
+          trust_score?: number
+          updated_at?: string
         }
         Relationships: []
       }

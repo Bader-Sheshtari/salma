@@ -274,6 +274,197 @@ export async function updateEditorialPolicy(
   return { saved: true };
 }
 
+// ============ NEWS SOURCE REGISTRY (E1.1) ============
+
+const VALID_SOURCE_TYPES = ["official", "research", "medical_institution", "media", "reference"];
+const VALID_TIERS = ["1", "2", "3", "blocked"];
+
+/**
+ * Normalize a host the same way the DB `normalize_host` function does: lowercase,
+ * drop the scheme, a leading "www.", and any path/port/query/fragment. Keeps the
+ * client-entered value and the stored value consistent for case-insensitive matching.
+ */
+function normalizeHost(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/[/:?#].*$/, "");
+}
+
+/** Parse a dotted-quad IPv4 into octets, or null if it isn't one. */
+function ipv4Octets(host: string): number[] | null {
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const octets = m.slice(1).map(Number);
+  return octets.every((n) => n <= 255) ? octets : null;
+}
+
+/**
+ * Reject hosts that must never be a news source or fetched later: localhost,
+ * loopback, link-local, and private/CGNAT IP ranges (IPv4 + IPv6). This is the
+ * SSRF guard applied to both the domain and the (optional) feed URL.
+ */
+function isBlockedHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!h || h === "localhost" || h.endsWith(".localhost")) return true;
+  if (h.includes(":")) {
+    // IPv6 loopback / unspecified / link-local (fe80::/10) / unique-local (fc00::/7)
+    if (h === "::1" || h === "::" || h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd"))
+      return true;
+  }
+  const o = ipv4Octets(h);
+  if (o) {
+    const [a, b] = o;
+    if (a === 0 || a === 127 || a === 10) return true; // unspecified, loopback, private
+    if (a === 169 && b === 254) return true; // link-local
+    if (a === 192 && b === 168) return true; // private
+    if (a === 172 && b >= 16 && b <= 31) return true; // private
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  }
+  return false;
+}
+
+// A public hostname: dot-separated labels, no IP literal, no blocked host.
+const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+
+/** Returns an Arabic error string if the normalized domain is invalid, else null. */
+function validateDomain(domain: string): string | null {
+  if (!domain) return "أدخل نطاقاً صحيحاً (مثال: who.int).";
+  if (ipv4Octets(domain)) return "النطاق يجب أن يكون اسم مضيف وليس عنوان IP.";
+  if (isBlockedHost(domain)) return "نطاق غير مسموح (محلي أو شبكة داخلية).";
+  if (!HOSTNAME_RE.test(domain)) return "صيغة النطاق غير صحيحة (مثال: who.int).";
+  return domain.length <= 253 ? null : "النطاق طويل جداً.";
+}
+
+/**
+ * Validate the optional RSS/feed URL as an external http/https address. Rejects
+ * unsafe protocols, embedded credentials, and localhost/loopback/link-local/
+ * private hosts. Does NOT fetch the URL — validation only.
+ */
+function validateFeedUrl(raw: string): { url: string | null } | { error: string } {
+  const value = raw.trim();
+  if (!value) return { url: null };
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return { error: "رابط RSS غير صالح." };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+    return { error: "رابط RSS يجب أن يبدأ بـ http أو https." };
+  if (parsed.username || parsed.password)
+    return { error: "رابط RSS يجب ألا يحتوي على بيانات دخول." };
+  if (isBlockedHost(parsed.hostname))
+    return { error: "مضيف رابط RSS غير مسموح (محلي أو شبكة داخلية)." };
+  return { url: value };
+}
+
+/** Create or update a registry source. Domain is normalized before saving. */
+export async function saveNewsSource(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+
+  const id = String(formData.get("id") ?? "").trim();
+  const name = String(formData.get("name") ?? "").trim();
+  if (name.length < 2) return { error: "اسم المصدر قصير جداً." };
+
+  const domain = normalizeHost(String(formData.get("domain") ?? ""));
+  const domainError = validateDomain(domain);
+  if (domainError) return { error: domainError };
+
+  const region = String(formData.get("region") ?? "");
+  if (!VALID_REGIONS.includes(region)) return { error: "اختر منطقة صحيحة." };
+
+  const source_type = String(formData.get("source_type") ?? "");
+  if (!VALID_SOURCE_TYPES.includes(source_type)) return { error: "اختر نوع مصدر صحيح." };
+
+  const tier = String(formData.get("tier") ?? "");
+  if (!VALID_TIERS.includes(tier)) return { error: "اختر مستوى صحيح." };
+
+  const trust_score = Math.min(Math.max(Number(formData.get("trust_score")) || 0, 0), 100);
+  const feed = validateFeedUrl(String(formData.get("feed_url") ?? ""));
+  if ("error" in feed) return { error: feed.error };
+  const feed_url = feed.url;
+  const notes = String(formData.get("notes") ?? "").trim() || null;
+
+  const payload = {
+    name,
+    domain,
+    region,
+    source_type,
+    tier,
+    trust_score,
+    discovery_enabled: formData.get("discovery_enabled") === "on",
+    final_source_allowed: formData.get("final_source_allowed") === "on",
+    active: formData.get("active") === "on",
+    feed_url,
+    notes,
+  } satisfies Partial<TablesInsert<"news_sources">>;
+
+  if (id) {
+    const { error } = await supabase
+      .from("news_sources")
+      .update(payload as unknown as never)
+      .eq("id", id);
+    if (error) return { error: "تعذّر حفظ المصدر." };
+  } else {
+    const { error } = await supabase.from("news_sources").insert(payload as unknown as never);
+    if (error) return { error: "تعذّر إضافة المصدر (تأكد أن النطاق غير مُسجَّل مسبقاً)." };
+  }
+
+  revalidatePath("/admin/ingest/sources");
+  return null;
+}
+
+/** Toggle a source active/inactive from the list without opening the full form. */
+export async function toggleNewsSource(formData: FormData) {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id"));
+  const active = String(formData.get("active")) === "true";
+  await supabase
+    .from("news_sources")
+    .update({ active } as unknown as never)
+    .eq("id", id);
+  revalidatePath("/admin/ingest/sources");
+}
+
+/**
+ * Permanently delete a source — but only when it carries no editorial history.
+ * If the domain appears in the decision audit log, deletion would make past
+ * runs unreadable, so we refuse and steer the admin to disable it instead
+ * (disabling keeps the row and its history while removing it from ingestion).
+ */
+export async function deleteNewsSource(_prev: SaveResult, formData: FormData): Promise<SaveResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id"));
+
+  const { data: src } = await supabase
+    .from("news_sources")
+    .select("domain")
+    .eq("id", id)
+    .maybeSingle();
+  const domain = (src as { domain: string } | null)?.domain;
+  if (domain) {
+    const { count } = await supabase
+      .from("ingestion_decisions")
+      .select("id", { count: "exact", head: true })
+      .eq("source_domain", domain);
+    if ((count ?? 0) > 0)
+      return {
+        error: "لا يمكن حذف مصدر مرتبط بسجلّ تحريري سابق. عطِّله بدلاً من الحذف للحفاظ على السجلّ.",
+      };
+  }
+
+  const { error } = await supabase.from("news_sources").delete().eq("id", id);
+  if (error) return { error: "تعذّر حذف المصدر." };
+  revalidatePath("/admin/ingest/sources");
+  return null;
+}
+
 export async function moderateComment(formData: FormData) {
   await requireAdmin();
   const supabase = await createClient();

@@ -25,6 +25,15 @@ export default async function PolicyPage() {
         </Link>
       </div>
 
+      <div className="mb-5 rounded-2xl border border-line bg-cream px-4 py-3 text-[12.5px] leading-relaxed text-ink">
+        صار ترتيب المصادر يُدار من{" "}
+        <Link href="/admin/ingest/sources" className="font-bold text-teal hover:underline">
+          سِجِلّ المصادر
+        </Link>{" "}
+        المنظَّم (المستويات، درجة الثقة، المصادر المحظورة). قائمة «المصادر الموثوقة» أدناه صارت
+        استرشادية فقط ولم تعد المرجع لاختيار المصادر.
+      </div>
+
       <PolicyForm policy={policy} />
     </div>
   );

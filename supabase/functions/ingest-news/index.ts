@@ -12,9 +12,25 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import {
+  blockedDomains,
+  buildRegistryIndex,
+  type Candidate,
+  discoveryDomains,
+  failsPrGate,
+  hostFromUrl,
+  isRejectionReason,
+  matchSource,
+  pickFinalSource,
+  type RegistrySource,
+  type RejectionReason,
+  registryUsable,
+} from "./registry.ts";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = Deno.env.get("OPENROUTER_MODEL") || "openai/gpt-oss-20b:free";
+// Bumped when the editorial prompt/decision schema changes; recorded per decision.
+const PROMPT_VERSION = "e1.1";
 
 // Fallback set, used only if the categories table can't be read. The live list
 // is fetched from the DB per run so admin-created categories work too.
@@ -31,6 +47,37 @@ async function fetchCategorySlugs(db: SupabaseClient): Promise<string[]> {
   const { data } = await db.from("categories").select("slug").order("sort_order");
   const slugs = (data as { slug: string }[] | null)?.map((c) => c.slug) ?? [];
   return slugs.length > 0 ? slugs : FALLBACK_CATEGORIES;
+}
+
+// Loads the active source registry fresh at the start of every run. Never
+// throws: returns `ok: false` when the query itself failed, so the caller can
+// fail safe (abort the run, create no drafts) instead of silently weakening
+// source verification.
+async function loadRegistry(
+  db: SupabaseClient,
+): Promise<{ sources: RegistrySource[]; index: Map<string, RegistrySource>; ok: boolean }> {
+  try {
+    const { data, error } = await db
+      .from("news_sources")
+      .select(
+        "name,domain,region,source_type,tier,trust_score,discovery_enabled,final_source_allowed,active",
+      )
+      .eq("active", true);
+    if (error || !data) return { sources: [], index: new Map(), ok: false };
+    const sources = data as RegistrySource[];
+    return { sources, index: buildRegistryIndex(sources), ok: true };
+  } catch {
+    return { sources: [], index: new Map(), ok: false };
+  }
+}
+
+// Thrown when the source registry cannot be loaded/verified. Surfaced to the
+// admin as a clear operational error; the run creates no drafts.
+class RegistryUnavailableError extends Error {
+  constructor() {
+    super("source registry unavailable — ingestion aborted, no drafts created");
+    this.name = "RegistryUnavailableError";
+  }
 }
 
 const REGION_LABELS: Record<string, string> = {
@@ -61,6 +108,26 @@ type Draft = {
   relevance_score: number;
   original_title: string;
   source_url: string;
+  // E1.1 editorial-selection fields (model-supplied, then code-verified).
+  primary_source_url: string;
+  secondary_source_urls: string[];
+  published_date: string | null;
+  editorial_value_score: number;
+  institutional_pr_score: number;
+  rejection_reason: RejectionReason | null;
+};
+
+// One audit row per candidate story considered in a run.
+type Decision = {
+  title: string;
+  source_domain: string | null;
+  source_url: string | null;
+  source_tier: string | null;
+  source_trust_score: number | null;
+  editorial_value_score: number | null;
+  institutional_pr_score: number | null;
+  accepted: boolean;
+  rejection_reason: string | null;
 };
 
 // ---- OpenRouter web-search client ---------------------------------------
@@ -192,14 +259,36 @@ ${priority}
 - صنّف كل خبر إلى أحد الأقسام: ${validCategories.join(", ")}.
 - relevance_score: رقم 0-100 يقيس مدى أهمية الخبر لقارئ صحي في الكويت/الخليج.
 
+التقييم التحريري (مهم — ثقة المصدر لا تعني القيمة التحريرية):
+- editorial_value_score: رقم 0-100 يقيس القيمة الخبرية الحقيقية للقارئ (تطوّر ملموس ذو أثر عام).
+- institutional_pr_score: رقم 0-100 يقيس مدى كون الخبر مجرّد دعاية مؤسسية أو مراسم بلا مضمون.
+- عادةً ارفض (institutional_pr مرتفع، editorial_value منخفض): المشاركة في مؤتمرات، رعاية فعاليات، الزيارات والاستقبالات الرسمية، اجتماعات التعاون العامة، الجوائز والتهاني والبروتوكول، الافتتاحات دون معلومات خدمية، مذكرات التفاهم دون مخرجات، التصريحات حول المسؤولين، عبارات الالتزام العامة.
+- لكن لا ترفض بناءً على الكلمات المفتاحية وحدها: تحقّق أولاً من وجود تطوّر ملموس يهمّ الجمهور (لائحة أو قرار تنظيمي، تحذير أو سحب دواء، إطلاق خدمة مع تفاصيل الوصول، تغيير يمسّ المرضى أو الأهلية أو التكلفة أو السعة أو أوقات الانتظار، بيانات صحة عامة جديدة، نتيجة سريرية أو بحثية، نتيجة قابلة للقياس، مواعيد أو أماكن أو حجز أو شروط أهلية مفيدة).
+- إذا وُجدت معلومة مفيدة داخل بيان دعائي: استخرج المضمون الجوهري واحذف العبارات المراسمية، ولا ترفض الخبر.
+- يجب أن يجيب كل خبر مقبول عن: ما الذي تغيّر، من المتأثّر، لماذا يهمّ الآن، ما الحقيقة أو الإجراء المفيد.
+- decision: "accept" أو "reject". عند الرفض، اضبط rejection_reason بأحد القيم التالية فقط: ceremonial_or_promotional, no_concrete_public_impact, generic_institutional_announcement, memorandum_without_deliverables, official_activity_without_news_value, weak_or_unverified_source, stronger_primary_source_required.
+- المصادر: primary_source_url هو الرابط الأصلي الأقوى (جهة تنظيمية أو وزارة أو جامعة أو مستشفى أو دورية علمية) وليس مجمِّع أخبار ضعيف. secondary_source_urls روابط داعمة إضافية. published_date تاريخ النشر الأصلي إن توفّر (YYYY-MM-DD) وإلا اتركه فارغاً. لا تختلق التواريخ أو الروابط.
+
 أعد النتيجة بصيغة JSON فقط دون أي نص إضافي.`;
 }
 
-function buildPrompt(regionLabel: string, count: number): string {
-  return `ابحث عن أحدث الأخبار الصحية الموثوقة المتعلقة بـ: ${regionLabel}.
+function buildPrompt(
+  regionLabel: string,
+  count: number,
+  preferDomains: string[],
+  avoidDomains: string[],
+): string {
+  const prefer = preferDomains.length
+    ? `\nفضّل المصادر الأساسية الموثوقة من هذه النطاقات (الأقوى أولاً): ${preferDomains.join(", ")}.`
+    : "";
+  const avoid = avoidDomains.length
+    ? `\nتجنّب تماماً هذه النطاقات المحظورة: ${avoidDomains.join(", ")}.`
+    : "";
+  return `ابحث عن أحدث الأخبار الصحية الموثوقة المتعلقة بـ: ${regionLabel}.${prefer}${avoid}
 أنشئ حتى ${count} مسودّات خبر اعتماداً على نتائج البحث الحقيقية فقط.
+فضّل الدراسة الأصلية أو الجهة التنظيمية أو الوزارة أو الجامعة أو المستشفى كمصدر نهائي بدلاً من مجمِّع أخبار ضعيف.
 أعد كائن JSON بالشكل التالي حصراً:
-{"items":[{"title":"العنوان بالعربية","excerpt":"موجز قصير","body":"النص المبسّط","category_slug":"world","read_minutes":3,"relevance_score":70,"original_title":"العنوان الأصلي بلغته","source_url":"https://..."}]}`;
+{"items":[{"title":"العنوان بالعربية","excerpt":"موجز قصير","body":"النص المبسّط","category_slug":"world","read_minutes":3,"relevance_score":70,"original_title":"العنوان الأصلي بلغته","source_url":"https://...","primary_source_url":"https://...","secondary_source_urls":["https://..."],"published_date":"2026-01-01","editorial_value_score":70,"institutional_pr_score":20,"decision":"accept","rejection_reason":null}]}`;
 }
 
 function sanitize(items: unknown, validCategories: string[]): Draft[] {
@@ -212,6 +301,11 @@ function sanitize(items: unknown, validCategories: string[]): Draft[] {
     const title = String(o.title ?? "").trim();
     const source_url = String(o.source_url ?? "").trim();
     if (title.length < 4 || !source_url) continue;
+    const secondary = Array.isArray(o.secondary_source_urls)
+      ? o.secondary_source_urls.map((u) => String(u).trim()).filter(Boolean)
+      : [];
+    const publishedRaw = String(o.published_date ?? "").trim();
+    const reasonRaw = o.rejection_reason;
     out.push({
       title,
       excerpt: String(o.excerpt ?? "").trim(),
@@ -223,6 +317,15 @@ function sanitize(items: unknown, validCategories: string[]): Draft[] {
       relevance_score: Math.min(Math.max(Number(o.relevance_score) || 0, 0), 100),
       original_title: String(o.original_title ?? "").trim(),
       source_url,
+      primary_source_url: String(o.primary_source_url ?? "").trim() || source_url,
+      secondary_source_urls: secondary,
+      published_date: publishedRaw || null,
+      editorial_value_score: Math.min(Math.max(Number(o.editorial_value_score) || 0, 0), 100),
+      institutional_pr_score: Math.min(Math.max(Number(o.institutional_pr_score) || 0, 0), 100),
+      rejection_reason:
+        String(o.decision ?? "").toLowerCase() === "reject" && isRejectionReason(reasonRaw)
+          ? reasonRaw
+          : null,
     });
   }
   return out;
@@ -258,8 +361,58 @@ async function runIngestion(
   const stats: RunStats = { found: 0, kept: 0, filtered: 0, duplicates: 0 };
 
   const startedAt = Date.now();
+  // Pre-generated so decisions can FK the run row.
+  const runId = crypto.randomUUID();
+
+  // Load the source registry fresh each run. FAIL SAFE: if it cannot be loaded
+  // or verified we record a `registry_unavailable` run, create NO drafts, leave
+  // existing published content untouched, and surface an operational error —
+  // we never silently fall back to accepting unverified citations.
+  const registry = await loadRegistry(db);
+  if (!registryUsable(registry.ok, registry.sources.length)) {
+    await db.from("ingestion_runs").insert({
+      id: runId,
+      trigger,
+      status: "error",
+      error: "registry_unavailable",
+      found: 0,
+      kept: 0,
+      filtered: 0,
+      duplicates: 0,
+      duration_ms: Date.now() - startedAt,
+      sources: [],
+      created_ids: [],
+    });
+    throw new RegistryUnavailableError();
+  }
+  const preferDomains = discoveryDomains(registry.sources);
+  const avoidDomains = blockedDomains(registry.sources);
+
   const sourcesChecked = new Set<string>();
   const createdIds: string[] = [];
+  const decisions: Decision[] = [];
+
+  // Records the outcome of a single candidate story for the audit log. The
+  // `chosen` candidate (when accepted) determines the domain/tier/trust logged.
+  const logDecision = (
+    draft: Draft,
+    chosen: Candidate | null,
+    accepted: boolean,
+    reason: RejectionReason | null,
+  ): void => {
+    const url = chosen?.url ?? draft.primary_source_url ?? draft.source_url;
+    decisions.push({
+      title: draft.title,
+      source_domain: url ? hostFromUrl(url) : null,
+      source_url: url || null,
+      source_tier: chosen?.source?.tier ?? null,
+      source_trust_score: chosen?.source?.trust_score ?? null,
+      editorial_value_score: draft.editorial_value_score,
+      institutional_pr_score: draft.institutional_pr_score,
+      accepted,
+      rejection_reason: reason,
+    });
+  };
 
   // Insert a single validated draft. Safe to run concurrently: the unique
   // index on dedupe_key turns same-run collisions into a counted duplicate.
@@ -269,14 +422,50 @@ async function runIngestion(
   ): Promise<void> => {
     stats.found++;
 
-    // SAFEGUARD: the source URL must match a real citation the plugin
-    // returned — otherwise the model likely invented it. Drop the item.
-    const key = dedupeKeyFromUrl(draft.source_url);
-    const citation = key ? citations.get(key) : undefined;
-    if (!key || !citation) {
+    // The model already judged this a promotional/ceremonial non-story.
+    if (draft.rejection_reason) {
+      logDecision(draft, null, false, draft.rejection_reason);
       stats.filtered++;
       return;
     }
+
+    // Deterministic backstop over the model: a high-PR / low-editorial release
+    // is rejected even if the model tried to keep it.
+    if (failsPrGate(draft.editorial_value_score, draft.institutional_pr_score)) {
+      logDecision(draft, null, false, "ceremonial_or_promotional");
+      stats.filtered++;
+      return;
+    }
+
+    // Build the candidate set from every URL the model attached, keeping only
+    // those that match a real citation the plugin returned (anti-fabrication).
+    const candidateUrls = [
+      draft.primary_source_url,
+      draft.source_url,
+      ...draft.secondary_source_urls,
+    ];
+    const seen = new Set<string>();
+    const candidates: Candidate[] = [];
+    for (const url of candidateUrls) {
+      const k = dedupeKeyFromUrl(url);
+      const citation = k ? citations.get(k) : undefined;
+      if (!k || !citation || seen.has(k)) continue;
+      seen.add(k);
+      candidates.push({ url: citation.url, source: matchSource(hostFromUrl(citation.url), registry.index) });
+    }
+
+    // Rank sources: drop blocked, prefer Tier 1 primary over weak aggregators.
+    // Registry is guaranteed usable here (the run aborts earlier otherwise).
+    const pick = pickFinalSource(candidates, true);
+    if (!pick.chosen) {
+      logDecision(draft, null, false, pick.reason);
+      stats.filtered++;
+      return;
+    }
+    const chosen = pick.chosen;
+    const finalUrl = chosen.url;
+    const key = dedupeKeyFromUrl(finalUrl)!;
+    const citation = citations.get(key)!;
 
     const { data: existing } = await db
       .from("content")
@@ -284,11 +473,13 @@ async function runIngestion(
       .eq("dedupe_key", key)
       .maybeSingle();
     if (existing) {
+      logDecision(draft, chosen, false, null);
       stats.duplicates++;
       return;
     }
 
-    const sourceName = citation.title || new URL(citation.url).host.replace(/^www\./, "");
+    const sourceName =
+      chosen.source?.name || citation.title || new URL(citation.url).host.replace(/^www\./, "");
     const coverImage = await fetchCoverImage(citation.url);
 
     const slug = `${slugify(draft.title)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -305,6 +496,8 @@ async function runIngestion(
       relevance_score: draft.relevance_score,
       original_title: draft.original_title || null,
       original_url: citation.url,
+      source_name: sourceName,
+      source_url: finalUrl,
       cover_image_url: coverImage,
       cover_credit_name: coverImage ? sourceName : null,
       cover_credit_url: coverImage ? citation.url : null,
@@ -317,17 +510,29 @@ async function runIngestion(
       .single();
     if (error || !data) {
       // 23505 = unique_violation: another concurrent item won the same key.
-      if ((error as { code?: string } | null)?.code === "23505") stats.duplicates++;
-      else stats.filtered++;
+      if ((error as { code?: string } | null)?.code === "23505") {
+        logDecision(draft, chosen, false, null);
+        stats.duplicates++;
+      } else {
+        logDecision(draft, chosen, false, null);
+        stats.filtered++;
+      }
       return;
     }
 
     const contentId = (data as { id: string }).id;
-    await db.from("content_sources").insert({
-      content_id: contentId,
-      label: sourceName,
-      url: citation.url,
-    });
+    // Primary source first, then any distinct secondary citations for context.
+    const sourceRows = [{ content_id: contentId, label: sourceName, url: finalUrl }];
+    for (const c of candidates) {
+      if (c.url === finalUrl) continue;
+      sourceRows.push({
+        content_id: contentId,
+        label: c.source?.name || new URL(c.url).host.replace(/^www\./, ""),
+        url: c.url,
+      });
+    }
+    await db.from("content_sources").insert(sourceRows);
+    logDecision(draft, chosen, true, null);
     createdIds.push(contentId);
     stats.kept++;
   };
@@ -341,7 +546,7 @@ async function runIngestion(
       result = await chatWeb(
         [
           { role: "system", content: buildSystem(policy as Policy, validCategories) },
-          { role: "user", content: buildPrompt(regionLabel, perRegion) },
+          { role: "user", content: buildPrompt(regionLabel, perRegion, preferDomains, avoidDomains) },
         ],
         { temperature: 0.3, maxTokens: 2600, maxResults: 8 },
       );
@@ -370,28 +575,67 @@ async function runIngestion(
     );
   };
 
+  // Persist the per-candidate audit trail. The run row already exists (created
+  // as 'running' below) so the run_id FK always resolves; never throws
+  // (best-effort logging).
+  const persistDecisions = async (): Promise<void> => {
+    if (decisions.length === 0) return;
+    const rows = decisions.map((d) => ({
+      ...d,
+      run_id: runId,
+      model: DEFAULT_MODEL,
+      prompt_version: PROMPT_VERSION,
+    }));
+    try {
+      await db.from("ingestion_decisions").insert(rows);
+    } catch {
+      // audit logging is best-effort; a failure must not fail the run
+    }
+  };
+
+  // Run lifecycle: create the run row up front as 'running' so decisions can
+  // reference it and so a crash mid-run leaves a visibly-unfinished row (never
+  // a misleading 'success'). It is UPDATEd to a terminal state on completion.
+  await db.from("ingestion_runs").insert({
+    id: runId,
+    trigger,
+    status: "running",
+    found: 0,
+    kept: 0,
+    filtered: 0,
+    duplicates: 0,
+    sources: [],
+    created_ids: [],
+  });
+
   try {
     await Promise.all(regions.map(processRegion));
 
-    await db.from("ingestion_runs").insert({
-      trigger,
-      status: "success",
-      ...stats,
-      duration_ms: Date.now() - startedAt,
-      sources: [...sourcesChecked],
-      created_ids: createdIds,
-    });
+    await persistDecisions();
+    await db
+      .from("ingestion_runs")
+      .update({
+        status: "success",
+        ...stats,
+        duration_ms: Date.now() - startedAt,
+        sources: [...sourcesChecked],
+        created_ids: createdIds,
+      })
+      .eq("id", runId);
     return stats;
   } catch (e) {
-    await db.from("ingestion_runs").insert({
-      trigger,
-      status: "error",
-      error: e instanceof Error ? e.message : String(e),
-      ...stats,
-      duration_ms: Date.now() - startedAt,
-      sources: [...sourcesChecked],
-      created_ids: createdIds,
-    });
+    await persistDecisions();
+    await db
+      .from("ingestion_runs")
+      .update({
+        status: "error",
+        error: e instanceof Error ? e.message : String(e),
+        ...stats,
+        duration_ms: Date.now() - startedAt,
+        sources: [...sourcesChecked],
+        created_ids: createdIds,
+      })
+      .eq("id", runId);
     throw e;
   }
 }

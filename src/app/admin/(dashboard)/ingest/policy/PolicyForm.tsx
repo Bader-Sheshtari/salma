@@ -79,8 +79,8 @@ export function PolicyForm({ policy }: { policy: EditorialPolicy | null }) {
       />
       <Field
         name="trusted_sources"
-        label="المصادر الموثوقة"
-        hint="سطر لكل مصدر (الاسم أو النطاق)."
+        label="المصادر الموثوقة (استرشادية)"
+        hint="سطر لكل مصدر. للاطّلاع فقط — ترتيب المصادر الفعلي يُدار من «سِجِلّ المصادر»."
         defaultValue={policy?.trusted_sources ?? []}
       />
 
