@@ -628,13 +628,18 @@ export type Database = {
         Row: {
           accepted: boolean
           created_at: string
+          dedupe_method: string | null
+          duplicate_of_content_id: string | null
           editorial_value_score: number | null
           id: string
           institutional_pr_score: number | null
+          matched_title: string | null
           model: string | null
           prompt_version: string | null
           rejection_reason: string | null
           run_id: string | null
+          selected_final_domain: string | null
+          similarity_score: number | null
           source_domain: string | null
           source_tier: string | null
           source_trust_score: number | null
@@ -644,13 +649,18 @@ export type Database = {
         Insert: {
           accepted?: boolean
           created_at?: string
+          dedupe_method?: string | null
+          duplicate_of_content_id?: string | null
           editorial_value_score?: number | null
           id?: string
           institutional_pr_score?: number | null
+          matched_title?: string | null
           model?: string | null
           prompt_version?: string | null
           rejection_reason?: string | null
           run_id?: string | null
+          selected_final_domain?: string | null
+          similarity_score?: number | null
           source_domain?: string | null
           source_tier?: string | null
           source_trust_score?: number | null
@@ -660,13 +670,18 @@ export type Database = {
         Update: {
           accepted?: boolean
           created_at?: string
+          dedupe_method?: string | null
+          duplicate_of_content_id?: string | null
           editorial_value_score?: number | null
           id?: string
           institutional_pr_score?: number | null
+          matched_title?: string | null
           model?: string | null
           prompt_version?: string | null
           rejection_reason?: string | null
           run_id?: string | null
+          selected_final_domain?: string | null
+          similarity_score?: number | null
           source_domain?: string | null
           source_tier?: string | null
           source_trust_score?: number | null
@@ -674,6 +689,13 @@ export type Database = {
           title?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "ingestion_decisions_duplicate_of_content_id_fkey"
+            columns: ["duplicate_of_content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "ingestion_decisions_run_id_fkey"
             columns: ["run_id"]

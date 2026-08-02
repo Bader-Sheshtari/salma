@@ -28,6 +28,8 @@ import {
   type RejectionReason,
   registryUsable,
 } from "./registry.ts";
+import { clusterStories, pickBestIndex, type StoryText, storyDuplicate } from "./dedupe.ts";
+import { finalizeRun, selectRollbackTargets } from "./runFinalize.ts";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = Deno.env.get("OPENROUTER_MODEL") || "openai/gpt-oss-20b:free";
@@ -130,6 +132,21 @@ type Decision = {
   institutional_pr_score: number | null;
   accepted: boolean;
   rejection_reason: string | null;
+  // E1.2 semantic-dedup audit metadata (all nullable; only set on duplicates).
+  duplicate_of_content_id: string | null;
+  similarity_score: number | null;
+  dedupe_method: string | null;
+  matched_title: string | null;
+  selected_final_domain: string | null;
+};
+
+// Optional dedup audit fields attached to a decision (E1.2).
+type DedupeMeta = {
+  duplicate_of_content_id?: string | null;
+  similarity_score?: number | null;
+  dedupe_method?: string | null;
+  matched_title?: string | null;
+  selected_final_domain?: string | null;
 };
 
 // ---- OpenRouter web-search client ---------------------------------------
@@ -395,12 +412,14 @@ async function runIngestion(
   const decisions: Decision[] = [];
 
   // Records the outcome of a single candidate story for the audit log. The
-  // `chosen` candidate (when accepted) determines the domain/tier/trust logged.
+  // `chosen` candidate (when accepted) determines the domain/tier/trust logged;
+  // `meta` carries optional E1.2 semantic-dedup audit fields.
   const logDecision = (
     draft: Draft,
     chosen: Candidate | null,
     accepted: boolean,
     reason: DecisionReason | null,
+    meta: DedupeMeta = {},
   ): void => {
     const url = chosen?.url ?? draft.primary_source_url ?? draft.source_url;
     decisions.push({
@@ -413,22 +432,45 @@ async function runIngestion(
       institutional_pr_score: draft.institutional_pr_score,
       accepted,
       rejection_reason: reason,
+      duplicate_of_content_id: meta.duplicate_of_content_id ?? null,
+      similarity_score: meta.similarity_score ?? null,
+      dedupe_method: meta.dedupe_method ?? null,
+      matched_title: meta.matched_title ?? null,
+      selected_final_domain: meta.selected_final_domain ?? null,
     });
   };
 
-  // Insert a single validated draft. Safe to run concurrently: the unique
-  // index on dedupe_key turns same-run collisions into a counted duplicate.
-  const processItem = async (
+  // A candidate that survived editorial + source selection and is ready to be
+  // considered for insertion. Carries its citation-verified candidate set so
+  // secondary sources can be preserved when it wins a duplicate cluster.
+  type PendingItem = {
+    draft: Draft;
+    chosen: Candidate;
+    candidates: Candidate[];
+    citation: Citation;
+    key: string;
+  };
+
+  const storyTextOf = (draft: Draft): StoryText => ({
+    title: draft.title,
+    originalTitle: draft.original_title,
+    excerpt: draft.excerpt,
+  });
+
+  // Phase 1 (pure): run the editorial gate + source selection for one draft.
+  // Rejections are logged/counted immediately; survivors become PendingItems.
+  // No DB writes here so the whole run can be clustered before any insert.
+  const evaluateDraft = (
     draft: Draft,
     citations: Map<string, Citation>,
-  ): Promise<void> => {
+  ): PendingItem | null => {
     stats.found++;
 
     // The model already judged this a promotional/ceremonial non-story.
     if (draft.rejection_reason) {
       logDecision(draft, null, false, draft.rejection_reason);
       stats.filtered++;
-      return;
+      return null;
     }
 
     // Deterministic backstop over the model: a high-PR / low-editorial release
@@ -436,7 +478,7 @@ async function runIngestion(
     if (failsPrGate(draft.editorial_value_score, draft.institutional_pr_score)) {
       logDecision(draft, null, false, "ceremonial_or_promotional");
       stats.filtered++;
-      return;
+      return null;
     }
 
     // Build the candidate set from every URL the model attached, keeping only
@@ -462,24 +504,25 @@ async function runIngestion(
     if (!pick.chosen) {
       logDecision(draft, null, false, pick.reason);
       stats.filtered++;
-      return;
+      return null;
     }
     const chosen = pick.chosen;
-    const finalUrl = chosen.url;
-    const key = dedupeKeyFromUrl(finalUrl)!;
+    const key = dedupeKeyFromUrl(chosen.url)!;
     const citation = citations.get(key)!;
+    return { draft, chosen, candidates, citation, key };
+  };
 
-    const { data: existing } = await db
-      .from("content")
-      .select("id")
-      .eq("dedupe_key", key)
-      .maybeSingle();
-    if (existing) {
-      logDecision(draft, chosen, false, "duplicate_existing_content");
-      stats.duplicates++;
-      return;
-    }
-
+  // Insert one representative draft as a pending editorial draft. `supporting`
+  // holds extra candidate URLs (its own secondaries plus the final URLs of the
+  // same-run duplicates it represents) preserved as context sources — never
+  // merged into the body. Safe to run concurrently: the unique dedupe_key index
+  // turns any residual same-key race into a counted duplicate.
+  const insertRepresentative = async (
+    item: PendingItem,
+    supporting: Candidate[],
+  ): Promise<string | null> => {
+    const { draft, chosen, citation, key } = item;
+    const finalUrl = chosen.url;
     const sourceName =
       chosen.source?.name || citation.title || new URL(citation.url).host.replace(/^www\./, "");
     const coverImage = await fetchCoverImage(citation.url);
@@ -519,14 +562,16 @@ async function runIngestion(
         logDecision(draft, chosen, false, null);
         stats.filtered++;
       }
-      return;
+      return null;
     }
 
     const contentId = (data as { id: string }).id;
-    // Primary source first, then any distinct secondary citations for context.
+    // Primary source first, then any distinct supporting citations for context.
     const sourceRows = [{ content_id: contentId, label: sourceName, url: finalUrl }];
-    for (const c of candidates) {
-      if (c.url === finalUrl) continue;
+    const sourceSeen = new Set<string>([finalUrl]);
+    for (const c of [...item.candidates, ...supporting]) {
+      if (sourceSeen.has(c.url)) continue;
+      sourceSeen.add(c.url);
       sourceRows.push({
         content_id: contentId,
         label: c.source?.name || new URL(c.url).host.replace(/^www\./, ""),
@@ -537,11 +582,12 @@ async function runIngestion(
     logDecision(draft, chosen, true, null);
     createdIds.push(contentId);
     stats.kept++;
+    return contentId;
   };
 
-  // Fetch + process each region concurrently to keep total runtime bounded by
-  // the slowest region instead of the sum of all regions.
-  const processRegion = async (region: string): Promise<void> => {
+  // Fetch + evaluate each region concurrently (network-bound), returning the
+  // survivors. Clustering across the whole run happens after all regions gather.
+  const gatherRegion = async (region: string): Promise<PendingItem[]> => {
     const regionLabel = REGION_LABELS[region] ?? region;
     let result: WebChatResult;
     try {
@@ -553,7 +599,7 @@ async function runIngestion(
         { temperature: 0.3, maxTokens: 2600, maxResults: 8 },
       );
     } catch {
-      return;
+      return [];
     }
 
     for (const c of result.citations) {
@@ -569,19 +615,95 @@ async function runIngestion(
     try {
       parsed = extractJson(result.content) as { items?: unknown };
     } catch {
-      return;
+      return [];
     }
 
-    await Promise.all(
-      sanitize(parsed.items, validCategories).map((draft) => processItem(draft, citations)),
-    );
+    const pending: PendingItem[] = [];
+    for (const draft of sanitize(parsed.items, validCategories)) {
+      const item = evaluateDraft(draft, citations);
+      if (item) pending.push(item);
+    }
+    return pending;
+  };
+
+  // Recent news content for the semantic existing-content comparison. Scope is
+  // deliberately ORIGIN-AGNOSTIC: published, pending, and draft news items are
+  // all included (regardless of origin) so the agent cannot recreate a story an
+  // editor already wrote by hand. Non-news types and soft-deleted rows are
+  // excluded. A bounded 14-day lookback + row cap keeps this a small, indexed
+  // scan; older stories are still protected from exact-URL repeats by the
+  // per-item dedupe_key point lookup below.
+  type RecentContent = { id: string; title: string; original_title: string | null };
+  const loadRecentContent = async (): Promise<RecentContent[]> => {
+    const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    try {
+      const { data } = await db
+        .from("content")
+        .select("id,title,original_title")
+        .eq("type", "news")
+        .is("deleted_at", null)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .limit(500);
+      return (data as RecentContent[] | null) ?? [];
+    } catch {
+      return [];
+    }
+  };
+
+  // Phase 3: for a cluster representative, reject if it repeats stored content —
+  // first by exact dedupe_key (any age), then by semantic title match against
+  // the recent window — otherwise insert it as a pending draft.
+  const commitRepresentative = async (
+    item: PendingItem,
+    supporting: Candidate[],
+    recent: RecentContent[],
+  ): Promise<string | null> => {
+    const { draft, chosen, key } = item;
+
+    // Exact URL repeat (indexed point lookup, not time-bounded).
+    const { data: existing } = await db
+      .from("content")
+      .select("id")
+      .eq("dedupe_key", key)
+      .maybeSingle();
+    if (existing) {
+      const existingId = (existing as { id: string }).id;
+      logDecision(draft, chosen, false, "duplicate_existing_content", {
+        duplicate_of_content_id: existingId,
+        dedupe_method: "exact_url",
+        selected_final_domain: hostFromUrl(chosen.url),
+      });
+      stats.duplicates++;
+      return existingId;
+    }
+
+    // Semantic repeat against recent stored content (origin-agnostic).
+    const text = storyTextOf(draft);
+    for (const r of recent) {
+      const verdict = storyDuplicate(text, { title: r.title, originalTitle: r.original_title });
+      if (verdict.duplicate) {
+        logDecision(draft, chosen, false, "duplicate_semantic_existing", {
+          duplicate_of_content_id: r.id,
+          similarity_score: verdict.score,
+          dedupe_method: verdict.method,
+          matched_title: r.title,
+          selected_final_domain: hostFromUrl(chosen.url),
+        });
+        stats.duplicates++;
+        return r.id;
+      }
+    }
+
+    return await insertRepresentative(item, supporting);
   };
 
   // Persist the per-candidate audit trail. The run row already exists (created
-  // as 'running' below) so the run_id FK always resolves; never throws
-  // (best-effort logging).
-  const persistDecisions = async (): Promise<void> => {
-    if (decisions.length === 0) return;
+  // as 'running' below) so the run_id FK always resolves. This is MANDATORY:
+  // the returned result reports failure (the supabase client returns { error }
+  // rather than throwing) so the caller can refuse to mark the run successful.
+  const persistDecisions = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (decisions.length === 0) return { ok: true };
     const rows = decisions.map((d) => ({
       ...d,
       run_id: runId,
@@ -589,9 +711,37 @@ async function runIngestion(
       prompt_version: PROMPT_VERSION,
     }));
     try {
-      await db.from("ingestion_decisions").insert(rows);
-    } catch {
-      // audit logging is best-effort; a failure must not fail the run
+      const { error } = await db.from("ingestion_decisions").insert(rows);
+      if (error) return { ok: false, error: error.message };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  };
+
+  // Best-effort rollback used only when the mandatory audit write fails. Deletes
+  // exactly the pending AI drafts THIS run created (guarded by selectRollbackTargets
+  // — never previously-existing or since-published content); content_sources rows
+  // cascade-delete via their `on delete cascade` FK.
+  const rollbackCreatedContent = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (createdIds.length === 0) return { ok: true };
+    try {
+      const { data, error: selErr } = await db
+        .from("content")
+        .select("id,origin,status")
+        .in("id", createdIds);
+      if (selErr) return { ok: false, error: selErr.message };
+      const targets = selectRollbackTargets(
+        (data as { id: string; origin: string | null; status: string | null }[] | null) ?? [],
+        createdIds,
+        DRAFT_STATUS,
+      );
+      if (targets.length === 0) return { ok: true };
+      const { error: delErr } = await db.from("content").delete().in("id", targets);
+      if (delErr) return { ok: false, error: delErr.message };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   };
 
@@ -610,36 +760,80 @@ async function runIngestion(
     created_ids: [],
   });
 
+  let phaseError: unknown = null;
   try {
-    await Promise.all(regions.map(processRegion));
+    // Phase 1: gather every editorial+source survivor across all regions.
+    const pendings = (await Promise.all(regions.map(gatherRegion))).flat();
 
-    await persistDecisions();
-    await db
-      .from("ingestion_runs")
-      .update({
-        status: "success",
-        ...stats,
-        duration_ms: Date.now() - startedAt,
-        sources: [...sourcesChecked],
-        created_ids: createdIds,
-      })
-      .eq("id", runId);
-    return stats;
+    // Phase 2: cluster same-run duplicates. Each high-confidence cluster yields
+    // ONE representative (strongest eligible source); the rest are logged as
+    // same-run semantic duplicates and their final URLs preserved as supporting
+    // sources on the winner — never as separate drafts.
+    //
+    // Source ranking deliberately excludes any per-item published_date: the only
+    // dates available here come from model output and are unverified, so they
+    // must never influence which source wins. tier/trust/final-eligibility/
+    // primary-status decide (see betterSource).
+    const clusters = clusterStories(pendings, (p) => storyTextOf(p.draft));
+    const plans = clusters.map((cluster) => {
+      const bestIdx = pickBestIndex(cluster.map((p) => ({ source: p.chosen.source })));
+      const rep = cluster[bestIdx];
+      const members = cluster.filter((_, i) => i !== bestIdx);
+      const supporting = members.map((m) => m.chosen);
+      return { rep, members, supporting };
+    });
+
+    // Phase 3: reject representatives that repeat recent stored content, then
+    // insert the rest as pending drafts. The winner is committed FIRST so its
+    // canonical content id (whether freshly inserted or the row it matched) can
+    // be linked from every same-run duplicate's audit record.
+    const recent = await loadRecentContent();
+    for (const { rep, members, supporting } of plans) {
+      const canonicalId = await commitRepresentative(rep, supporting, recent);
+      for (const dup of members) {
+        const verdict = storyDuplicate(storyTextOf(dup.draft), storyTextOf(rep.draft));
+        logDecision(dup.draft, dup.chosen, false, "duplicate_semantic_same_run", {
+          duplicate_of_content_id: canonicalId,
+          similarity_score: verdict.score,
+          dedupe_method: verdict.method ?? "semantic_title",
+          matched_title: rep.draft.title,
+          selected_final_domain: hostFromUrl(rep.chosen.url),
+        });
+        stats.duplicates++;
+      }
+    }
+
   } catch (e) {
-    await persistDecisions();
-    await db
-      .from("ingestion_runs")
-      .update({
-        status: "error",
-        error: e instanceof Error ? e.message : String(e),
-        ...stats,
-        duration_ms: Date.now() - startedAt,
-        sources: [...sourcesChecked],
-        created_ids: createdIds,
-      })
-      .eq("id", runId);
-    throw e;
+    phaseError = e;
   }
+
+  // Finalize: the audit trail is mandatory. finalizeRun always attempts to persist
+  // the decisions and decides the terminal state — a failed audit on an otherwise
+  // successful run becomes an error (after rolling back this run's created drafts),
+  // never a misleading success.
+  const final = await finalizeRun({
+    phaseError,
+    createdIds,
+    persist: persistDecisions,
+    cleanupCreated: rollbackCreatedContent,
+  });
+  await db
+    .from("ingestion_runs")
+    .update({
+      status: final.status,
+      error: final.status === "error" ? final.error : null,
+      ...stats,
+      duration_ms: Date.now() - startedAt,
+      sources: [...sourcesChecked],
+      created_ids: final.createdIds,
+    })
+    .eq("id", runId);
+
+  // Return an error to the caller: re-throw the original phase failure, or raise
+  // the mandatory-audit failure so the run is never treated as successful.
+  if (phaseError != null) throw phaseError;
+  if (final.throwMessage) throw new Error(final.throwMessage);
+  return stats;
 }
 
 // ---- Auth + HTTP entrypoint --------------------------------------------

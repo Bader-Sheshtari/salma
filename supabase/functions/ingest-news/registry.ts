@@ -36,8 +36,15 @@ export function isRejectionReason(v: unknown): v is RejectionReason {
 
 // Duplicate outcomes are not model-facing rejection reasons, but they must still
 // be recorded on the audit row so a rejected duplicate is never logged with a
-// null reason (E1.1.1).
-export const DUPLICATE_REASONS = ["duplicate_url", "duplicate_existing_content"] as const;
+// null reason (E1.1.1, E1.2). `duplicate_url` / `duplicate_existing_content` are
+// exact dedupe-key matches; the `*_semantic_*` variants come from E1.2 semantic
+// story deduplication (same-run clustering and the recent-content comparison).
+export const DUPLICATE_REASONS = [
+  "duplicate_url",
+  "duplicate_existing_content",
+  "duplicate_semantic_existing",
+  "duplicate_semantic_same_run",
+] as const;
 export type DuplicateReason = (typeof DUPLICATE_REASONS)[number];
 
 // Any reason that may appear on an ingestion_decisions row.
