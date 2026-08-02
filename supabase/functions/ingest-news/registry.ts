@@ -153,6 +153,47 @@ export function pickFinalSource(candidates: Candidate[], registryAvailable: bool
   return { chosen: eligible[0], reason: null };
 }
 
+// --- Targeted single-source pilot resolution (E1.3F) -----------------------
+
+// Why a manually-supplied targeted-pilot URL was refused. Both are hard
+// rejections: the run performs no fetch, no writer call, and no insert.
+export type TargetedRejection = "pilot_source_url_invalid" | "pilot_source_url_not_registered";
+
+export type TargetedSourcePick =
+  | { ok: true; source: RegistrySource }
+  | { ok: false; reason: TargetedRejection };
+
+/**
+ * Resolve an operator-supplied targeted-pilot URL to a registered final source.
+ * ONLY an authorized manual pilot reaches this. The URL must be a syntactically
+ * valid http/https URL whose hostname matches an ACTIVE registry source
+ * (buildRegistryIndex holds active rows only) that is explicitly
+ * final_source_allowed and not blocked. Any other URL — bad scheme, unparseable,
+ * unregistered, blocked, or context-only (final_source_allowed=false) — is
+ * rejected, so no arbitrary or unregistered URL can ever be fetched. The manual
+ * URL grants NO further trust: only its hostname is used to authorize the fetch;
+ * the fetched page must supply every fact (the writer grounds on extracted text).
+ */
+export function resolveTargetedSource(
+  rawUrl: string,
+  index: Map<string, RegistrySource>,
+): TargetedSourcePick {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return { ok: false, reason: "pilot_source_url_invalid" };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return { ok: false, reason: "pilot_source_url_invalid" };
+  }
+  const source = matchSource(normalizeHost(url.host), index);
+  if (!source || source.tier === "blocked" || !source.final_source_allowed) {
+    return { ok: false, reason: "pilot_source_url_not_registered" };
+  }
+  return { ok: true, source };
+}
+
 /**
  * Deterministic backstop over the model's own editorial judgement: an
  * institutional PR release with high promotional score and low editorial value

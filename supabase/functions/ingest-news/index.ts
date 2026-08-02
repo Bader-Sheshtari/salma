@@ -27,6 +27,7 @@ import {
   type RegistrySource,
   type RejectionReason,
   registryUsable,
+  resolveTargetedSource,
 } from "./registry.ts";
 import { clusterStories, pickBestIndex, type StoryText, storyDuplicate } from "./dedupe.ts";
 import { finalizeRun, selectRollbackTargets } from "./runFinalize.ts";
@@ -723,7 +724,17 @@ function citationIndex(citations: Citation[]): Map<string, Citation> {
 
 async function runIngestion(
   db: SupabaseClient,
-  opts: { trigger?: "manual" | "cron"; perRegion?: number; writerMode?: WriterMode; pilotLimit?: number | null } = {},
+  opts: {
+    trigger?: "manual" | "cron";
+    perRegion?: number;
+    writerMode?: WriterMode;
+    pilotLimit?: number | null;
+    // E1.3F targeted single-article pilot: an operator-supplied source URL,
+    // honored ONLY in pilot mode. Its hostname must match an active, registered,
+    // final_source_allowed source (verified below against the loaded registry);
+    // ignored entirely in legacy mode.
+    targetedSourceUrl?: string | null;
+  } = {},
 ): Promise<RunStats & { pilot?: PilotReport }> {
   const trigger = opts.trigger ?? "manual";
   const perRegion = Math.min(Math.max(opts.perRegion ?? 3, 1), 5);
@@ -736,6 +747,9 @@ async function runIngestion(
   // candidates that REACH the source-fetch stage (the entrypoint only ever lets
   // pilotLimit=1 through). null in legacy mode → no cap, unchanged behavior.
   const pilotLimit: number | null = writerMode === "pilot" ? (opts.pilotLimit ?? 1) : null;
+  // E1.3F: the targeted-pilot URL is honored ONLY in pilot mode; legacy/cron
+  // runs ignore it so the scheduled path can never be steered to an arbitrary URL.
+  const targetedSourceUrl: string | null = writerMode === "pilot" ? (opts.targetedSourceUrl ?? null) : null;
   // Live pilot counters, mutated as the single candidate is processed; assembled
   // into the returned PilotReport after finalize. null in legacy mode.
   const pilot: PilotReport | null = writerMode === "pilot"
@@ -854,6 +868,39 @@ async function runIngestion(
     originalTitle: draft.original_title,
     excerpt: draft.excerpt,
   });
+
+  // E1.3F — build the synthetic, discovery-less draft for a targeted pilot. It
+  // carries NO editorial text or scores from any caller: title/excerpt/body/
+  // original_title stay EMPTY so nothing manually supplied is ever treated as a
+  // fact (the writer is grounded solely in the fetched source text), and the
+  // editorial/PR scores are 0 because no model classified this story. The only
+  // operator input is the URL (as the source pointer); the category is derived
+  // conservatively from registry metadata (the matched source's region), falling
+  // back to "world". Used only when resolveTargetedSource accepted the URL.
+  const buildTargetedDraft = (url: string, source: RegistrySource | null): Draft => {
+    const region = source?.region ?? "";
+    const category_slug = validCategories.includes(region)
+      ? region
+      : validCategories.includes("world")
+      ? "world"
+      : validCategories[0];
+    return {
+      title: "",
+      excerpt: "",
+      body: "",
+      category_slug,
+      read_minutes: 0,
+      relevance_score: 0,
+      original_title: "",
+      source_url: url,
+      primary_source_url: url,
+      secondary_source_urls: [],
+      published_date: null,
+      editorial_value_score: 0,
+      institutional_pr_score: 0,
+      rejection_reason: null,
+    };
+  };
 
   // Phase 1 (pure): run the editorial gate + source selection for one draft.
   // Rejections are logged/counted immediately; survivors become PendingItems.
@@ -1263,28 +1310,70 @@ async function runIngestion(
     created_ids: [],
   });
 
+  type Plan = { rep: PendingItem; members: PendingItem[]; supporting: Candidate[] };
+
   let phaseError: unknown = null;
   try {
-    // Phase 1: gather every editorial+source survivor across all regions.
-    const pendings = (await Promise.all(regions.map(gatherRegion))).flat();
+    let plans: Plan[];
 
-    // Phase 2: cluster same-run duplicates. Each high-confidence cluster yields
-    // ONE representative (strongest eligible source); the rest are logged as
-    // same-run semantic duplicates and their final URLs preserved as supporting
-    // sources on the winner — never as separate drafts.
-    //
-    // Source ranking deliberately excludes any per-item published_date: the only
-    // dates available here come from model output and are unverified, so they
-    // must never influence which source wins. tier/trust/final-eligibility/
-    // primary-status decide (see betterSource).
-    const clusters = clusterStories(pendings, (p) => storyTextOf(p.draft));
-    const plans = clusters.map((cluster) => {
-      const bestIdx = pickBestIndex(cluster.map((p) => ({ source: p.chosen.source })));
-      const rep = cluster[bestIdx];
-      const members = cluster.filter((_, i) => i !== bestIdx);
-      const supporting = members.map((m) => m.chosen);
-      return { rep, members, supporting };
-    });
+    if (targetedSourceUrl) {
+      // TARGETED single-article pilot (E1.3F): skip discovery ENTIRELY (no web
+      // discovery model call, no clustering) and build exactly ONE representative
+      // from the operator-supplied URL — but ONLY when its hostname matches an
+      // active, registered, final_source_allowed source. The URL is the sole
+      // operator input; no manually-supplied title/body/excerpt/entity/category
+      // is trusted (buildTargetedDraft leaves them empty), so the fetched page
+      // must supply every fact. An unregistered/blocked/context-only URL is a
+      // hard rejection here: no fetch, no writer call, no insert.
+      sourcesChecked.add(hostFromUrl(targetedSourceUrl));
+      const resolved = resolveTargetedSource(targetedSourceUrl, registry.index);
+      const key = dedupeKeyFromUrl(targetedSourceUrl);
+      if (!resolved.ok || !key) {
+        const reason = resolved.ok ? "pilot_source_url_invalid" : resolved.reason;
+        logDecision(
+          buildTargetedDraft(targetedSourceUrl, null),
+          { url: targetedSourceUrl, source: null },
+          false,
+          reason,
+          { selected_final_domain: hostFromUrl(targetedSourceUrl) },
+        );
+        stats.filtered++;
+        if (pilot) pilot.rejection_reason = reason;
+        plans = [];
+      } else {
+        const draft = buildTargetedDraft(targetedSourceUrl, resolved.source);
+        const chosen: Candidate = { url: targetedSourceUrl, source: resolved.source };
+        const rep: PendingItem = {
+          draft,
+          chosen,
+          candidates: [chosen],
+          citation: { url: targetedSourceUrl, title: "" },
+          key,
+        };
+        plans = [{ rep, members: [], supporting: [] }];
+      }
+    } else {
+      // Phase 1: gather every editorial+source survivor across all regions.
+      const pendings = (await Promise.all(regions.map(gatherRegion))).flat();
+
+      // Phase 2: cluster same-run duplicates. Each high-confidence cluster yields
+      // ONE representative (strongest eligible source); the rest are logged as
+      // same-run semantic duplicates and their final URLs preserved as supporting
+      // sources on the winner — never as separate drafts.
+      //
+      // Source ranking deliberately excludes any per-item published_date: the only
+      // dates available here come from model output and are unverified, so they
+      // must never influence which source wins. tier/trust/final-eligibility/
+      // primary-status decide (see betterSource).
+      const clusters = clusterStories(pendings, (p) => storyTextOf(p.draft));
+      plans = clusters.map((cluster) => {
+        const bestIdx = pickBestIndex(cluster.map((p) => ({ source: p.chosen.source })));
+        const rep = cluster[bestIdx];
+        const members = cluster.filter((_, i) => i !== bestIdx);
+        const supporting = members.map((m) => m.chosen);
+        return { rep, members, supporting };
+      });
+    }
 
     // Phase 3: reject representatives that repeat recent stored content, then
     // insert the rest as pending drafts. The winner is committed FIRST so its
@@ -1350,17 +1439,22 @@ async function runIngestion(
     persist: persistDecisions,
     cleanupCreated: rollbackCreatedContent,
   });
-  await db
-    .from("ingestion_runs")
-    .update({
-      status: final.status,
-      error: final.status === "error" ? final.error : null,
-      ...stats,
-      duration_ms: Date.now() - startedAt,
-      sources: [...sourcesChecked],
-      created_ids: final.createdIds,
-    })
-    .eq("id", runId);
+  // E1.3F: mark a targeted pilot at the run level with the registered domain it
+  // targeted (never the full URL, never any secret or extracted body). The key
+  // is included ONLY for a targeted run, so legacy/cron/ordinary-pilot runs never
+  // reference the additive `pilot_source_domain` column (migration-ordering safe:
+  // the column must exist before the first targeted pilot, but non-targeted runs
+  // are unaffected whether or not it has been applied).
+  const runUpdate: Record<string, unknown> = {
+    status: final.status,
+    error: final.status === "error" ? final.error : null,
+    ...stats,
+    duration_ms: Date.now() - startedAt,
+    sources: [...sourcesChecked],
+    created_ids: final.createdIds,
+  };
+  if (targetedSourceUrl) runUpdate.pilot_source_domain = hostFromUrl(targetedSourceUrl);
+  await db.from("ingestion_runs").update(runUpdate).eq("id", runId);
 
   // Return an error to the caller: re-throw the original phase failure, or raise
   // the mandatory-audit failure so the run is never treated as successful.
@@ -1440,6 +1534,11 @@ Deno.serve(async (req: Request) => {
     authorized: true,
     requestedMode: (body as { writer_mode?: unknown })?.writer_mode,
     requestedLimit: (body as { pilot_limit?: unknown })?.pilot_limit,
+    // E1.3F: an optional targeted source URL, honored ONLY for an authorized
+    // pilot (limit=1). A legacy/cron/default request never reaches the pilot
+    // branch of the gate, so pilot_source_url is ignored there. A supplied-but-
+    // unusable URL is a hard gate rejection (HTTP 400, no ingestion).
+    requestedSourceUrl: (body as { pilot_source_url?: unknown })?.pilot_source_url,
   });
   if (gate.mode === "rejected") {
     // No ingestion runs: a malformed pilot request must not fall through to a run.
@@ -1447,9 +1546,10 @@ Deno.serve(async (req: Request) => {
   }
   const writerMode: WriterMode = gate.mode === "pilot" ? "pilot" : "legacy";
   const pilotLimit = gate.mode === "pilot" ? gate.limit : null;
+  const targetedSourceUrl = gate.mode === "pilot" ? (gate.sourceUrl ?? null) : null;
 
   try {
-    const result = await runIngestion(admin, { trigger, writerMode, pilotLimit });
+    const result = await runIngestion(admin, { trigger, writerMode, pilotLimit, targetedSourceUrl });
     // The pilot report (if any) is present only because runIngestion returned
     // normally, i.e. AFTER the mandatory audit persisted. It carries operational
     // counts only — no source text, keys, tokens, or headers.

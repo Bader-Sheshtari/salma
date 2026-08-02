@@ -88,7 +88,11 @@ export function resolveWriterMode(input: { authorized: boolean; requestedMode?: 
 // cannot run. An unauthorized caller can never reach "pilot" (stays legacy).
 export type PilotGateDecision =
   | { mode: "legacy" }
-  | { mode: "pilot"; limit: 1 }
+  // `sourceUrl` is present ONLY for a targeted single-article pilot (E1.3F): an
+  // authorized pilot that supplied a usable http/https pilot_source_url. It is
+  // omitted for an ordinary (discovery) pilot so the existing gate contract —
+  // { mode: "pilot", limit: 1 } — is unchanged for non-targeted callers.
+  | { mode: "pilot"; limit: 1; sourceUrl?: string }
   | { mode: "rejected"; reason: string };
 
 // The only pilot_limit the first controlled pilot accepts.
@@ -99,6 +103,32 @@ function parsePilotLimit(raw: unknown): number | null {
   if (typeof raw === "number") return Number.isInteger(raw) ? raw : null;
   if (typeof raw === "string" && /^\d+$/.test(raw.trim())) return Number(raw.trim());
   return null;
+}
+
+// Sentinel: pilot_source_url was supplied but is not a usable http/https URL.
+const TARGETED_URL_INVALID = Symbol("targeted_url_invalid");
+
+/**
+ * Parse the optional pilot_source_url. Returns `undefined` when it is absent
+ * (an ordinary pilot with no targeting), the canonical URL string when it is a
+ * syntactically valid http/https URL, or the INVALID sentinel when it was
+ * supplied but is not a usable http/https URL string (→ the gate rejects the
+ * run). This is shape-only validation; the registry hostname match happens in
+ * index.ts against the freshly-loaded registry.
+ */
+function parseTargetedSourceUrl(raw: unknown): string | undefined | typeof TARGETED_URL_INVALID {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") return TARGETED_URL_INVALID;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return TARGETED_URL_INVALID;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return TARGETED_URL_INVALID;
+  return url.href;
 }
 
 /**
@@ -112,13 +142,21 @@ export function resolvePilotGate(input: {
   authorized: boolean;
   requestedMode?: unknown;
   requestedLimit?: unknown;
+  // Optional targeted single-article pilot URL (E1.3F). Honored ONLY on an
+  // authorized pilot with limit=1; a legacy/cron/default request never reaches
+  // this branch, so pilot_source_url is ignored there (never activates targeting).
+  requestedSourceUrl?: unknown;
 }): PilotGateDecision {
   if (resolveWriterMode({ authorized: input.authorized, requestedMode: input.requestedMode }) !== "pilot") {
     return { mode: "legacy" };
   }
   const limit = parsePilotLimit(input.requestedLimit);
   if (limit !== FIRST_PILOT_LIMIT) return { mode: "rejected", reason: "pilot_limit_must_be_1" };
-  return { mode: "pilot", limit: FIRST_PILOT_LIMIT };
+  const targeted = parseTargetedSourceUrl(input.requestedSourceUrl);
+  if (targeted === TARGETED_URL_INVALID) return { mode: "rejected", reason: "pilot_source_url_invalid" };
+  return targeted
+    ? { mode: "pilot", limit: FIRST_PILOT_LIMIT, sourceUrl: targeted }
+    : { mode: "pilot", limit: FIRST_PILOT_LIMIT };
 }
 
 // --- Bounded representative processing (E1.3E, pure/injectable) -------------

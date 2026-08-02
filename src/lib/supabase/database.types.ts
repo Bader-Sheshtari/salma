@@ -716,6 +716,7 @@ export type Database = {
           found: number
           id: string
           kept: number
+          pilot_source_domain: string | null
           sources: string[]
           status: string
           trigger: string
@@ -730,6 +731,7 @@ export type Database = {
           found?: number
           id?: string
           kept?: number
+          pilot_source_domain?: string | null
           sources?: string[]
           status?: string
           trigger?: string
@@ -744,6 +746,7 @@ export type Database = {
           found?: number
           id?: string
           kept?: number
+          pilot_source_domain?: string | null
           sources?: string[]
           status?: string
           trigger?: string
