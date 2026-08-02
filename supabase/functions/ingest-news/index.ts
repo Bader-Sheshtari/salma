@@ -30,11 +30,46 @@ import {
 } from "./registry.ts";
 import { clusterStories, pickBestIndex, type StoryText, storyDuplicate } from "./dedupe.ts";
 import { finalizeRun, selectRollbackTargets } from "./runFinalize.ts";
+import {
+  buildWritingInstructions,
+  parseWriterOutput,
+  readingTimeMinutes,
+  selectProfile,
+  validateArticle,
+  WRITER_PROMPT_VERSION,
+} from "./salmaWriter.ts";
+import {
+  assertWriterConfig,
+  orchestrateWriter,
+  processRepresentativesWithLimit,
+  resolvePilotGate,
+  type WriterHttpResult,
+  type WriterMode,
+  type WriterModelConfig,
+  type WriterValidation,
+} from "./writerRouter.ts";
+import {
+  fetchSourceText,
+  groundedWrite,
+  type RawResponse,
+  type SourceText,
+} from "./fetchSourceText.ts";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = Deno.env.get("OPENROUTER_MODEL") || "openai/gpt-oss-20b:free";
 // Bumped when the editorial prompt/decision schema changes; recorded per decision.
 const PROMPT_VERSION = "e1.1";
+
+// E1.3C writer-model routing. Kept SEPARATE from OPENROUTER_MODEL (which still
+// controls the discovery/editorial-selection call). Safe defaults match the
+// approved E1.3B pilot routing; each can be overridden by its own env var.
+// google/gemini-3-flash-preview must never be configured here (assertWriterConfig
+// enforces this at run start).
+const WRITER_CONFIG: WriterModelConfig = {
+  defaultModel: Deno.env.get("OPENROUTER_WRITER_DEFAULT_MODEL") || "openai/gpt-5.4-mini",
+  sensitiveModel: Deno.env.get("OPENROUTER_WRITER_SENSITIVE_MODEL") || "anthropic/claude-sonnet-5",
+  fallbackModel: Deno.env.get("OPENROUTER_WRITER_FALLBACK_MODEL") || "openai/gpt-4o-mini",
+};
 
 // Fallback set, used only if the categories table can't be read. The live list
 // is fetched from the DB per run so admin-created categories work too.
@@ -103,6 +138,23 @@ type Policy = {
 
 type RunStats = { found: number; kept: number; filtered: number; duplicates: number };
 
+// E1.3E single-article pilot report. Operational-only: it carries NO extracted
+// source text, API keys, tokens, or request headers — just the counts an
+// operator needs to confirm the first controlled pilot processed exactly one
+// candidate. Returned to the manual caller only AFTER the mandatory audit has
+// persisted (runIngestion throws otherwise, so a reported pilot is always audited).
+type PilotReport = {
+  writer_mode: "pilot";
+  pilot_limit: number;
+  candidates_considered: number;
+  source_fetches_attempted: number;
+  writer_calls_attempted: number;
+  fallback_calls_attempted: number;
+  pending_articles_created: number;
+  rejection_reason: string | null;
+  created_content_id: string | null;
+};
+
 type Draft = {
   title: string;
   excerpt: string;
@@ -138,6 +190,21 @@ type Decision = {
   dedupe_method: string | null;
   matched_title: string | null;
   selected_final_domain: string | null;
+  // E1.3C writer-routing audit (all nullable; only set once a candidate reaches
+  // the writing stage). Requires the additive columns from migration
+  // 20260804120000_ingestion_decisions_writer_audit.sql.
+  writing_profile: string | null;
+  writer_primary_model: string | null;
+  writer_model_used: string | null;
+  writer_fallback_used: boolean | null;
+  writer_prompt_version: string | null;
+  writer_validation_reason: string | null;
+  // E1.3D verified-source extraction audit (all nullable; only set on a pilot
+  // candidate that reached the source-text stage). Requires the additive columns
+  // from migration 20260805120000_ingestion_decisions_source_extraction.sql.
+  source_extraction_method: string | null;
+  source_char_count: number | null;
+  source_word_count: number | null;
 };
 
 // Optional dedup audit fields attached to a decision (E1.2).
@@ -147,6 +214,19 @@ type DedupeMeta = {
   dedupe_method?: string | null;
   matched_title?: string | null;
   selected_final_domain?: string | null;
+};
+
+// Optional writer-routing audit fields attached to a decision (E1.3C/D).
+type WriterAudit = {
+  writing_profile?: string | null;
+  writer_primary_model?: string | null;
+  writer_model_used?: string | null;
+  writer_fallback_used?: boolean | null;
+  writer_prompt_version?: string | null;
+  writer_validation_reason?: string | null;
+  source_extraction_method?: string | null;
+  source_char_count?: number | null;
+  source_word_count?: number | null;
 };
 
 // ---- OpenRouter web-search client ---------------------------------------
@@ -189,6 +269,286 @@ async function chatWeb(
     if (c?.url) citations.push({ url: String(c.url), title: String(c.title ?? "") });
   }
   return { content: message.content ?? "", citations };
+}
+
+// ---- OpenRouter writer client (E1.3C) -----------------------------------
+//
+// A SEPARATE, tool-free call: no web plugin, no search, temperature 0.2. It
+// only rewrites the already-verified facts it is handed. Returns a structured
+// result so the router can tell a technical failure (fallback-eligible) from a
+// hard config error (not).
+async function chatWriter(
+  model: string,
+  messages: { role: string; content: string }[],
+): Promise<WriterHttpResult> {
+  const apiKey = Deno.env.get("OPENROUTER_API_KEY");
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
+  try {
+    const res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://salma.health",
+        "X-Title": "Salma",
+      },
+      body: JSON.stringify({ model, messages, temperature: 0.2, max_tokens: 2000 }),
+      signal: AbortSignal.timeout(45000),
+    });
+    if (!res.ok) return { ok: false, httpStatus: res.status };
+    const data = await res.json().catch(() => null);
+    const content = data?.choices?.[0]?.message?.content;
+    if (typeof content !== "string" || content.trim().length === 0) {
+      return { ok: false, httpStatus: res.status, emptyOrMalformed: true };
+    }
+    return { ok: true, content };
+  } catch (e) {
+    const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+    return { ok: false, httpStatus: 0, timedOut, networkError: !timedOut };
+  }
+}
+
+// ---- Hardened source-fetch adapter (E1.3D) ------------------------------
+//
+// The real network primitive handed to fetchSourceText. It performs ONE request
+// with redirect:"manual" (fetchSourceText validates every hop itself), a hard
+// per-request timeout, and exposes the body as a chunk stream so the module can
+// enforce its byte cap while downloading. It sends ONLY the neutral headers the
+// module supplies — never Authorization / Cookie / apikey / any Supabase or
+// OpenRouter secret. A timeout surfaces as a DOMException("TimeoutError") which
+// fetchSourceText maps to source_fetch_timeout; any other throw → source_fetch_failed.
+async function* streamChunks(
+  stream: ReadableStream<Uint8Array> | null,
+): AsyncGenerator<Uint8Array> {
+  if (!stream) return;
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) yield value;
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // reader already released (e.g. after an early break) — ignore.
+    }
+  }
+}
+
+async function denoRawFetch(
+  url: string,
+  init: { headers: Record<string, string>; timeoutMs: number; maxBytes: number },
+): Promise<RawResponse> {
+  const res = await fetch(url, {
+    method: "GET",
+    headers: init.headers,
+    redirect: "manual",
+    signal: AbortSignal.timeout(init.timeoutMs),
+  });
+  return {
+    status: res.status,
+    headers: res.headers,
+    body: streamChunks(res.body),
+  };
+}
+
+// ---- Hardened DNS resolver (E1.3E SSRF layer) ---------------------------
+//
+// The real DNS primitive handed to fetchSourceText. It resolves BOTH A (IPv4)
+// and AAAA (IPv6) records via Deno.resolveDns and returns the concatenated
+// numeric addresses so fetchSourceText can refuse any private/reserved/metadata
+// address BEFORE a socket is opened, on the initial URL and on every redirect
+// hop. Each record type is queried independently: a host with only A records
+// (NotFound for AAAA, and vice-versa) still resolves, but a host that resolves
+// to NOTHING yields [] → fetchSourceText fails closed (source_dns_resolution_failed).
+//
+// DNS-rebinding caveat (intentional, documented): Deno's fetch performs its own
+// resolution and cannot be pinned to the IP validated here, so this is
+// conservative pre-flight defense-in-depth, not a full guarantee against a
+// TTL=0 rebinding attacker.
+async function denoResolveDns(hostname: string): Promise<string[]> {
+  const out: string[] = [];
+  for (const recordType of ["A", "AAAA"] as const) {
+    try {
+      const addrs = await Deno.resolveDns(hostname, recordType);
+      out.push(...addrs);
+    } catch {
+      // NotFound / no record of this type is normal (e.g. IPv4-only host has no
+      // AAAA). A genuinely unresolvable host returns [] from BOTH and is failed
+      // closed by validateResolvedAddresses; we never treat a lookup error as
+      // "resolved to nothing = safe".
+    }
+  }
+  return out;
+}
+
+// Render the Arabic user message the writer works from. It draws a HARD line
+// between two kinds of material:
+//   - VERIFIED facts: only the cited source headline(s) and the registry source
+//     name actually returned/verified by the pipeline. These are the sole facts
+//     the writer may state, and they are exactly what the validator grounds
+//     against (see writeArticle).
+//   - UNVERIFIED discovery leads: the discovery model's generated draft
+//     (title/summary/body). These are provided ONLY as orientation and MUST NOT
+//     be stated as fact unless the same detail is present in the verified facts.
+// This separation is what stops a fabricated number/quote/claim that exists only
+// in the discovery draft from being written as if it were sourced.
+function renderWriterPacket(input: {
+  verifiedFactText: string;
+  citationTitles: string[];
+  discovery: { originalTitle: string; excerpt: string; body: string };
+  sourceName: string | null;
+}): string {
+  const lines = [
+    `المصدر المُتحقَّق منه: ${input.sourceName || "—"}`,
+    ``,
+    `الحقائق المُتحقَّق منها (هذه هي المادة الوحيدة المسموح بذكرها؛ لا تُضِف رقماً أو تاريخاً أو اسماً أو اقتباساً أو ادّعاءً غير وارد هنا):`,
+    input.verifiedFactText || "—",
+  ];
+  const extraTitles = input.citationTitles.filter(Boolean);
+  if (extraTitles.length) {
+    lines.push(``, `عناوين المصادر المرجعية (مُتحقَّق منها):`, ...extraTitles.map((t) => `- ${t}`));
+  }
+  // Unverified discovery leads: explicitly fenced off as NON-factual context.
+  const discoveryLeads = [input.discovery.originalTitle, input.discovery.excerpt, input.discovery.body]
+    .map((s) => (s ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+  if (discoveryLeads) {
+    lines.push(
+      ``,
+      `سياق استكشافي غير مُتحقَّق منه (للتوجيه فقط — لا تعتمده كحقيقة، ولا تنقل منه أي رقم أو تاريخ أو اقتباس أو ادّعاء ما لم يرد في الحقائق المُتحقَّق منها أعلاه):`,
+      discoveryLeads,
+    );
+  }
+  return lines.join("\n");
+}
+
+type WriterOutcome =
+  | { ok: true; article: { title: string; excerpt: string; body: string }; readMinutes: number; audit: WriterAudit }
+  | { ok: false; rejection: string; audit: WriterAudit };
+
+// Select the profile, route to the approved model (with technical-failure
+// fallback), and validate the output. The FINAL stored title/excerpt/body/
+// read_minutes all come from this validated writer output — never the raw
+// discovery draft. A parse/validation failure returns ok:false so NO pending
+// draft is created (the reason is recorded on the audit row).
+async function writeArticle(input: {
+  // VERIFIED source material (E1.3D): the plain text extracted from the ONE
+  // final, registered, final_source_allowed source page. This — plus the
+  // registered source name/domain and the selected URL — is the SOLE factual
+  // grounding the validator allows.
+  verified: SourceText;
+  // UNVERIFIED discovery-model output. Used only as orientation for the writer
+  // and as a routing signal — NEVER as factual grounding.
+  discovery: { originalTitle: string; body: string; excerpt: string };
+  // Registered source label + domain (verified from the registry).
+  sourceName: string | null;
+  registeredDomain: string | null;
+  // Verified: the titles the web plugin actually returned as url_citations.
+  citationTitles: string[];
+}): Promise<WriterOutcome> {
+  const originalTitle = input.discovery.originalTitle ?? "";
+
+  // GROUNDING material — verified ONLY, built from the extracted source page:
+  // its title, its body, reliable publication metadata, the registered source
+  // name/domain, and the selected URL. The validator compares the writer's
+  // output against exactly this text. Neither the discovery draft nor the
+  // provider citation titles are grounding: they are model/aggregator-supplied
+  // and must not let a fabricated number/quote/claim pass validation.
+  const verifiedFactText = [
+    input.verified.title,
+    input.verified.text,
+    input.verified.publishedDate ? `تاريخ النشر: ${input.verified.publishedDate}` : "",
+    input.sourceName ? `المصدر: ${input.sourceName}` : "",
+    input.registeredDomain ? `النطاق: ${input.registeredDomain}` : "",
+    input.verified.finalUrl,
+  ]
+    .map((s) => (s ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+
+  // Essential entities that must survive into the article (blocking for a safety
+  // alert). Deterministically extracted from the VERIFIED source text only —
+  // never model-generated (see fetchSourceText.extractEssentialEntities).
+  const mustPreserve = input.verified.mustPreserve;
+
+  // ROUTING signal — may use the broader discovery text AND the verified source
+  // title. Routing errs toward the sensitive model (see selectProfile /
+  // sensitiveProfileHint); reading the unverified leads here only ever makes
+  // routing MORE cautious, never less, and never affects what counts as a fact.
+  const routingText = [
+    originalTitle,
+    input.discovery.excerpt,
+    input.discovery.body,
+    input.verified.title,
+    ...input.citationTitles,
+  ]
+    .map((s) => (s ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+  const profile = selectProfile({ sourceText: routingText });
+
+  const messages = [
+    { role: "system", content: buildWritingInstructions(profile) },
+    {
+      role: "user",
+      content: renderWriterPacket({
+        verifiedFactText,
+        citationTitles: input.citationTitles,
+        discovery: input.discovery,
+        sourceName: input.sourceName,
+      }),
+    },
+  ];
+
+  const validate = (content: string): WriterValidation => {
+    const parsed = parseWriterOutput(content);
+    if (!parsed.ok) return { ok: false, reason: parsed.error };
+    const v = validateArticle({
+      article: parsed.article,
+      source: {
+        sourceText: verifiedFactText,
+        originalTitle,
+        brand: input.sourceName ?? null,
+        mustPreserve,
+      },
+    });
+    if (!v.ok) return { ok: false, reason: v.rejectionReason ?? "validation_failed" };
+    return {
+      ok: true,
+      article: { title: v.cleanTitle, excerpt: parsed.article.excerpt, body: parsed.article.body },
+      readMinutes: v.readMinutes,
+    };
+  };
+
+  const r = await orchestrateWriter({
+    profile,
+    config: WRITER_CONFIG,
+    call: (model) => chatWriter(model, messages),
+    validate,
+  });
+
+  const audit: WriterAudit = {
+    writing_profile: r.profile,
+    writer_primary_model: r.primaryModel,
+    writer_model_used: r.modelUsed,
+    writer_fallback_used: r.usedFallback,
+    writer_prompt_version: WRITER_PROMPT_VERSION,
+    writer_validation_reason: r.validationReason,
+    // Verified-source extraction provenance (E1.3D): how the source body was
+    // recovered and its size. Recorded on every pilot decision that reached the
+    // writer, alongside the routing/model audit above.
+    source_extraction_method: input.verified.method,
+    source_char_count: input.verified.charCount,
+    source_word_count: input.verified.wordCount,
+  };
+  if (r.ok && r.article) {
+    return { ok: true, article: r.article, readMinutes: r.readMinutes ?? readingTimeMinutes(r.article.body), audit };
+  }
+  return { ok: false, rejection: r.rejection ?? "writer_failed", audit };
 }
 
 // ---- Helpers ------------------------------------------------------------
@@ -363,10 +723,38 @@ function citationIndex(citations: Citation[]): Map<string, Citation> {
 
 async function runIngestion(
   db: SupabaseClient,
-  opts: { trigger?: "manual" | "cron"; perRegion?: number } = {},
-): Promise<RunStats> {
+  opts: { trigger?: "manual" | "cron"; perRegion?: number; writerMode?: WriterMode; pilotLimit?: number | null } = {},
+): Promise<RunStats & { pilot?: PilotReport }> {
   const trigger = opts.trigger ?? "manual";
   const perRegion = Math.min(Math.max(opts.perRegion ?? 3, 1), 5);
+  // Controlled-pilot gate: "legacy" (the unchanged pre-pilot path the scheduled
+  // cron uses) inserts the discovery draft directly — no source fetch, no Salma
+  // writer. "pilot" runs the E1.3C/D verified-source writer. Defaults to legacy
+  // so any caller that does not explicitly (and authorizedly) opt in is legacy.
+  const writerMode: WriterMode = opts.writerMode ?? "legacy";
+  // E1.3E single-article cap. In pilot mode the run processes at most this many
+  // candidates that REACH the source-fetch stage (the entrypoint only ever lets
+  // pilotLimit=1 through). null in legacy mode → no cap, unchanged behavior.
+  const pilotLimit: number | null = writerMode === "pilot" ? (opts.pilotLimit ?? 1) : null;
+  // Live pilot counters, mutated as the single candidate is processed; assembled
+  // into the returned PilotReport after finalize. null in legacy mode.
+  const pilot: PilotReport | null = writerMode === "pilot"
+    ? {
+      writer_mode: "pilot",
+      pilot_limit: pilotLimit ?? 1,
+      candidates_considered: 0,
+      source_fetches_attempted: 0,
+      writer_calls_attempted: 0,
+      fallback_calls_attempted: 0,
+      pending_articles_created: 0,
+      rejection_reason: null,
+      created_content_id: null,
+    }
+    : null;
+
+  // Fail fast on a misconfigured writer route (empty or forbidden model) before
+  // any discovery/model call — never silently route to the wrong model.
+  assertWriterConfig(WRITER_CONFIG);
 
   const { data: policy } = await db
     .from("editorial_policy")
@@ -418,8 +806,9 @@ async function runIngestion(
     draft: Draft,
     chosen: Candidate | null,
     accepted: boolean,
-    reason: DecisionReason | null,
+    reason: DecisionReason | string | null,
     meta: DedupeMeta = {},
+    writer: WriterAudit = {},
   ): void => {
     const url = chosen?.url ?? draft.primary_source_url ?? draft.source_url;
     decisions.push({
@@ -437,6 +826,15 @@ async function runIngestion(
       dedupe_method: meta.dedupe_method ?? null,
       matched_title: meta.matched_title ?? null,
       selected_final_domain: meta.selected_final_domain ?? null,
+      writing_profile: writer.writing_profile ?? null,
+      writer_primary_model: writer.writer_primary_model ?? null,
+      writer_model_used: writer.writer_model_used ?? null,
+      writer_fallback_used: writer.writer_fallback_used ?? null,
+      writer_prompt_version: writer.writer_prompt_version ?? null,
+      writer_validation_reason: writer.writer_validation_reason ?? null,
+      source_extraction_method: writer.source_extraction_method ?? null,
+      source_char_count: writer.source_char_count ?? null,
+      source_word_count: writer.source_word_count ?? null,
     });
   };
 
@@ -520,6 +918,8 @@ async function runIngestion(
   const insertRepresentative = async (
     item: PendingItem,
     supporting: Candidate[],
+    written: { article: { title: string; excerpt: string; body: string }; readMinutes: number; audit: WriterAudit },
+    meta: DedupeMeta = {},
   ): Promise<string | null> => {
     const { draft, chosen, citation, key } = item;
     const finalUrl = chosen.url;
@@ -527,17 +927,20 @@ async function runIngestion(
       chosen.source?.name || citation.title || new URL(citation.url).host.replace(/^www\./, "");
     const coverImage = await fetchCoverImage(citation.url);
 
-    const slug = `${slugify(draft.title)}-${Math.random().toString(36).slice(2, 7)}`;
+    // FINAL stored article is the validated writer output, NOT the raw
+    // discovery draft. read_minutes is recomputed from the final Arabic body.
+    const article = written.article;
+    const slug = `${slugify(article.title)}-${Math.random().toString(36).slice(2, 7)}`;
     const payload = {
-      title: draft.title,
+      title: article.title,
       slug,
       type: "news",
       status: DRAFT_STATUS,
       origin: "ai",
       category_slug: draft.category_slug,
-      excerpt: draft.excerpt || null,
-      body: draft.body || null,
-      read_minutes: draft.read_minutes,
+      excerpt: article.excerpt || null,
+      body: article.body || null,
+      read_minutes: written.readMinutes,
       relevance_score: draft.relevance_score,
       original_title: draft.original_title || null,
       original_url: citation.url,
@@ -556,10 +959,10 @@ async function runIngestion(
     if (error || !data) {
       // 23505 = unique_violation: another concurrent item won the same key.
       if ((error as { code?: string } | null)?.code === "23505") {
-        logDecision(draft, chosen, false, "duplicate_url");
+        logDecision(draft, chosen, false, "duplicate_url", meta, written.audit);
         stats.duplicates++;
       } else {
-        logDecision(draft, chosen, false, null);
+        logDecision(draft, chosen, false, null, meta, written.audit);
         stats.filtered++;
       }
       return null;
@@ -579,7 +982,7 @@ async function runIngestion(
       });
     }
     await db.from("content_sources").insert(sourceRows);
-    logDecision(draft, chosen, true, null);
+    logDecision(draft, chosen, true, null, meta, written.audit);
     createdIds.push(contentId);
     stats.kept++;
     return contentId;
@@ -658,7 +1061,7 @@ async function runIngestion(
     item: PendingItem,
     supporting: Candidate[],
     recent: RecentContent[],
-  ): Promise<string | null> => {
+  ): Promise<{ reachedFetchStage: boolean; result: string | null }> => {
     const { draft, chosen, key } = item;
 
     // Exact URL repeat (indexed point lookup, not time-bounded).
@@ -675,7 +1078,7 @@ async function runIngestion(
         selected_final_domain: hostFromUrl(chosen.url),
       });
       stats.duplicates++;
-      return existingId;
+      return { reachedFetchStage: false, result: existingId };
     }
 
     // Semantic repeat against recent stored content (origin-agnostic).
@@ -691,11 +1094,111 @@ async function runIngestion(
           selected_final_domain: hostFromUrl(chosen.url),
         });
         stats.duplicates++;
-        return r.id;
+        return { reachedFetchStage: false, result: r.id };
       }
     }
 
-    return await insertRepresentative(item, supporting);
+    // Legacy path (pilot gate): the scheduled cron and any non-pilot caller keep
+    // the exact pre-pilot behavior — insert the discovery draft as the pending
+    // AI draft, with NO source fetch and NO Salma writer call. The stored
+    // status/origin/type are identical to the pilot path (pending / ai / news);
+    // only the body provenance differs. The writer audit stays empty so the
+    // legacy cron audit trail is unchanged.
+    if (writerMode === "legacy") {
+      const legacyWritten = {
+        article: { title: draft.title, excerpt: draft.excerpt, body: draft.body },
+        readMinutes: draft.read_minutes,
+        audit: {} as WriterAudit,
+      };
+      const legacyId = await insertRepresentative(item, supporting, legacyWritten);
+      return { reachedFetchStage: false, result: legacyId };
+    }
+
+    // Source-text stage (E1.3D, pilot only): the story has passed editorial +
+    // source selection, same-run representative selection, and BOTH existing-content
+    // dedup checks. Only now — for the ONE final, registered, final_source_allowed
+    // URL — do we fetch and extract the real source page. pickFinalSource(_, true)
+    // guarantees chosen.source is a registered final source with a domain; the
+    // fetch is SSRF-validated against exactly that domain (see fetchSourceText).
+    const registeredDomain = chosen.source?.domain ?? null;
+    if (!registeredDomain) {
+      // Defensive: a final source without a domain cannot be safely fetched.
+      // This is BEFORE the fetch stage, so it does NOT consume the single pilot
+      // slot — the bounded loop moves on to the next representative.
+      logDecision(draft, chosen, false, "source_text_unavailable");
+      stats.filtered++;
+      return { reachedFetchStage: false, result: null };
+    }
+
+    // FETCH STAGE reached (E1.3E): from here this candidate consumes the single
+    // pilot slot even if extraction/writing then fails. Counted before the fetch
+    // is attempted so the bounded loop stops after exactly one fetch-stage try.
+    if (pilot) pilot.source_fetches_attempted += 1;
+
+    // Writer stage (E1.3C/D): groundedWrite fetches+extracts the verified source
+    // text and ONLY THEN calls the writer — exactly once, and never on a
+    // fetch/extraction failure. A source-fetch failure creates NO pending draft
+    // and NO paid writer call; the discrete source_* reason is recorded on the
+    // audit row. The writer/validator are grounded in the extracted source text,
+    // never the discovery draft (see writeArticle). A parse/validation failure is
+    // likewise a rejection that creates no draft (fallback never runs after a
+    // factual validation failure — see orchestrateWriter).
+    const grounded = await groundedWrite<WriterOutcome>({
+      fetchSource: () =>
+        fetchSourceText({
+          url: chosen.url,
+          registeredDomain,
+          sourceName: chosen.source?.name ?? null,
+          rawFetch: denoRawFetch,
+          // E1.3E: per-hop DNS-resolution SSRF check (see denoResolveDns). A
+          // DNS/security failure returns a discrete source_* reason → no writer
+          // call, no pending draft, and a rejection audit row (below).
+          resolveDns: denoResolveDns,
+        }),
+      write: (verified) =>
+        writeArticle({
+          verified,
+          discovery: {
+            originalTitle: draft.original_title,
+            body: draft.body,
+            excerpt: draft.excerpt,
+          },
+          sourceName: chosen.source?.name ?? item.citation.title ?? null,
+          registeredDomain,
+          citationTitles: [item.citation.title].filter((t): t is string => !!t),
+        }),
+    });
+    if (!grounded.ok) {
+      // Source fetch/extraction (incl. DNS-security) failed: no writer call, no
+      // pending draft. The discrete source_* reason is the pilot's rejection.
+      logDecision(draft, chosen, false, grounded.reason);
+      stats.filtered++;
+      if (pilot) pilot.rejection_reason = grounded.reason;
+      return { reachedFetchStage: true, result: null };
+    }
+
+    // The writer WAS called (groundedWrite only calls write() on a successful
+    // fetch): count exactly one primary writer call, plus one fallback call iff
+    // the primary suffered a qualifying technical failure (writer_fallback_used).
+    const written = grounded.value;
+    if (pilot) {
+      pilot.writer_calls_attempted += 1;
+      if (written.audit.writer_fallback_used) pilot.fallback_calls_attempted += 1;
+    }
+    if (!written.ok) {
+      logDecision(draft, chosen, false, written.rejection, {
+        selected_final_domain: hostFromUrl(chosen.url),
+      }, written.audit);
+      stats.filtered++;
+      if (pilot) pilot.rejection_reason = written.rejection;
+      return { reachedFetchStage: true, result: null };
+    }
+
+    const insertedId = await insertRepresentative(item, supporting, written, {
+      selected_final_domain: hostFromUrl(chosen.url),
+    });
+    if (pilot && !insertedId) pilot.rejection_reason = "pending_insert_failed";
+    return { reachedFetchStage: true, result: insertedId };
   };
 
   // Persist the per-candidate audit trail. The run row already exists (created
@@ -788,19 +1291,49 @@ async function runIngestion(
     // canonical content id (whether freshly inserted or the row it matched) can
     // be linked from every same-run duplicate's audit record.
     const recent = await loadRecentContent();
-    for (const { rep, members, supporting } of plans) {
-      const canonicalId = await commitRepresentative(rep, supporting, recent);
-      for (const dup of members) {
-        const verdict = storyDuplicate(storyTextOf(dup.draft), storyTextOf(rep.draft));
-        logDecision(dup.draft, dup.chosen, false, "duplicate_semantic_same_run", {
-          duplicate_of_content_id: canonicalId,
-          similarity_score: verdict.score,
-          dedupe_method: verdict.method ?? "semantic_title",
-          matched_title: rep.draft.title,
+    // Phase-3 processing is bounded for the pilot: processRepresentativesWithLimit
+    // stops STARTING new representatives once `pilotLimit` of them have reached the
+    // source-fetch stage (limit=1 for the first pilot). In legacy mode the limit is
+    // null → every representative is processed, unchanged. A representative rejected
+    // BEFORE the fetch stage (a duplicate, or a final source without a domain) does
+    // not consume the slot, so the loop keeps looking for the one real pilot candidate.
+    const loopResult = await processRepresentativesWithLimit({
+      representatives: plans,
+      limit: pilotLimit,
+      commit: async ({ rep, members, supporting }) => {
+        const outcome = await commitRepresentative(rep, supporting, recent);
+        for (const dup of members) {
+          const verdict = storyDuplicate(storyTextOf(dup.draft), storyTextOf(rep.draft));
+          logDecision(dup.draft, dup.chosen, false, "duplicate_semantic_same_run", {
+            duplicate_of_content_id: outcome.result,
+            similarity_score: verdict.score,
+            dedupe_method: verdict.method ?? "semantic_title",
+            matched_title: rep.draft.title,
+            selected_final_domain: hostFromUrl(rep.chosen.url),
+          });
+          stats.duplicates++;
+        }
+        return outcome;
+      },
+      // Pilot only: representatives after the single slot are deliberately not
+      // processed. Record them (and their cluster members) honestly so the audit
+      // shows they were deferred by the single-article cap, not silently dropped.
+      onSkipped: ({ rep, members }) => {
+        logDecision(rep.draft, rep.chosen, false, "pilot_single_article_limit", {
           selected_final_domain: hostFromUrl(rep.chosen.url),
         });
-        stats.duplicates++;
-      }
+        stats.filtered++;
+        for (const dup of members) {
+          logDecision(dup.draft, dup.chosen, false, "pilot_single_article_limit");
+          stats.filtered++;
+        }
+      },
+    });
+
+    if (pilot) {
+      pilot.candidates_considered = loopResult.processed;
+      pilot.pending_articles_created = createdIds.length;
+      pilot.created_content_id = createdIds[0] ?? null;
     }
 
   } catch (e) {
@@ -833,7 +1366,9 @@ async function runIngestion(
   // the mandatory-audit failure so the run is never treated as successful.
   if (phaseError != null) throw phaseError;
   if (final.throwMessage) throw new Error(final.throwMessage);
-  return stats;
+  // Reaching here means finalizeRun persisted the mandatory audit (it throws
+  // otherwise), so the pilot report below is only ever returned for an audited run.
+  return pilot ? { ...stats, pilot } : stats;
 }
 
 // ---- Auth + HTTP entrypoint --------------------------------------------
@@ -891,9 +1426,34 @@ Deno.serve(async (req: Request) => {
   const trigger = await authorize(req, admin);
   if (!trigger) return Response.json({ error: "unauthorized" }, { status: 401 });
 
+  // Controlled-pilot gate (E1.3E). Only an AUTHORIZED caller (verified above via
+  // the ingest secret or an admin JWT) that EXPLICITLY sends writer_mode:"pilot"
+  // AND an explicit pilot_limit of exactly 1 runs the verified-source Salma
+  // writer; everything else — including the scheduled cron, which sends no body —
+  // stays on the unchanged legacy path. A pilot request with a missing/other/>1
+  // pilot_limit is REJECTED (HTTP 400) and performs NO ingestion, rather than
+  // silently clamping. Resolving with authorized=true is sound because an
+  // unauthorized request already returned 401 above and can never reach here.
+  // This does NOT read or change OPENROUTER_MODEL or any writer-model secret.
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  const gate = resolvePilotGate({
+    authorized: true,
+    requestedMode: (body as { writer_mode?: unknown })?.writer_mode,
+    requestedLimit: (body as { pilot_limit?: unknown })?.pilot_limit,
+  });
+  if (gate.mode === "rejected") {
+    // No ingestion runs: a malformed pilot request must not fall through to a run.
+    return Response.json({ ok: false, error: gate.reason }, { status: 400 });
+  }
+  const writerMode: WriterMode = gate.mode === "pilot" ? "pilot" : "legacy";
+  const pilotLimit = gate.mode === "pilot" ? gate.limit : null;
+
   try {
-    const stats = await runIngestion(admin, { trigger });
-    return Response.json({ ok: true, ...stats });
+    const result = await runIngestion(admin, { trigger, writerMode, pilotLimit });
+    // The pilot report (if any) is present only because runIngestion returned
+    // normally, i.e. AFTER the mandatory audit persisted. It carries operational
+    // counts only — no source text, keys, tokens, or headers.
+    return Response.json({ ok: true, writer_mode: writerMode, ...result });
   } catch (e) {
     const message = e instanceof Error ? e.message : "ingestion failed";
     return Response.json({ ok: false, error: message }, { status: 500 });
