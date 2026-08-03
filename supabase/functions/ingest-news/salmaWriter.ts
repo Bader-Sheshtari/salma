@@ -383,7 +383,17 @@ const OFFICIAL_ACTION_PATTERNS: { code: string; patterns: RegExp[] }[] = [
   { code: "avoid", patterns: [/تجنب/, /الامتناع عن/, /avoid/, /refrain from/] },
   { code: "return", patterns: [
     /إعادة (?:المنتج|الدواء|المستحضر|العبوة)/, /أعيدوا/, /إرجاع/, /استرجاع/,
-    /return (?:the|it|any|all|unused)/,
+    /إعادة المنتج إلى مكان الشراء/, /إعادة العبوة إلى الصيدلية/, /الاستبدال أو الإرجاع/,
+    /return (?:the|it|them|any|all|unused|recalled|product|item|medication|drug)/,
+    /return\b[^.]{0,20}(?:place|point) of purchase/,
+    /return\b\s+or\s+(?:discard|dispose|destroy|replacement)/,
+    /return\s*\/\s*replacement/, /return or replacement/, /replacement or return/,
+    /arranging (?:for )?return/,
+  ] },
+  { code: "discard", patterns: [
+    /التخلص من (?:المنتج|الدواء|المستحضر|العبوة)/, /تخلص(?:وا)? من (?:المنتج|الدواء|العبوة)/,
+    /إتلاف (?:المنتج|الدواء|العبوة)/, /رمي (?:المنتج|الدواء|العبوة)/,
+    /discard/, /dispose of/, /throw (?:it|them|the product|the item)? ?away/,
   ] },
   { code: "check", patterns: [
     /التحقق من/, /تحقق(?:وا)? من/, /افحص(?:وا)?/, /فحص (?:العبوة|المنتج|الرقم)/,
@@ -391,12 +401,14 @@ const OFFICIAL_ACTION_PATTERNS: { code: string; patterns: RegExp[] }[] = [
   ] },
   { code: "contact", patterns: [
     /التواصل مع/, /الاتصال (?:بـ|ب)/, /تواصلوا/, /راجعوا الجهة/,
-    /contact (?:the|your)/, /reach out to/,
+    /contact (?:the|your|their|a) /, /reach out to/,
   ] },
   { code: "seek_help", patterns: [
     /مراجعة (?:الطبيب|الطوارئ|أقرب)/, /استشارة (?:الطبيب|طبيب|مختص)/,
+    /راجع(?:وا)? الطبيب/, /اتصل(?:وا)? بالطبيب/,
     /طلب (?:المساعدة|الرعاية|المشورة) الطبية/,
-    /seek (?:medical|immediate|urgent|emergency)/, /consult (?:a |your )?doctor/,
+    /seek (?:medical|immediate|urgent|emergency)/, /consult (?:a |your |their )?doctor/,
+    /contact (?:their|your|a|the) (?:doctor|physician|health ?care provider|healthcare provider)/,
   ] },
 ];
 
@@ -418,6 +430,42 @@ export function extractOfficialActions(text: string): string[] {
     if (patterns.some((re) => re.test(t))) out.push(code);
   }
   return [...new Set(out)];
+}
+
+// Audience markers used to attribute an official action to WHO must perform it.
+// A recall commonly directs some actions only at the supply chain (distributors,
+// retailers, pharmacies, healthcare facilities) — e.g. "return to place of
+// purchase or discard" — while patients/consumers are told to stop use and
+// contact a doctor. The generated Arabic article must not tell patients to
+// perform an action the source directed only at facilities.
+const FACILITY_AUDIENCE_MARKERS = [
+  "distributor", "retailer", "wholesaler", "pharmacy", "pharmacies",
+  "healthcare facilit", "health care facilit", "hospital", "clinic",
+  "موزع", "تاجر", "صيدلي", "منشأة", "منشآت", "مستشفى", "عيادة",
+];
+const PATIENT_AUDIENCE_MARKERS = [
+  "patient", "consumer", "مريض", "مرضى", "مستهلك", "الجمهور",
+];
+
+/** Split text into clauses and attribute the official actions in each clause to
+ *  the audience that clause addresses. A clause with no explicit audience marker
+ *  contributes to neither set (we stay conservative and never guess). */
+export function officialActionsByAudience(
+  text: string,
+): { facility: Set<string>; patient: Set<string> } {
+  const facility = new Set<string>();
+  const patient = new Set<string>();
+  const clauses = lightNormalize(text).split(/[.!?؟؛،\n]+/);
+  for (const clause of clauses) {
+    if (!clause.trim()) continue;
+    const actions = extractOfficialActions(clause);
+    if (actions.length === 0) continue;
+    const isFacility = FACILITY_AUDIENCE_MARKERS.some((m) => clause.includes(m));
+    const isPatient = PATIENT_AUDIENCE_MARKERS.some((m) => clause.includes(m));
+    if (isFacility) for (const a of actions) facility.add(a);
+    if (isPatient) for (const a of actions) patient.add(a);
+  }
+  return { facility, patient };
 }
 
 // Explicit reassurance that OTHER batches/lots are unaffected/safe — dropping it
@@ -503,12 +551,18 @@ export function checkFactGrounding(
   // 6) Safety-alert official actions & unaffected-batch reassurance (blocking).
   //    Everything here is derived ONLY from the verified source text:
   //    - if the source explicitly instructs an official action (stop/avoid/
-  //      return/check/contact/seek help), the article MUST preserve at least one
-  //      such action — dropping the "what to do" from a recall is dangerous;
+  //      return/discard/check/contact/seek help), the article MUST preserve at
+  //      least one such action — dropping the "what to do" from a recall is
+  //      dangerous;
   //    - the article must NOT invent an action the source never stated — an
   //      unfounded "return the product"/"seek emergency care" can cause harm;
   //    - an explicit "other batches are safe" reassurance in the source must be
-  //      kept, so the alert does not needlessly condemn unaffected stock.
+  //      kept, so the alert does not needlessly condemn unaffected stock;
+  //    - if the source directed an action only at the supply chain
+  //      (distributors/retailers/pharmacies/facilities) and the article hands
+  //      that same action to patients/consumers, this is BLOCKING for a safety
+  //      alert — telling patients to "return"/"discard" a recalled medicine
+  //      when only facilities were instructed to do so is unsafe guidance.
   if (profile === "safety_alert") {
     const srcActions = new Set(extractOfficialActions(source.sourceText));
     const genActions = new Set(extractOfficialActions(generated));
@@ -521,6 +575,28 @@ export function checkFactGrounding(
     }
     if (hasUnaffectedBatchStatement(source.sourceText) && !hasUnaffectedBatchStatement(generated)) {
       errors.push("missing_unaffected_batch_statement");
+    }
+    // Conservative audience check: only flag an action the SOURCE gave to
+    // facilities but NOT to patients, when the ARTICLE puts that action in a
+    // patient-addressed clause. We do NOT fire when the source gives the same
+    // action to both audiences, nor when the article keeps it correctly aimed
+    // at facilities. For a safety alert this is BLOCKING (misdirected recall
+    // guidance can cause harm); other profiles keep it as a warning.
+    const srcAud = officialActionsByAudience(source.sourceText);
+    const genAud = officialActionsByAudience(generated);
+    for (const a of srcAud.facility) {
+      if (!srcAud.patient.has(a) && genAud.patient.has(a)) {
+        errors.push(`audience_misdirected_action:${a}`);
+      }
+    }
+  } else {
+    // Non-safety profiles: same misdirected-audience signal, but advisory only.
+    const srcAud = officialActionsByAudience(source.sourceText);
+    const genAud = officialActionsByAudience(generated);
+    for (const a of srcAud.facility) {
+      if (!srcAud.patient.has(a) && genAud.patient.has(a)) {
+        warnings.push(`audience_misdirected_action:${a}`);
+      }
     }
   }
   return { errors: dedupeStrings(errors), warnings: dedupeStrings(warnings) };

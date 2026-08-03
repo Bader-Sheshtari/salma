@@ -20,6 +20,7 @@ import {
   extractQuotes,
   checkFactGrounding,
   extractOfficialActions,
+  officialActionsByAudience,
   hasUnaffectedBatchStatement,
   parseWriterOutput,
   validateArticle,
@@ -626,4 +627,187 @@ test("these safety-alert action rules do NOT fire for non-safety profiles", () =
   );
   assert.ok(!errors.includes("missing_official_action"));
   assert.ok(!errors.includes("missing_unaffected_batch_statement"));
+});
+
+// --- E1.3F targeted-pilot fix: broadened actions + audience awareness -------
+// Exact FDA (Papaverine recall) wording that the earlier source-side parser
+// failed to recognize, producing the false-positive `invented_official_action:
+// return`. These lock in the broadened return/discard detection and the new
+// conservative, non-blocking audience check.
+
+test("FDA wording 'return to place of purchase' + 'discard' are detected", () => {
+  assert.deepEqual(
+    extractOfficialActions(
+      "Distributors, retailers and healthcare facilities should stop using and " +
+        "return to place of purchase or discard the product.",
+    ).sort(),
+    ["discard", "return", "stop_use"],
+  );
+});
+
+test("FDA wording 'arranging for return/replacement' is detected as return", () => {
+  assert.deepEqual(
+    extractOfficialActions(
+      "American Regent, Inc. is arranging for return/replacement of all recalled products.",
+    ).sort(),
+    ["return"],
+  );
+});
+
+test("FDA wording 'return or discard' detects BOTH return and discard", () => {
+  const a = extractOfficialActions("Please return or discard the recalled product.");
+  assert.ok(a.includes("return"));
+  assert.ok(a.includes("discard"));
+});
+
+test("FDA wording patient 'stop using and contact doctor' detects stop_use + contact/seek_help", () => {
+  const a = extractOfficialActions(
+    "Patients should stop using them and contact their doctor or health care provider.",
+  );
+  assert.ok(a.includes("stop_use"));
+  assert.ok(a.includes("contact") || a.includes("seek_help"));
+});
+
+test("Arabic 'إعادة المنتج إلى مكان الشراء' and 'التخلص من المنتج' are detected", () => {
+  assert.ok(extractOfficialActions("يرجى إعادة المنتج إلى مكان الشراء").includes("return"));
+  assert.ok(extractOfficialActions("يجب التخلص من المنتج بأمان").includes("discard"));
+});
+
+test("a safety alert mentioning return PASSES when the verified source contains return", () => {
+  // This is the corrected FDA case: the source DOES instruct return, so an
+  // Arabic article that faithfully renders it must no longer be flagged.
+  const src =
+    "Distributors and healthcare facilities should stop using and return to place of " +
+    "purchase or discard the product.";
+  const body =
+    "دعت الجهة الموزّعين والمنشآت الصحية إلى التوقف عن استخدام المنتج وإرجاعه إلى مكان الشراء أو التخلص من المنتج. " +
+    repeatTo(130, "تتابع الجهة الوضع وتوضح أن السحب يشمل الدفعة المعنية فقط");
+  const { errors } = checkFactGrounding(
+    { title: "سحب منتج ودعوة الموزّعين لإعادته", excerpt: "", body },
+    { sourceText: src },
+    "safety_alert",
+  );
+  assert.ok(!errors.some((e) => e.startsWith("invented_official_action")));
+  assert.ok(!errors.includes("missing_official_action"));
+});
+
+test("a safety alert mentioning return is STILL BLOCKED when the source lacks return", () => {
+  // Absent-action rule must NOT be weakened: source asks only to stop use and
+  // contact a doctor; inventing a return instruction is still a rejection.
+  const src = "Patients should stop using the product and contact their doctor.";
+  const body =
+    "دعت الجهة المرضى إلى التوقف عن استخدام المنتج وإرجاعه إلى نقاط البيع. " +
+    repeatTo(130, "توضّح الجهة أن التوقف عن استخدام المنتج إجراء وقائي يشمل الدفعة المعنية");
+  const { errors } = checkFactGrounding(
+    { title: "دعوة للتوقف عن استخدام منتج", excerpt: "", body },
+    { sourceText: src },
+    "safety_alert",
+  );
+  assert.ok(errors.includes("invented_official_action:return"));
+});
+
+test("officialActionsByAudience attributes each action to the audience addressed", () => {
+  const src =
+    "Distributors and healthcare facilities should stop using and return to place of " +
+    "purchase or discard the product. Patients should stop using them and contact their doctor.";
+  const { facility, patient } = officialActionsByAudience(src);
+  assert.ok(facility.has("return"));
+  assert.ok(facility.has("discard"));
+  assert.ok(!patient.has("return"));
+  assert.ok(!patient.has("discard"));
+  assert.ok(patient.has("stop_use"));
+});
+
+test("safety_alert: facility-only return AND discard aimed at patients is BLOCKED", () => {
+  const src =
+    "Distributors and healthcare facilities should stop using and return to place of " +
+    "purchase or discard the product. " +
+    "Patients should stop using them and contact their doctor or health care provider.";
+  const body =
+    "دعت الجهة المرضى إلى التوقف عن استخدام المنتج وإرجاعه إلى مكان الشراء أو التخلص من المنتج. " +
+    repeatTo(130, "تتابع الجهة الوضع وتوضح أن السحب يشمل الدفعة المعنية فقط");
+  const { errors } = checkFactGrounding(
+    { title: "سحب منتج وإرشادات للمرضى", excerpt: "", body },
+    { sourceText: src },
+    "safety_alert",
+  );
+  // Source directs return/discard at facilities only; the article aims them at
+  // patients — for a safety alert this now BLOCKS the draft.
+  assert.ok(errors.includes("audience_misdirected_action:return"));
+  assert.ok(errors.includes("audience_misdirected_action:discard"));
+  // Not an invented action — the source DOES contain these (just for facilities).
+  assert.ok(!errors.some((e) => e.startsWith("invented_official_action")));
+});
+
+test("safety_alert: correct audience separation PASSES (no misdirected block)", () => {
+  const src =
+    "Distributors and healthcare facilities should stop using and return to place of " +
+    "purchase or discard the product. " +
+    "Patients should stop using them and contact their doctor or health care provider.";
+  const body =
+    "دعت الجهة الموزّعين والمنشآت الصحية إلى التوقف عن استخدام المنتج وإرجاعه إلى مكان الشراء أو التخلص من المنتج، " +
+    "بينما على المرضى التوقف عن استخدام المنتج والتواصل مع الطبيب. " +
+    repeatTo(130, "تتابع الجهة الوضع وتوضح أن السحب يشمل الدفعة المعنية فقط");
+  const { errors } = checkFactGrounding(
+    { title: "سحب منتج بإرشادات لكل فئة", excerpt: "", body },
+    { sourceText: src },
+    "safety_alert",
+  );
+  assert.ok(!errors.some((e) => e.startsWith("audience_misdirected_action")));
+  assert.ok(!errors.some((e) => e.startsWith("invented_official_action")));
+});
+
+test("safety_alert: an action given to BOTH audiences by the source PASSES for patients", () => {
+  // Source tells patients themselves to return, so the article may too.
+  const src =
+    "Distributors should return the product to place of purchase. " +
+    "Patients should also return the product and stop using it.";
+  const body =
+    "دعت الجهة المرضى إلى التوقف عن استخدام المنتج وإرجاعه إلى مكان الشراء. " +
+    repeatTo(130, "تتابع الجهة الوضع وتوضح أن السحب يشمل الدفعة المعنية فقط");
+  const { errors } = checkFactGrounding(
+    { title: "سحب منتج ودعوة الجميع لإعادته", excerpt: "", body },
+    { sourceText: src },
+    "safety_alert",
+  );
+  assert.ok(!errors.some((e) => e.startsWith("audience_misdirected_action")));
+});
+
+test("non-safety profile keeps misdirected audience as a WARNING, not a block", () => {
+  const src =
+    "Distributors and healthcare facilities should return to place of purchase or discard the product. " +
+    "Patients should stop using it and contact their doctor.";
+  const body =
+    "توصي الدراسة المرضى بإعادة المنتج إلى مكان الشراء أو التخلص من المنتج. " +
+    repeatTo(130, "تتابع الجهة الوضع وتوضح تفاصيل المتابعة للمعنيين");
+  const { errors, warnings } = checkFactGrounding(
+    { title: "دراسة حول منتج", excerpt: "", body },
+    { sourceText: src },
+    "research_study",
+  );
+  assert.ok(warnings.includes("audience_misdirected_action:return"));
+  assert.ok(warnings.includes("audience_misdirected_action:discard"));
+  assert.ok(!errors.some((e) => e.startsWith("audience_misdirected_action")));
+});
+
+test("safety_alert: FDA Papaverine wording PASSES when accurately represented", () => {
+  // Facilities get return/discard; patients get stop-use + contact a doctor.
+  // An article that mirrors that split must not be blocked.
+  const src =
+    "Distributors, retailers and healthcare facilities that have the recalled product " +
+    "should stop using and return to place of purchase or discard the product. " +
+    "Patients that use this recalled product should stop using it and contact their " +
+    "doctor or health care provider.";
+  const body =
+    "أوصت الجهة الموزّعين وتجار التجزئة والمنشآت الصحية بالتوقف عن استخدام المنتج المسحوب وإرجاعه إلى مكان الشراء أو التخلص من المنتج، " +
+    "فيما ينبغي على المرضى التوقف عن استخدام المنتج والتواصل مع الطبيب. " +
+    repeatTo(140, "تتابع الجهة الوضع وتوضح أن السحب يشمل الدفعة المعنية فقط وتبقى بقية المنتجات غير متأثرة");
+  const { errors } = checkFactGrounding(
+    { title: "سحب منتج بابافيرين وإرشادات لكل فئة", excerpt: "", body },
+    { sourceText: src },
+    "safety_alert",
+  );
+  assert.ok(!errors.some((e) => e.startsWith("audience_misdirected_action")));
+  assert.ok(!errors.some((e) => e.startsWith("invented_official_action")));
+  assert.ok(!errors.includes("missing_official_action"));
 });
