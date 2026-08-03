@@ -331,7 +331,7 @@ export type WriterHttpResult =
 // Result of parsing + factually validating one writer output. `reason` is the
 // blocking rejection (parse error or the validator's rejectionReason).
 export type WriterValidation =
-  | { ok: true; article: { title: string; excerpt: string; body: string }; readMinutes: number }
+  | { ok: true; article: { title: string; excerpt: string; body: string; summary?: string }; readMinutes: number }
   | { ok: false; reason: string };
 
 export type WriterOrchestrationResult = {
@@ -343,7 +343,7 @@ export type WriterOrchestrationResult = {
   // to a fallback was warranted.
   modelUsed: string | null;
   usedFallback: boolean;
-  article?: { title: string; excerpt: string; body: string };
+  article?: { title: string; excerpt: string; body: string; summary?: string };
   readMinutes?: number;
   // Decision `rejection_reason` when ok=false.
   rejection?: string;

@@ -26,6 +26,10 @@ import {
   validateArticle,
   buildWritingInstructions,
   PROFILE_WORD_BANDS,
+  isCodeLikeEntity,
+  classifyEntityVisibility,
+  safetyIdentifierNeeded,
+  editorialQualityWarnings,
 } from "./salmaWriter.ts";
 
 // --- profile selection -----------------------------------------------------
@@ -898,4 +902,262 @@ test("safety_alert: FDA Papaverine wording PASSES when accurately represented", 
   assert.ok(!errors.some((e) => e.startsWith("audience_misdirected_action")));
   assert.ok(!errors.some((e) => e.startsWith("invented_official_action")));
   assert.ok(!errors.includes("missing_official_action"));
+});
+
+// --- Editorial compression & reader relevance (E1.3G) ----------------------
+//
+// Core principle under test: a fact required for VALIDATION/PRESERVATION is not
+// automatically required to appear in the PUBLISHED article. Verification-only
+// identifiers (lot/NDC/registration codes) may stay in the fact packet without
+// being forced into the visible story, while the reader-meaningful product
+// identity must still appear for a safety alert.
+
+// Verified FDA Papaverine fact packet (English source) reused as the regression
+// fixture: facilities return/discard, patients stop-use + contact a doctor, no
+// adverse events reported, other lots unaffected.
+const PAPAVERINE_SOURCE =
+  "FDA announces a voluntary recall of one lot of Papaverine Hydrochloride Injection, USP " +
+  "due to the presence of particulate matter found in the vials. Lot 25202, NDC 0517-4002-25. " +
+  "Distributors, retailers and healthcare facilities that have the recalled product should stop " +
+  "using and return to place of purchase or discard the product. Patients that use this recalled " +
+  "product should stop using it and contact their doctor or health care provider. To date, no " +
+  "adverse events have been reported related to this recall. Other lots are not affected and remain safe.";
+
+// The entities a real extraction yields: the product identity (kept) and the
+// lot code (verification-only — omit from the visible article).
+const PAPAVERINE_MUST_PRESERVE = ["Papaverine Hydrochloride", "25202"];
+
+test("isCodeLikeEntity: only opaque codes/bare numbers are code-like; names are not", () => {
+  assert.equal(isCodeLikeEntity("25202"), true); // lot
+  assert.equal(isCodeLikeEntity("0517-4002-25"), true); // NDC
+  assert.equal(isCodeLikeEntity("L2291"), true); // batch code
+  assert.equal(isCodeLikeEntity("١٢٠٠"), true); // Arabic-digit number
+  assert.equal(isCodeLikeEntity("8400"), true); // a bare number is code-like by SHAPE...
+  // Reader-meaningful identity / context are never code-like.
+  assert.equal(isCodeLikeEntity("Papaverine Hydrochloride"), false);
+  assert.equal(isCodeLikeEntity("الكويت"), false);
+  assert.equal(isCodeLikeEntity("هيئة الغذاء والدواء"), false);
+});
+
+test("classifyEntityVisibility: shape alone does NOT decide — profile + context do", () => {
+  // The SAME bare number "8400" is essential in a study (a sample size the
+  // reader needs) but verification-only when it sits behind an NDC/registration
+  // label — proving classification is context-aware, not shape-based.
+  const study =
+    "A study of 8400 participants over 12 weeks found an 18% reduction in risk. " +
+    "The association does not prove causation.";
+  assert.equal(classifyEntityVisibility("8400", "research_study", study), "essential");
+
+  const reg =
+    "Registration no. 8400 was issued for the facility. The new fee of 25 KD is " +
+    "effective from 2026-09-01.";
+  assert.equal(classifyEntityVisibility("8400", "regulation_or_service", reg), "verification_only");
+
+  // A safety-alert lot code is CONDITIONAL (needed only to disambiguate).
+  assert.equal(classifyEntityVisibility("25202", "safety_alert", PAPAVERINE_SOURCE), "conditional");
+  // The NDC (opaque, hyphenated, cued by "NDC") is verification-only.
+  assert.equal(classifyEntityVisibility("0517-4002-25", "safety_alert", PAPAVERINE_SOURCE), "verification_only");
+  // A reader-facing name is always essential regardless of profile.
+  assert.equal(classifyEntityVisibility("Papaverine Hydrochloride", "safety_alert", PAPAVERINE_SOURCE), "essential");
+});
+
+test("safety alert: a compact article omitting lot/NDC still validates", () => {
+  const body =
+    "أعلنت هيئة الغذاء والدواء الأميركية سحب دفعة من حقن بابافيرين Papaverine Hydrochloride " +
+    "بعد العثور على جسيمات دقيقة داخل العبوات قد تؤذي المرضى إذا دخلت مجرى الدم.\n\n" +
+    "ونصحت الجهة المرضى الذين يستخدمون المنتج المسحوب بالتوقف عن استخدامه والتواصل مع الطبيب " +
+    "عند ظهور أي أعراض. أما الموزّعون والصيدليات والمنشآت الصحية فعليهم إرجاع المنتج إلى مكان " +
+    "الشراء أو التخلص من المنتج.\n\n" +
+    "ولم تُسجّل حتى الآن أي أعراض جانبية مرتبطة بهذا السحب، فيما تبقى بقية الدفعات غير متأثرة " +
+    "وآمنة للاستخدام وفق ما أعلنته الجهة المختصة.";
+  const v = validateArticle({
+    article: {
+      title: "سحب دفعة من حقن بابافيرين في أميركا بعد العثور على جسيمات داخل العبوات",
+      excerpt:
+        "أعلنت السلطات الأميركية سحب دفعة من حقن بابافيرين بعد رصد جسيمات غريبة داخل العبوات قد تشكّل خطراً على المرضى.",
+      body,
+      profile: "safety_alert",
+    },
+    source: { sourceText: PAPAVERINE_SOURCE, mustPreserve: PAPAVERINE_MUST_PRESERVE },
+  });
+  // The lot code 25202 and NDC were omitted, yet the article is still creatable:
+  // grounding no longer forces verification-only identifiers into the story.
+  assert.equal(v.ok, true);
+  assert.ok(!v.errors.some((e) => e.startsWith("missing_essential_entity")));
+  // No editorial complaints on the compact, well-formed article.
+  assert.ok(!v.warnings.some((w) => w.startsWith("editorial_")));
+});
+
+test("safety alert: dropping the product identity STILL fails", () => {
+  // Same story but the article never names the product at all.
+  const body =
+    "أعلنت الجهة سحب دفعة من أحد المستحضرات بعد العثور على جسيمات داخل العبوات قد تؤذي المرضى.\n\n" +
+    "ونصحت المرضى بالتوقف عن استخدام المنتج والتواصل مع الطبيب، وطلبت من الموزّعين والمنشآت الصحية " +
+    "إرجاع المنتج إلى مكان الشراء أو التخلص من المنتج.\n\n" +
+    "ولم تُسجّل أي أعراض جانبية، فيما تبقى بقية الدفعات غير متأثرة وآمنة.";
+  const v = validateArticle({
+    article: { title: "سحب دفعة من مستحضر طبي بعد رصد جسيمات", excerpt: "", body, profile: "safety_alert" },
+    source: { sourceText: PAPAVERINE_SOURCE, mustPreserve: PAPAVERINE_MUST_PRESERVE },
+  });
+  assert.equal(v.ok, false);
+  assert.ok(v.errors.some((e) => e === "missing_essential_entity:Papaverine Hydrochloride"));
+  // The omitted lot code is NOT itself a reason (verification-only).
+  assert.ok(!v.errors.some((e) => e === "missing_essential_entity:25202"));
+});
+
+test("editorial warnings: a regulatory-detail-heavy article is flagged", () => {
+  const body =
+    "أعلنت FDA سحب دفعة من Papaverine Hydrochloride Injection رقم الدفعة 25202 ورقم NDC 0517-4002-25 " +
+    "بسبب رصد جسيمات، في إطار عملية recall رسمية. " +
+    "ويجب على المرضى التوقف عن استخدام Papaverine Hydrochloride Injection والتواصل مع الطبيب. " +
+    "وعلى الموزّعين والمنشآت الصحية إرجاع Papaverine Hydrochloride Injection إلى مكان الشراء أو التخلص من المنتج. " +
+    "وتبقى بقية الدفعات غير متأثرة وآمنة.";
+  const warnings = editorialQualityWarnings(
+    { title: "FDA تعلن recall لدفعة Papaverine Hydrochloride Injection رقم 25202", excerpt: "", body },
+    "safety_alert",
+    { verificationOnly: ["25202"] },
+  );
+  assert.ok(warnings.includes("editorial_english_name_repeated"));
+  assert.ok(warnings.includes("editorial_excess_english_tokens"));
+  assert.ok(warnings.includes("editorial_excess_identifiers"));
+});
+
+test("editorial warnings: excerpt duplicating the title is flagged", () => {
+  const warnings = editorialQualityWarnings(
+    {
+      title: "سحب دفعة من حقن بابافيرين بعد العثور على جسيمات",
+      excerpt: "سحب دفعة من حقن بابافيرين بعد العثور على جسيمات",
+      body: "أعلنت الجهة سحب دفعة من الحقن بعد رصد جسيمات، ونصحت المرضى بالتوقف عن استخدامها فوراً.",
+    },
+    "safety_alert",
+  );
+  assert.ok(warnings.includes("editorial_excerpt_duplicates_title"));
+});
+
+test("editorial warnings: an over-long body is flagged as a compression opportunity", () => {
+  const longBody = repeatTo(PROFILE_WORD_BANDS.quick_news.max + 40, "تتابع الجهة الوضع الصحي وتنشر تفاصيل إضافية للقارئ");
+  const warnings = editorialQualityWarnings(
+    { title: "خبر صحي سريع واضح ومناسب للطول المطلوب", excerpt: "موجز مختلف تماماً عن العنوان", body: longBody },
+    "quick_news",
+  );
+  assert.ok(warnings.includes("editorial_body_over_length"));
+});
+
+// --- Profile-aware relevance regressions (research / regulation / safety) ---
+//
+// These prove the fix for the blanket shape rule: a number is NOT automatically
+// verification-only. Its relevance depends on the article profile and context.
+
+test("research study: an 8400 sample and 18% result stay visible and grounded", () => {
+  const src =
+    "A study of 8400 participants followed over 12 weeks found an 18% reduction in risk. " +
+    "Researchers said the association does not prove causation, citing sample limitations.";
+  // Sample size is reader-essential for a study, not a verification-only code.
+  assert.equal(classifyEntityVisibility("8400", "research_study", src), "essential");
+  const body =
+    "أظهرت دراسة حديثة شملت 8400 مشارك جرت متابعتهم على مدى 12 أسبوعاً أن الخطر انخفض بنسبة 18% لدى المجموعة المتابَعة. " +
+    "وأوضح الباحثون أن هذه النتيجة تمثّل ارتباطاً إحصائياً يستدعي مزيداً من الدراسة قبل تعميمه. " +
+    repeatTo(210, "وأشار الفريق إلى محدودية حجم العينة وإلى الحاجة لدراسات أوسع قبل تعميم النتائج على عموم السكان");
+  const v = validateArticle({
+    article: {
+      title: "دراسة تكشف انخفاض الخطر لدى آلاف المشاركين خلال أسابيع من المتابعة",
+      excerpt: "خلصت دراسة على آلاف المشاركين إلى انخفاض ملموس في الخطر خلال أسابيع من المتابعة.",
+      body,
+      profile: "research_study",
+    },
+    source: { sourceText: src, mustPreserve: ["8400"] },
+  });
+  assert.equal(v.ok, true);
+  assert.ok(body.includes("8400")); // sample size surfaced
+  assert.ok(body.includes("18%")); // effect size surfaced and grounded
+  assert.ok(!v.errors.some((e) => e.startsWith("missing_essential_entity")));
+  assert.ok(!v.warnings.includes("editorial_excess_identifiers"));
+});
+
+test("regulation: fee/effective date stay visible; an irrelevant NDC/date are verification-only", () => {
+  const src =
+    "The Ministry set a new fee of 25 KD, effective from 2026-09-01. " +
+    "An unrelated registration NDC 0517-4002-25 and a distribution date of 2026-01-05 also appear on file.";
+  // Reader-relevant regulatory numbers → essential.
+  assert.equal(classifyEntityVisibility("25", "regulation_or_service", src), "essential");
+  assert.equal(classifyEntityVisibility("2026-09-01", "regulation_or_service", src), "essential");
+  // Bureaucratic identifiers → verification-only (safe to omit).
+  assert.equal(classifyEntityVisibility("0517-4002-25", "regulation_or_service", src), "verification_only");
+  assert.equal(classifyEntityVisibility("2026-01-05", "regulation_or_service", src), "verification_only");
+
+  const body =
+    "قرّرت الوزارة فرض رسم جديد قدره 25 ديناراً يبدأ سريانه اعتباراً من 2026-09-01 على الفئات المعنية. " +
+    repeatTo(170, "وأوضحت الوزارة أن القرار يسري على جميع المشمولين وتتوفر تفاصيله عبر قنواتها الرسمية للمراجعين");
+  const v = validateArticle({
+    article: {
+      title: "الوزارة تفرض رسماً جديداً قدره 25 ديناراً اعتباراً من سبتمبر",
+      excerpt: "أقرّت الوزارة رسماً جديداً يبدأ سريانه مطلع سبتمبر على الفئات المعنية.",
+      body,
+      profile: "regulation_or_service",
+    },
+    source: { sourceText: src, mustPreserve: ["25", "0517-4002-25"] },
+  });
+  assert.equal(v.ok, true);
+  // Omitting the NDC does not block the draft.
+  assert.ok(!v.errors.some((e) => e.startsWith("missing_essential_entity")));
+});
+
+test("safety alert: batch/strength is REQUIRED when multiple variants are ambiguous", () => {
+  const src =
+    "FDA recalls two lots of an injection: 250 mg and 500 mg strengths. " +
+    "Lots 25202 and 25203 are affected. Patients should stop using and contact their doctor.";
+  // Two strengths / two lots → the identifier is needed to disambiguate.
+  assert.equal(safetyIdentifierNeeded(src), true);
+  assert.equal(classifyEntityVisibility("25202", "safety_alert", src), "conditional");
+  const body =
+    "أعلنت الجهة سحب دفعات من أحد المستحضرات الدوائية بعد رصد مشكلة في التصنيع. " +
+    "ونصحت المرضى بالتوقف عن استخدام المنتج والتواصل مع الطبيب. " +
+    repeatTo(140, "وتتابع الجهة الوضع وتوضح تفاصيل السحب للمعنيين عبر قنواتها الرسمية");
+  const v = validateArticle({
+    article: { title: "سحب دفعات من مستحضر دوائي ونصائح للمرضى", excerpt: "", body, profile: "safety_alert" },
+    source: { sourceText: src, mustPreserve: ["25202"] },
+  });
+  // The ambiguous batch omission now BLOCKS: the reader can't tell which variant.
+  assert.equal(v.ok, false);
+  assert.ok(v.errors.some((e) => e === "missing_essential_entity:25202"));
+});
+
+// --- Optional "باختصار" summary field (additive schema) --------------------
+
+test("parser accepts an optional summary field", () => {
+  const r = parseWriterOutput(
+    '{"title":"عنوان صحي واضح ومناسب","excerpt":"موجز","summary":"جملة باختصار للقارئ المستعجل","body":"نص الخبر الكامل هنا."}',
+  );
+  assert.ok(r.ok);
+  assert.equal(r.ok && r.article.summary, "جملة باختصار للقارئ المستعجل");
+});
+
+test("the legacy three-field object still parses without a summary", () => {
+  const r = parseWriterOutput('{"title":"عنوان صحي واضح","excerpt":"موجز","body":"نص الخبر الكامل."}');
+  assert.ok(r.ok);
+  assert.equal(r.ok && "summary" in r.article, false);
+});
+
+test("a non-string summary is a schema violation", () => {
+  const r = parseWriterOutput('{"title":"عنوان","excerpt":"","body":"نص","summary":123}');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_schema_invalid");
+});
+
+test("an oversized summary is a schema violation", () => {
+  const huge = "ا".repeat(401);
+  const r = parseWriterOutput(`{"title":"عنوان","excerpt":"","body":"نص كافٍ للخبر","summary":"${huge}"}`);
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_schema_invalid");
+});
+
+test("writing instructions carry the compression rules and optional summary field", () => {
+  const instr = buildWritingInstructions("safety_alert");
+  assert.ok(instr.includes("مبدأ التركيز التحريري"));
+  assert.ok(instr.includes("باختصار"));
+  assert.ok(instr.includes("\"summary\""));
+  // Still a bare object with the three required fields and no profile field.
+  assert.ok(instr.includes("\"title\""));
+  assert.ok(instr.includes("\"body\""));
+  assert.ok(!instr.includes("\"profile\""));
 });

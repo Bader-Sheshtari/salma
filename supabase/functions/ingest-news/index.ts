@@ -434,7 +434,7 @@ function renderWriterPacket(input: {
 }
 
 type WriterOutcome =
-  | { ok: true; article: { title: string; excerpt: string; body: string }; readMinutes: number; audit: WriterAudit }
+  | { ok: true; article: { title: string; excerpt: string; body: string; summary?: string }; readMinutes: number; audit: WriterAudit }
   | { ok: false; rejection: string; audit: WriterAudit };
 
 // Select the profile, route to the approved model (with technical-failure
@@ -528,7 +528,13 @@ async function writeArticle(input: {
     if (!v.ok) return { ok: false, reason: v.rejectionReason ?? "validation_failed" };
     return {
       ok: true,
-      article: { title: v.cleanTitle, excerpt: parsed.article.excerpt, body: parsed.article.body },
+      article: {
+        title: v.cleanTitle,
+        excerpt: parsed.article.excerpt,
+        body: parsed.article.body,
+        // Optional "باختصار" quick summary, only when the writer supplied one.
+        ...(parsed.article.summary ? { summary: parsed.article.summary } : {}),
+      },
       readMinutes: v.readMinutes,
     };
   };
@@ -973,7 +979,7 @@ async function runIngestion(
   const insertRepresentative = async (
     item: PendingItem,
     supporting: Candidate[],
-    written: { article: { title: string; excerpt: string; body: string }; readMinutes: number; audit: WriterAudit },
+    written: { article: { title: string; excerpt: string; body: string; summary?: string }; readMinutes: number; audit: WriterAudit },
     meta: DedupeMeta = {},
   ): Promise<string | null> => {
     const { draft, chosen, citation, key } = item;
@@ -994,6 +1000,7 @@ async function runIngestion(
       origin: "ai",
       category_slug: draft.category_slug,
       excerpt: article.excerpt || null,
+      ai_summary: article.summary || null,
       body: article.body || null,
       read_minutes: written.readMinutes,
       relevance_score: draft.relevance_score,

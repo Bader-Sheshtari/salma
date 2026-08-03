@@ -482,6 +482,172 @@ export function hasUnaffectedBatchStatement(text: string): boolean {
   return UNAFFECTED_BATCH_PATTERNS.some((re) => re.test(t));
 }
 
+// --- Editorial information hierarchy: profile-aware entity visibility ------
+//
+// A fact required for VALIDATION/PRESERVATION is not automatically required to
+// appear in the PUBLISHED article — but whether a fact is reader-essential is
+// NOT decided by how it looks. A NUMBER can be essential (a study's sample size
+// or effect, a regulation's fee/deadline, a safety alert's batch when several
+// variants exist) or verification-only (an NDC, a distribution/expiry date, a
+// DOI). Visibility therefore depends on the article PROFILE and the surrounding
+// SOURCE CONTEXT, not on a blanket numeric/code-like shape test.
+//
+// `mustPreserve` still means "do not alter or contradict" (the number/quote
+// checks bind any value that DOES appear); this layer only decides which
+// entities the visible article is REQUIRED to surface.
+
+// Three visibility classes for a preserved entity in a given article context:
+//   - "essential"          → the article must surface it (reader can't act /
+//                            understand / identify the finding without it).
+//   - "conditional"        → surface it only when it's needed to disambiguate
+//                            the affected product (safety alerts: lot/strength/
+//                            dosage form/population/manufacturer).
+//   - "verification_only"  → keep for grounding, omit from the visible story
+//                            unless genuinely necessary (NDC/registration/
+//                            distribution/expiry/packaging/DOI/internal IDs).
+export type EntityVisibility = "essential" | "conditional" | "verification_only";
+
+/**
+ * Shape gate: is this entity an opaque code / bare number rather than a
+ * reader-facing name? A genuine name ("Papaverine Hydrochloride", "الكويت",
+ * "هيئة الغذاء والدواء") carries a run of ≥4 letters and is NEVER a candidate
+ * for omission — only code-like tokens are even considered verification-only.
+ */
+export function isCodeLikeEntity(entity: string): boolean {
+  const compact = foldDigits((entity ?? "").trim()).replace(/[\s.\-/#:]/g, "");
+  if (compact === "") return false;
+  if (/^\d+$/.test(compact)) return true; // pure number
+  // A digit-bearing token with no real multi-letter word (e.g. "L2291", "AB12C").
+  return /\d/.test(compact) && !/[A-Za-z\u0600-\u06FF]{4,}/.test(compact);
+}
+
+// Context cues (matched in a small window around the entity in the source).
+// Verification-only labels apply across every profile.
+const VERIFICATION_ONLY_CUES = [
+  "ndc", "registration", "reg no", "reg. no", "رقم التسجيل", "التسجيل",
+  "expir", "expiry", "expiration", "الصلاحية", "انتهاء",
+  "distribut", "توزيع", "وزّع", "وزع",
+  "packag", "carton", "التغليف", "التعبئة", "عبوة رقم",
+  "doi", "issn", "pmid", "identifier",
+];
+// Numeric facts that are normally reader-essential, per profile.
+const ESSENTIAL_NUMERIC_CUES: Record<WritingProfile, string[]> = {
+  quick_news: [
+    "start", "starts", "begins", "يبدأ", "hour", "hours", "ساعة", "الساعة",
+    "am", "pm", "صباح", "مساء", "location", "في", "from", "من",
+  ],
+  standard_news: [
+    "percent", "%", "نسبة", "بنسبة", "قتل", "أصيب", "بلغ", "عدد",
+  ],
+  regulation_or_service: [
+    "fee", "fees", "رسوم", "fine", "fines", "penalty", "غرامة", "دينار", "kd",
+    "effective", "effect", "يبدأ", "يسري", "اعتبار", "starting",
+    "deadline", "مهلة", "الموعد النهائي", "eligib", "الأهلية", "سن",
+  ],
+  safety_alert: [
+    // Numbers that are always reader-relevant even in a safety alert are rare;
+    // the risk/population figures below help keep them visible.
+    "%", "نسبة", "cases", "حالة", "حالات",
+  ],
+  research_study: [
+    "participant", "participants", "مشارك", "مشاركا", "subject", "subjects",
+    "sample", "عيّنة", "عينة", "enrolled", "شملت", "n =", "n=",
+    "percent", "%", "نسبة", "بنسبة", "week", "weeks", "أسبوع", "شهر", "month",
+    "months", "year", "years", "سنة", "عام", "duration", "مدة", "followed",
+    "متابعة", "risk", "odds", "hazard", "reduction", "increase", "decrease",
+    "انخفاض", "ارتفاع", "زيادة",
+  ],
+};
+// Safety-alert identifiers that only matter to pin down WHICH product/variant.
+const SAFETY_CONDITIONAL_CUES = [
+  "lot", "lots", "batch", "batches", "دفعة", "دفعات", "تشغيلة", "تشغيلات",
+  "mg", "mcg", "ml", "ملغ", "مغ", "ميكروغرام", "strength", "concentration",
+  "تركيز", "قوة", "dosage", "dose", "جرعة", "capsule", "tablet", "injection",
+  "حقن", "أقراص", "كبسول", "manufactur", "الشركة المصنّعة", "المصنّعة",
+];
+
+function matchesAny(text: string, cues: string[]): boolean {
+  return cues.some((c) => text.includes(c));
+}
+
+/** A code with a hyphen/slash or a ≥6-digit run reads as an opaque identifier
+ *  (NDC / registration) even without a labeling cue. */
+function isOpaqueIdentifier(entity: string): boolean {
+  const e = foldDigits((entity ?? "").trim());
+  if (/[-/]/.test(e)) return true;
+  return /\d{6,}/.test(e.replace(/[\s.]/g, ""));
+}
+
+/** Lowercased/folded window immediately before and after the entity's first
+ *  occurrence in the source. The preceding label ("Lot 25202", "sample of 800")
+ *  is the strongest signal, so it is weighted first by the caller. */
+function entityContext(sourceText: string, entity: string): { before: string; after: string } {
+  const src = foldDigits(sourceText ?? "").toLowerCase();
+  const needle = foldDigits(entity ?? "").toLowerCase().trim();
+  if (!needle) return { before: "", after: "" };
+  const idx = src.indexOf(needle);
+  if (idx === -1) return { before: "", after: "" };
+  return {
+    before: src.slice(Math.max(0, idx - 24), idx),
+    after: src.slice(idx + needle.length, idx + needle.length + 16),
+  };
+}
+
+/**
+ * Decide how visible a preserved entity should be, given the article profile and
+ * the source context around it. Names are always essential; only code-like
+ * tokens can be verification-only. The label PRECEDING the value dominates
+ * ("Lot 25202" → conditional even though "NDC …" follows it), then the trailing
+ * context, then a shape fallback (opaque codes default to verification-only, a
+ * bare short number defaults to essential — a number may be essential).
+ */
+export function classifyEntityVisibility(
+  entity: string,
+  profile: WritingProfile,
+  sourceText: string,
+): EntityVisibility {
+  if (!isCodeLikeEntity(entity)) return "essential"; // reader-facing name/identity
+  const { before, after } = entityContext(sourceText, entity);
+  const essentialCues = ESSENTIAL_NUMERIC_CUES[profile];
+  const conditionalCues = profile === "safety_alert" ? SAFETY_CONDITIONAL_CUES : [];
+
+  // Preceding label wins.
+  if (matchesAny(before, VERIFICATION_ONLY_CUES)) return "verification_only";
+  if (matchesAny(before, essentialCues)) return "essential";
+  if (matchesAny(before, conditionalCues)) return "conditional";
+  // Then the trailing context ("8400 participants", "25202 lot").
+  if (matchesAny(after, VERIFICATION_ONLY_CUES)) return "verification_only";
+  if (matchesAny(after, essentialCues)) return "essential";
+  if (matchesAny(after, conditionalCues)) return "conditional";
+  // No informative context: an opaque identifier is verification-only; any other
+  // bare number stays essential (omitting a possibly-essential figure is worse).
+  return isOpaqueIdentifier(entity) ? "verification_only" : "essential";
+}
+
+/**
+ * For a safety alert, is a CONDITIONAL identifier (lot/strength/variant) actually
+ * needed for an accurate, unambiguous warning? It is needed when the source
+ * describes multiple lots or multiple strengths (the reader must know which one).
+ * It is NOT needed when the source clearly scopes the recall to a single batch —
+ * the reader action ("stop using the recalled product") stays accurate without
+ * the code.
+ */
+export function safetyIdentifierNeeded(sourceText: string): boolean {
+  const t = lightNormalize(sourceText);
+  const singleBatch =
+    /(?:one|a single|only one|single)\s+(?:lot|batch)/.test(t) ||
+    /دفعة واحدة|دفعة محددة|تشغيلة واحدة/.test(t);
+  if (singleBatch) return false;
+  // Multiple distinct strengths → ambiguous without the strength.
+  const strengths = new Set((t.match(/\d+(?:\.\d+)?\s?(?:mg|mcg|ml|ملغ|مغ|ميكروغرام)/g) ?? []));
+  if (strengths.size > 1) return true;
+  // Multiple lot/batch codes near a plural lot/batch mention → ambiguous.
+  const lotSpans = (t.match(/(?:lots?|batches|دفعات|دفعتين|تشغيلات|دفعتان)[^.]{0,80}/g) ?? []).join(" ");
+  const lotNums = new Set((foldDigits(lotSpans).match(/\b[a-z]?\d{3,}\b/g) ?? []));
+  if (lotNums.size > 1) return true;
+  return false;
+}
+
 /**
  * Conservative, blocking fact-grounding checks. Any error here must prevent a
  * pending draft. Nothing is silently repaired — a factual contradiction is a
@@ -533,14 +699,33 @@ export function checkFactGrounding(
     }
   }
 
-  // 5) Essential entities (drug/product/org/country names, batch numbers, the
-  //    officially requested action) must be preserved. For a safety alert a
-  //    missing or altered essential entity is BLOCKING — a recall notice that
-  //    drops the drug/batch/authority it concerns is dangerous, so it must never
-  //    become a pending draft. For every other profile it stays a non-blocking
-  //    warning (the entity may be legitimately paraphrased elsewhere).
+  // 5) Reader-meaningful essential entities (drug/product/org/country names) must
+  //    be preserved. For a safety alert a missing or altered essential identity
+  //    is BLOCKING — a recall notice that drops the drug/authority it concerns is
+  //    dangerous, so it must never become a pending draft. For every other
+  //    profile it stays a non-blocking warning (the entity may be legitimately
+  //    paraphrased elsewhere).
+  //
+  //    Whether an entity is REQUIRED to appear is decided by profile-aware
+  //    relevance, not by the shape of the entity alone (a number may be essential
+  //    in one profile and pure verification detail in another):
+  //    - "verification_only" (NDC/registration/expiry/distribution/DOI codes):
+  //      never required — omitting neither blocks nor warns. Values remain bound
+  //      by the number/quote checks above wherever they DO appear.
+  //    - "conditional" (safety lot/batch/strength/formulation): required only
+  //      when the source is ambiguous enough that dropping it would make the
+  //      warning unable to identify the affected product (safetyIdentifierNeeded).
+  //      A single explicitly-scoped batch is omittable.
+  //    - "essential" (drug/product/org/country names, and profile-relevant
+  //      numbers like a study's sample size or a regulation's fine/date): must be
+  //      preserved. Missing is BLOCKING for a safety alert (a recall that drops
+  //      the drug/authority it concerns is dangerous), a warning elsewhere.
   const genNorm = normalizeForCompare(generated);
+  const identifierNeeded = safetyIdentifierNeeded(source.sourceText);
   for (const ent of source.mustPreserve ?? []) {
+    const vis = classifyEntityVisibility(ent, profile, source.sourceText);
+    if (vis === "verification_only") continue;
+    if (vis === "conditional" && !identifierNeeded) continue;
     const e = normalizeForCompare(ent);
     if (e && !genNorm.includes(e)) {
       if (profile === "safety_alert") errors.push(`missing_essential_entity:${ent}`);
@@ -606,26 +791,132 @@ function dedupeStrings(xs: string[]): string[] {
   return [...new Set(xs)];
 }
 
+// --- Editorial quality: compression & reader relevance (warnings only) -----
+//
+// These checks NEVER block a draft and NEVER touch factual validation — a fully
+// grounded article is always allowed through. They surface *editorial* signals
+// that a technically-correct article reads like a regulatory notice rather than
+// an attractive Arabic news story, so the writer prompt / a reviewer can tighten
+// it. All are advisory warnings.
+
+// Distinct long English technical tokens beyond this are flagged (an Arabic
+// story rarely needs more than a couple of Latin labels).
+export const EDITORIAL_MAX_ENGLISH_TOKENS = 3;
+// Verification-only identifiers (lot/NDC/registration codes) visible beyond this
+// are flagged as regulatory clutter.
+export const EDITORIAL_MAX_IDENTIFIERS = 2;
+// Excerpt vs. title / opening-paragraph near-duplication threshold.
+const EDITORIAL_DUP_JACCARD = 0.7;
+
+// A Latin-script run of ≥4 chars starting with a letter: a candidate English
+// technical token / medicine name inside an Arabic article.
+const LATIN_TOKEN_RE = /[A-Za-z][A-Za-z0-9]{3,}/g;
+// A bare numeric/hyphen code of the "0517-4002-25" / "25202" shape: reads as a
+// regulatory identifier when printed in prose.
+const CODE_TOKEN_RE = /\b\d[\d\-/]{3,}\d\b/g;
+
+/**
+ * Deterministic editorial-quality warnings for a written article. Purely
+ * advisory: the returned strings are added to `warnings` only and never affect
+ * whether a draft is created. `opts.verificationOnly` is the subset of
+ * mustPreserve classified as verification-only for this profile (see
+ * classifyEntityVisibility) so we can tell how many verification-only codes
+ * leaked into the visible story.
+ */
+export function editorialQualityWarnings(
+  article: { title: string; excerpt: string; body: string },
+  profile: WritingProfile,
+  opts: { verificationOnly?: string[] } = {},
+): string[] {
+  const warnings: string[] = [];
+  const title = (article.title ?? "").trim();
+  const excerpt = (article.excerpt ?? "").trim();
+  const body = (article.body ?? "").trim();
+  const titleBody = `${title}\n${body}`;
+
+  // Distinct Latin word-tokens and their frequency across title + body.
+  const wordCounts = new Map<string, number>();
+  for (const tok of foldDigits(titleBody).match(LATIN_TOKEN_RE) ?? []) {
+    const key = tok.toLowerCase();
+    if (!/[a-z]{4,}/.test(key)) continue; // an alphabetic word, not a bare code
+    wordCounts.set(key, (wordCounts.get(key) ?? 0) + 1);
+  }
+  // 1) The same long English (medicine) name repeated — it should appear once,
+  //    only when needed to identify the product.
+  if ([...wordCounts.values()].some((c) => c >= 2)) {
+    warnings.push("editorial_english_name_repeated");
+  }
+  // 5) Too many DISTINCT English technical tokens overall.
+  if (wordCounts.size > EDITORIAL_MAX_ENGLISH_TOKENS) {
+    warnings.push("editorial_excess_english_tokens");
+  }
+
+  // 2) Excessive verification-only identifiers surfaced in the visible article:
+  //    Category-C mustPreserve entities that DID appear, plus any bare code-shape
+  //    token (e.g. an NDC) present in the prose.
+  const visibleNorm = normalizeForCompare(`${titleBody}\n${excerpt}`);
+  let idCount = 0;
+  for (const ent of opts.verificationOnly ?? []) {
+    const e = normalizeForCompare(ent);
+    if (e && visibleNorm.includes(e)) idCount++;
+  }
+  idCount += (foldDigits(titleBody).match(CODE_TOKEN_RE) ?? []).length;
+  if (idCount > EDITORIAL_MAX_IDENTIFIERS) {
+    warnings.push("editorial_excess_identifiers");
+  }
+
+  // 3) Excerpt duplicating the title or the opening paragraph (wasted line).
+  if (excerpt) {
+    const ex = normalizeForCompare(excerpt);
+    const ti = normalizeForCompare(title);
+    if (ex && ti && (ex === ti || jaccard(ex, ti) >= EDITORIAL_DUP_JACCARD)) {
+      warnings.push("editorial_excerpt_duplicates_title");
+    } else {
+      const firstPara = normalizeForCompare((body.split(/\n\s*\n/)[0] ?? ""));
+      if (ex && firstPara && (firstPara.includes(ex) || jaccard(ex, firstPara) >= EDITORIAL_DUP_JACCARD)) {
+        warnings.push("editorial_excerpt_duplicates_opening");
+      }
+    }
+  }
+
+  // 4) Body exceeds the profile's normal upper band — a compression opportunity
+  //    (distinct from the neutral word_count_outside_band signal, this one names
+  //    the editorial fix: an over-long article that should be tightened).
+  const band = PROFILE_WORD_BANDS[profile];
+  if (body && countWords(body) > band.max) {
+    warnings.push("editorial_body_over_length");
+  }
+
+  return dedupeStrings(warnings);
+}
+
 // --- Parsing the model output (Step 10: strict structured output) ----------
 //
-// The writer contract is a SINGLE bare JSON object with EXACTLY three string
-// fields — title, excerpt, body. Parsing is deliberately strict and purely
+// The writer contract is a SINGLE bare JSON object with three REQUIRED string
+// fields — title, excerpt, body — plus one OPTIONAL string field, summary (the
+// admin "باختصار" quick-summary box). Parsing is deliberately strict and purely
 // deterministic: it never repairs, rewrites, or infers article content. Any
 // deviation — surrounding prose, more than one object, a truncated/unterminated
-// object, a malformed/invalid-fence payload, or a schema violation (missing,
-// extra, empty, non-string, or oversized fields) — is a rejection carrying a
-// specific safe reason, so malformed output can never become a pending draft.
-// read_minutes is NOT part of this schema; it is always computed locally from
-// the final Arabic body (see readingTimeMinutes).
+// object, a malformed/invalid-fence payload, or a schema violation (a missing
+// required field, an unknown field, an empty required value, a non-string, or an
+// oversized field) — is a rejection carrying a specific safe reason, so
+// malformed output can never become a pending draft. read_minutes is NOT part of
+// this schema; it is always computed locally from the final Arabic body (see
+// readingTimeMinutes).
 
 export type WriterArticle = {
   title: string;
   excerpt: string;
   body: string;
+  // One-sentence reader summary for the "باختصار" box. Optional and additive:
+  // absent when the model returns the legacy three-field object.
+  summary?: string;
 };
 
 // Only these keys may appear on the writer object; any other key is rejected.
-const WRITER_ALLOWED_FIELDS = ["title", "excerpt", "body"] as const;
+const WRITER_ALLOWED_FIELDS = ["title", "excerpt", "body", "summary"] as const;
+// The subset that MUST be present and non-empty (summary is optional).
+const WRITER_REQUIRED_FIELDS = ["title", "excerpt", "body"] as const;
 
 // Conservative upper bounds. Output beyond these is treated as an unsafe schema
 // violation rather than trusted content (a real Arabic article — even the long
@@ -633,6 +924,7 @@ const WRITER_ALLOWED_FIELDS = ["title", "excerpt", "body"] as const;
 const WRITER_MAX_TITLE_CHARS = 300;
 const WRITER_MAX_EXCERPT_CHARS = 1000;
 const WRITER_MAX_BODY_CHARS = 20000;
+const WRITER_MAX_SUMMARY_CHARS = 400;
 
 // The specific, non-repairing rejection reasons parseWriterOutput may return.
 export type WriterParseError =
@@ -738,31 +1030,41 @@ export function parseWriterOutput(
   }
 
   const o = obj as Record<string, unknown>;
-  // No unexpected fields beyond the three-field schema.
+  // No unexpected fields beyond the allowed schema.
   for (const key of Object.keys(o)) {
     if (!(WRITER_ALLOWED_FIELDS as readonly string[]).includes(key)) {
       return { ok: false, error: "writer_output_schema_invalid" };
     }
   }
-  // Every schema field must be present and string-typed.
-  for (const key of WRITER_ALLOWED_FIELDS) {
+  // Every REQUIRED field must be present and string-typed.
+  for (const key of WRITER_REQUIRED_FIELDS) {
     if (!(key in o) || typeof o[key] !== "string") {
       return { ok: false, error: "writer_output_schema_invalid" };
     }
   }
+  // The optional summary, when present, must be a string too.
+  if ("summary" in o && typeof o.summary !== "string") {
+    return { ok: false, error: "writer_output_schema_invalid" };
+  }
   const title = (o.title as string).trim();
   const excerpt = (o.excerpt as string).trim();
   const body = (o.body as string).trim();
+  const summary = "summary" in o ? (o.summary as string).trim() : "";
   // title and body must be non-empty; caps guard against unsafe lengths.
   if (!title || !body) return { ok: false, error: "writer_output_schema_invalid" };
   if (
     title.length > WRITER_MAX_TITLE_CHARS ||
     excerpt.length > WRITER_MAX_EXCERPT_CHARS ||
-    body.length > WRITER_MAX_BODY_CHARS
+    body.length > WRITER_MAX_BODY_CHARS ||
+    summary.length > WRITER_MAX_SUMMARY_CHARS
   ) {
     return { ok: false, error: "writer_output_schema_invalid" };
   }
-  return { ok: true, article: { title, excerpt, body } };
+  const article: WriterArticle = { title, excerpt, body };
+  // Only attach summary when the model actually supplied a non-empty one, so the
+  // legacy three-field object still parses to an identical shape.
+  if (summary) article.summary = summary;
+  return { ok: true, article };
 }
 
 // --- Orchestrator: validate a written article (Steps 2, 5, 6, 7, 8, 9) -----
@@ -825,6 +1127,20 @@ export function validateArticle(input: {
     const fg = checkFactGrounding({ title: head.cleanTitle, excerpt: article.excerpt ?? "", body }, source, profile);
     errors.push(...fg.errors);
     warnings.push(...fg.warnings);
+
+    // Editorial quality (advisory only — never blocking, never touches factual
+    // validation). Profile-aware verification-only identifiers from mustPreserve
+    // are passed through so leaked verification-only codes can be counted.
+    const verificationOnly = (source.mustPreserve ?? []).filter(
+      (e) => classifyEntityVisibility(e, profile, source.sourceText) === "verification_only",
+    );
+    warnings.push(
+      ...editorialQualityWarnings(
+        { title: head.cleanTitle, excerpt: article.excerpt ?? "", body },
+        profile,
+        { verificationOnly },
+      ),
+    );
   }
 
   const ok = errors.length === 0;
@@ -870,21 +1186,33 @@ export function buildWritingInstructions(profile: WritingProfile): string {
 ${PROFILE_INSTRUCTIONS[profile]}
 
 أسلوب سلمى:
-- عربية فصحى حديثة سهلة الفهم، صحفية لا حكومية، هادئة وذكية وموثوقة، مناسبة للكويت والخليج دون لهجة غير ضرورية، ومفهومة لغير المتخصّص.
-- تجنّب: نسخ عنوان المصدر، وذكر اسم المصدر في العنوان، والإثارة، والوعود المبالغ فيها، والعبارات المراسمية أو الدعائية، والمقدّمات غير الضرورية، والخاتمات المكرّرة، والاقتباسات المختلقة، والنصائح أو التأويلات غير المدعومة.
+- عربية فصحى صحفية حديثة سهلة الفهم، هادئة وذكية وموثوقة، مناسبة للكويت والخليج دون لهجة غير ضرورية، ومفهومة لغير المتخصّص. اكتب كصحفي لا كناسخٍ لبيان رسمي، وابتعد عن اللغة المراسمية أو التنظيمية أو الدعائية.
+- تجنّب: نسخ عنوان المصدر، وذكر اسم المصدر في العنوان، والإثارة، والوعود المبالغ فيها، والمقدّمات غير الضرورية، والخاتمات المكرّرة، والاقتباسات المختلقة، والنصائح أو التأويلات غير المدعومة.
 - عبارات ممنوعة صراحةً: ${bannedList}.
 
+مبدأ التركيز التحريري (مهم):
+- ليست كل معلومة وردت في المصدر لازمةً للنشر. احتفظ بالحقائق التقنية للتحقّق فقط، ولا تُقحمها في النص المرئي إلا إذا كان القارئ يحتاجها فعلاً ليتعرّف على المنتج أو يتّخذ الإجراء الصحيح.
+- احذف من النص المرئي — ما لم تكن ضرورية حقاً — أرقام الدفعات/التشغيلات، وأرقام NDC أو التسجيل الداخلية، وتواريخ التوزيع أو انتهاء الصلاحية، والتركيز الدوائي الدقيق وتفاصيل التغليف، والاسم الإنجليزي الرسمي الطويل للمنتج.
+
 العنوان:
-- عادةً 7–14 كلمة، ينقل التطوّر الفعلي، جذّاب دون مبالغة.
+- عادةً 8–12 كلمة، ينقل التطوّر الفعلي بلغة عربية سلسة وجذّابة دون مبالغة.
 - لا تنسخ العنوان الأصلي ولا تُنهِ العنوان باسم المصدر أو الموقع.
-- حافظ على أسماء الأدوية والمنظمات والدول والخدمات الأساسية، وميّز بين الإعلان والتطبيق المؤكّد.
+- حافظ على هوية المنتج والدواء والجهة والدولة بلغة مفهومة. اذكر الاسم الإنجليزي للمنتج مرّة واحدة فقط وعند الحاجة للتعريف به، ولا تكرّر الاسم الإنجليزي الكامل.
+
+المقتطف (excerpt):
+- جملة واحدة واضحة (≈30–35 كلمة كحدّ أقصى) تلخّص الجوهر.
+- لا تكرّر العنوان ولا الجملة الأولى من النص حرفياً.
 
 المقدّمة والنص:
-- افتح بإجابة سريعة: ماذا حدث، أين، من المتأثّر، وما الجديد. لا تكرّر العنوان كأول جملة.
-- فقرات قصيرة، واشرح المصطلحات الطبية بالعربية المبسّطة.
-- يجب أن تبقى الأرقام والتواريخ وأحجام الدراسات وأسماء الأدوية والمنظمات والدول والإجراءات الرسمية أمينة تماماً للمادة المصدرية.
+- افتح بالخبر نفسه: ماذا حدث، أين، من المتأثّر، وما الجديد — لا بلغة إعلانية ولا بتكرار العنوان.
+- عادةً 3–4 فقرات قصيرة (للأخبار السريعة وتحذيرات السلامة نحو 90–150 كلمة إجمالاً)، واشرح المصطلحات الطبية بالعربية المبسّطة.
+- ترجم القياسات بشكل طبيعي عند الحاجة، ولا تكتب التواريخ بالصيغة الأمريكية الخام إلا إذا كان التاريخ نفسه مهمّاً.
+- يجب أن تبقى الأرقام والتواريخ وأحجام الدراسات وأسماء الأدوية والمنظمات والدول والإجراءات الرسمية — حيثما ذُكرت — أمينة تماماً للمادة المصدرية.
+
+الملخّص «باختصار» (اختياري):
+- إن أضفته، فاجعله جملة واحدة موجزة للقارئ المستعجل، مختلفةً عن المقتطف ولا تكرّره.
 
 استخدم فقط الحقائق والاستشهادات المُتحقَّق منها والمُرفقة. لا تختلق رقماً أو تاريخاً أو اقتباساً أو ادّعاءً.
 
-أعد كائن JSON واحداً فقط، دون أي نص قبله أو بعده ودون أسيجة برمجية (\`\`\`)، ويحتوي هذه الحقول الثلاثة فقط لا غير: {"title":"…","excerpt":"…","body":"فقرات مفصولة بسطر فارغ"}`;
+أعد كائن JSON واحداً فقط، دون أي نص قبله أو بعده ودون أسيجة برمجية (\`\`\`)، بالحقول التالية فقط لا غير (والحقل summary اختياري): {"title":"…","excerpt":"…","summary":"…","body":"فقرات مفصولة بسطر فارغ"}`;
 }
