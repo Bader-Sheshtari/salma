@@ -262,11 +262,64 @@ export function resolveWriterModel(
 
 // --- End-to-end orchestration (pure, injectable) ---------------------------
 
+// A response that COMPLETED at the transport layer (HTTP 200) but is unusable
+// BEFORE any parsing: the model stopped for a non-"stop" reason (e.g. truncated
+// at max_tokens, content-filtered, tool_calls) or returned a non-string content
+// shape. These are NOT technical failures — they must reject the draft with
+// their specific safe reason and must NOT fall back or retry to a cheaper model:
+// the call already completed, so a retry would not fix a truncated/filtered
+// completion, and a cheaper model must never silently rewrite the story.
+export type WriterCompletionReject =
+  | "writer_output_truncated"
+  | "writer_output_content_filtered"
+  | "writer_output_tool_calls"
+  | "writer_output_provider_error"
+  | "writer_output_unexpected_finish"
+  | "writer_output_content_invalid";
+
+/**
+ * Inspect the OpenRouter completion metadata (`finish_reason` + `message.content`)
+ * BEFORE parsing. Only a "stop" (or an absent/null) finish reason with a
+ * non-empty string content may proceed. A "length" truncation, a filtered /
+ * tool_calls / error / any other unexpected non-null finish reason, or a
+ * non-string content shape is a completed-but-invalid response (reject, no
+ * fallback). An empty/whitespace string is an empty completion, which stays a
+ * technical (fallback-eligible) failure — unchanged from the prior behavior.
+ * Pure: it neither parses, repairs, nor infers text from unknown structures.
+ */
+export function evaluateWriterCompletion(
+  choice: { finish_reason?: unknown; message?: { content?: unknown } | null } | null | undefined,
+):
+  | { ok: true; content: string }
+  | { ok: false; kind: "completed_invalid"; reason: WriterCompletionReject }
+  | { ok: false; kind: "empty" } {
+  // 1. Finish-reason: reject any completed-but-invalid stop condition first, so
+  //    truncated/filtered output is never parsed or repaired.
+  const fr = choice?.finish_reason;
+  if (typeof fr === "string") {
+    const f = fr.trim().toLowerCase();
+    if (f === "length") return { ok: false, kind: "completed_invalid", reason: "writer_output_truncated" };
+    if (f === "content_filter") return { ok: false, kind: "completed_invalid", reason: "writer_output_content_filtered" };
+    if (f === "tool_calls") return { ok: false, kind: "completed_invalid", reason: "writer_output_tool_calls" };
+    if (f === "error") return { ok: false, kind: "completed_invalid", reason: "writer_output_provider_error" };
+    if (f !== "stop" && f !== "") return { ok: false, kind: "completed_invalid", reason: "writer_output_unexpected_finish" };
+  }
+  // 2. Content shape: a null/missing/array/object/any non-string value is invalid.
+  const content = choice?.message?.content;
+  if (typeof content !== "string") return { ok: false, kind: "completed_invalid", reason: "writer_output_content_invalid" };
+  // An empty/whitespace completion stays a technical (fallback-eligible) failure.
+  if (content.trim().length === 0) return { ok: false, kind: "empty" };
+  return { ok: true, content };
+}
+
 // Raw result of a single writer HTTP call, shaped so the technical-failure
 // classifier can decide fallback eligibility. The actual fetch lives in
 // index.ts; this module stays import-free and unit-testable with a fake call.
 export type WriterHttpResult =
   | { ok: true; content: string }
+  // Completed (HTTP 200) but invalid before parsing (see evaluateWriterCompletion):
+  // reject with this specific reason — never fall back or retry.
+  | { ok: false; completedInvalid: true; reason: WriterCompletionReject }
   | {
       ok: false;
       networkError?: boolean;
@@ -343,6 +396,12 @@ export async function orchestrateWriter(args: {
   const primary = await call(primaryModel);
   if (primary.ok) return finish(primaryModel, false, primary.content);
 
+  // Completed-but-invalid (truncated / filtered / non-string content): reject
+  // with its specific reason. This is NOT a technical failure — do not fall back.
+  if ("completedInvalid" in primary) {
+    return { ok: false, profile, primaryModel, modelUsed: primaryModel, usedFallback: false, rejection: primary.reason, validationReason: primary.reason };
+  }
+
   const tech = classifyTechnicalFailure({
     networkError: primary.networkError,
     timedOut: primary.timedOut,
@@ -358,6 +417,11 @@ export async function orchestrateWriter(args: {
   const fallbackModel = config.fallbackModel;
   const fb = await call(fallbackModel);
   if (!fb.ok) {
+    // A completed-but-invalid fallback response rejects with its specific reason;
+    // never retry again. A transport failure stays writer_unavailable.
+    if ("completedInvalid" in fb) {
+      return { ok: false, profile, primaryModel, modelUsed: fallbackModel, usedFallback: true, rejection: fb.reason, validationReason: fb.reason };
+    }
     return { ok: false, profile, primaryModel, modelUsed: fallbackModel, usedFallback: true, rejection: "writer_unavailable", validationReason: null };
   }
   return finish(fallbackModel, true, fb.content);

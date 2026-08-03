@@ -606,47 +606,163 @@ function dedupeStrings(xs: string[]): string[] {
   return [...new Set(xs)];
 }
 
-// --- Parsing the model output (Step 10: malformed JSON) --------------------
+// --- Parsing the model output (Step 10: strict structured output) ----------
+//
+// The writer contract is a SINGLE bare JSON object with EXACTLY three string
+// fields — title, excerpt, body. Parsing is deliberately strict and purely
+// deterministic: it never repairs, rewrites, or infers article content. Any
+// deviation — surrounding prose, more than one object, a truncated/unterminated
+// object, a malformed/invalid-fence payload, or a schema violation (missing,
+// extra, empty, non-string, or oversized fields) — is a rejection carrying a
+// specific safe reason, so malformed output can never become a pending draft.
+// read_minutes is NOT part of this schema; it is always computed locally from
+// the final Arabic body (see readingTimeMinutes).
 
 export type WriterArticle = {
   title: string;
   excerpt: string;
   body: string;
-  profile?: WritingProfile;
 };
 
-/** Parse the raw model string into a writer article, tolerating a ```json
- *  fence. Returns a clear error instead of throwing on malformed output. */
-export function parseWriterOutput(raw: string): { ok: true; article: WriterArticle } | { ok: false; error: string } {
-  const fenced = (raw ?? "").match(/```(?:json)?\s*([\s\S]*?)```/);
-  const text = fenced ? fenced[1] : (raw ?? "");
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1) return { ok: false, error: "malformed_output:no_json" };
-  let obj: unknown;
-  try {
-    obj = JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return { ok: false, error: "malformed_output:invalid_json" };
+// Only these keys may appear on the writer object; any other key is rejected.
+const WRITER_ALLOWED_FIELDS = ["title", "excerpt", "body"] as const;
+
+// Conservative upper bounds. Output beyond these is treated as an unsafe schema
+// violation rather than trusted content (a real Arabic article — even the long
+// research_study band — sits far under these caps).
+const WRITER_MAX_TITLE_CHARS = 300;
+const WRITER_MAX_EXCERPT_CHARS = 1000;
+const WRITER_MAX_BODY_CHARS = 20000;
+
+// The specific, non-repairing rejection reasons parseWriterOutput may return.
+export type WriterParseError =
+  | "writer_output_truncated"
+  | "writer_output_code_fence_invalid"
+  | "writer_output_extra_text"
+  | "writer_output_multiple_objects"
+  | "writer_output_invalid_json"
+  | "writer_output_schema_invalid";
+
+/**
+ * Scan from the `{` at `start` for its matching top-level `}`, honoring JSON
+ * string quoting and escapes so a brace inside a string is never miscounted.
+ * Returns the closing-brace index (closed=true), or closed=false when the
+ * object never closes — an unterminated / truncated object.
+ */
+function scanJsonObject(s: string, start: number): { end: number; closed: boolean } {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return { end: i, closed: true };
+    }
   }
-  if (!obj || typeof obj !== "object") return { ok: false, error: "malformed_output:not_object" };
-  const o = obj as Record<string, unknown>;
-  const title = typeof o.title === "string" ? o.title.trim() : "";
-  const body = typeof o.body === "string" ? o.body.trim() : "";
-  if (!title || !body) return { ok: false, error: "malformed_output:missing_fields" };
-  return {
-    ok: true,
-    article: {
-      title,
-      excerpt: typeof o.excerpt === "string" ? o.excerpt.trim() : "",
-      body,
-      profile: isProfile(o.profile) ? o.profile : undefined,
-    },
-  };
+  return { end: s.length - 1, closed: false };
 }
 
-function isProfile(v: unknown): v is WritingProfile {
-  return typeof v === "string" && v in PROFILE_WORD_BANDS;
+/**
+ * Unwrap a single Markdown code fence that wraps the WHOLE payload. It engages
+ * only when the (trimmed) text starts with a fence, so a stray backtick inside
+ * an otherwise-bare object is left untouched. The fence must span the entire
+ * text, carry only an optional `json` info string, and contain no nested fence;
+ * anything else is a code_fence_invalid rejection. Returns the inner text on a
+ * valid fence, or the unchanged text when there was no leading fence.
+ */
+function unwrapCodeFence(
+  text: string,
+): { ok: true; text: string } | { ok: false; error: WriterParseError } {
+  if (!text.startsWith("```")) return { ok: true, text };
+  const m = text.match(/^```([^\n`]*)\n([\s\S]*?)\n?```$/);
+  if (!m) return { ok: false, error: "writer_output_code_fence_invalid" };
+  const lang = m[1].trim().toLowerCase();
+  if (lang && lang !== "json") return { ok: false, error: "writer_output_code_fence_invalid" };
+  if (m[2].includes("```")) return { ok: false, error: "writer_output_code_fence_invalid" };
+  return { ok: true, text: m[2].trim() };
+}
+
+/**
+ * Strictly parse the raw writer response into a WriterArticle. Accepts EXACTLY
+ * one bare JSON object, or that same single object wrapped in one ```json code
+ * fence. Rejects — with a specific reason, never a throw and never a silent
+ * repair — surrounding prose, multiple objects, truncated/unterminated JSON,
+ * malformed JSON, an invalid fence, and any schema violation (missing, extra,
+ * empty, non-string, or oversized title/excerpt/body).
+ */
+export function parseWriterOutput(
+  raw: string,
+): { ok: true; article: WriterArticle } | { ok: false; error: WriterParseError } {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed === "") return { ok: false, error: "writer_output_invalid_json" };
+
+  const unfenced = unwrapCodeFence(trimmed);
+  if (!unfenced.ok) return unfenced;
+  const text = unfenced.text.trim();
+
+  const open = text.indexOf("{");
+  if (open === -1) return { ok: false, error: "writer_output_invalid_json" };
+  // Any non-whitespace before the object is introductory prose.
+  if (text.slice(0, open).trim() !== "") return { ok: false, error: "writer_output_extra_text" };
+
+  const { end, closed } = scanJsonObject(text, open);
+  if (!closed) return { ok: false, error: "writer_output_truncated" };
+
+  // Content after the first complete object: another object → multiple_objects,
+  // otherwise trailing prose → extra_text.
+  const after = text.slice(end + 1).trim();
+  if (after !== "") {
+    return {
+      ok: false,
+      error: after.startsWith("{") ? "writer_output_multiple_objects" : "writer_output_extra_text",
+    };
+  }
+
+  let obj: unknown;
+  try {
+    obj = JSON.parse(text.slice(open, end + 1));
+  } catch {
+    return { ok: false, error: "writer_output_invalid_json" };
+  }
+  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
+    return { ok: false, error: "writer_output_schema_invalid" };
+  }
+
+  const o = obj as Record<string, unknown>;
+  // No unexpected fields beyond the three-field schema.
+  for (const key of Object.keys(o)) {
+    if (!(WRITER_ALLOWED_FIELDS as readonly string[]).includes(key)) {
+      return { ok: false, error: "writer_output_schema_invalid" };
+    }
+  }
+  // Every schema field must be present and string-typed.
+  for (const key of WRITER_ALLOWED_FIELDS) {
+    if (!(key in o) || typeof o[key] !== "string") {
+      return { ok: false, error: "writer_output_schema_invalid" };
+    }
+  }
+  const title = (o.title as string).trim();
+  const excerpt = (o.excerpt as string).trim();
+  const body = (o.body as string).trim();
+  // title and body must be non-empty; caps guard against unsafe lengths.
+  if (!title || !body) return { ok: false, error: "writer_output_schema_invalid" };
+  if (
+    title.length > WRITER_MAX_TITLE_CHARS ||
+    excerpt.length > WRITER_MAX_EXCERPT_CHARS ||
+    body.length > WRITER_MAX_BODY_CHARS
+  ) {
+    return { ok: false, error: "writer_output_schema_invalid" };
+  }
+  return { ok: true, article: { title, excerpt, body } };
 }
 
 // --- Orchestrator: validate a written article (Steps 2, 5, 6, 7, 8, 9) -----
@@ -770,5 +886,5 @@ ${PROFILE_INSTRUCTIONS[profile]}
 
 استخدم فقط الحقائق والاستشهادات المُتحقَّق منها والمُرفقة. لا تختلق رقماً أو تاريخاً أو اقتباساً أو ادّعاءً.
 
-أعد كائن JSON فقط بالشكل: {"title":"…","excerpt":"…","body":"فقرات مفصولة بسطر فارغ","profile":"${profile}"}`;
+أعد كائن JSON واحداً فقط، دون أي نص قبله أو بعده ودون أسيجة برمجية (\`\`\`)، ويحتوي هذه الحقول الثلاثة فقط لا غير: {"title":"…","excerpt":"…","body":"فقرات مفصولة بسطر فارغ"}`;
 }

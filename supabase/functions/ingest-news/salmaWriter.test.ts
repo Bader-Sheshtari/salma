@@ -315,24 +315,108 @@ test("validateArticle accepts a worded Arabic date grounded in an ISO source", (
   assert.ok(!v.errors.some((e) => e.startsWith("unsupported_number")), v.errors.join(","));
 });
 
-// --- malformed model output (Step 10) --------------------------------------
+// --- strict structured-output parsing (Step 10) ----------------------------
 
-test("malformed model JSON is reported, not thrown", () => {
-  const r = parseWriterOutput("عذراً لا يوجد JSON هنا");
-  assert.equal(r.ok, false);
-  assert.ok(!r.ok && r.error.startsWith("malformed_output"));
+test("valid plain JSON passes the strict parser", () => {
+  const r = parseWriterOutput('{"title":"عنوان مقبول للخبر الصحي","excerpt":"موجز","body":"نص كافٍ للخبر."}');
+  assert.ok(r.ok);
+  assert.equal(r.ok && r.article.title, "عنوان مقبول للخبر الصحي");
+  assert.equal(r.ok && r.article.excerpt, "موجز");
+  assert.equal(r.ok && r.article.body, "نص كافٍ للخبر.");
 });
 
-test("a fenced JSON block is parsed into an article", () => {
-  const raw = '```json\n{"title":"عنوان مقبول للخبر الصحي","body":"نص","profile":"quick_news"}\n```';
+test("valid JSON inside a single ```json fence passes", () => {
+  const raw = '```json\n{"title":"عنوان مقبول للخبر الصحي","excerpt":"موجز","body":"نص"}\n```';
   const r = parseWriterOutput(raw);
   assert.ok(r.ok);
-  assert.equal(r.ok && r.article.profile, "quick_news");
+  assert.equal(r.ok && r.article.title, "عنوان مقبول للخبر الصحي");
 });
 
-test("JSON missing required fields is malformed", () => {
+test("leading prose before the object is rejected as extra_text", () => {
+  const r = parseWriterOutput('إليك الناتج:\n{"title":"عنوان","excerpt":"","body":"نص"}');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_extra_text");
+});
+
+test("trailing prose after the object is rejected as extra_text", () => {
+  const r = parseWriterOutput('{"title":"عنوان","excerpt":"","body":"نص"}\nشكراً لكم');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_extra_text");
+});
+
+test("multiple JSON objects are rejected", () => {
+  const r = parseWriterOutput('{"title":"أ","excerpt":"","body":"نص"}{"title":"ب","excerpt":"","body":"نص"}');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_multiple_objects");
+});
+
+test("truncated / unterminated JSON is rejected as truncated", () => {
+  const r = parseWriterOutput('{"title":"عنوان","excerpt":"","body":"نص لم يكتمل');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_truncated");
+});
+
+test("invalid escaped content is rejected as invalid_json", () => {
+  // A bad JSON escape (\q): quotes/braces balance, but JSON.parse rejects it.
+  const r = parseWriterOutput('{"title":"عنوان","excerpt":"","body":"نص\\qمكسور"}');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_invalid_json");
+});
+
+test("a bare non-JSON response is rejected as invalid_json", () => {
+  const r = parseWriterOutput("عذراً لا يوجد JSON هنا");
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_invalid_json");
+});
+
+test("a malformed / non-json code fence is rejected", () => {
+  const r = parseWriterOutput('```python\n{"title":"عنوان","excerpt":"","body":"نص"}\n```');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_code_fence_invalid");
+});
+
+test("a missing required field is a schema violation", () => {
   const r = parseWriterOutput('{"excerpt":"موجز فقط"}');
   assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_schema_invalid");
+});
+
+test("an extra unexpected field is a schema violation", () => {
+  const r = parseWriterOutput('{"title":"عنوان","excerpt":"","body":"نص","profile":"quick_news"}');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_schema_invalid");
+});
+
+test("an empty required value is a schema violation", () => {
+  const r = parseWriterOutput('{"title":"","excerpt":"","body":"نص"}');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_schema_invalid");
+});
+
+test("a wrong-type field is a schema violation", () => {
+  const r = parseWriterOutput('{"title":123,"excerpt":"","body":"نص"}');
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_schema_invalid");
+});
+
+test("an oversized field is an unsafe schema violation", () => {
+  const huge = "ا".repeat(20001);
+  const r = parseWriterOutput(`{"title":"عنوان","excerpt":"","body":"${huge}"}`);
+  assert.equal(r.ok, false);
+  assert.equal(!r.ok && r.error, "writer_output_schema_invalid");
+});
+
+test("read_minutes is computed locally from the body, not from model output", () => {
+  // 360 body words at 180 wpm → 2 minutes, regardless of any model claim.
+  const body = repeatTo(360, "تتابع الوزارة الوضع الصحي في البلاد عن كثب اليوم");
+  const raw = JSON.stringify({ title: "عنوان صحي واضح ومناسب للطول", excerpt: "موجز", body });
+  const parsed = parseWriterOutput(raw);
+  assert.ok(parsed.ok);
+  const v = validateArticle({
+    article: parsed.ok ? parsed.article : { title: "", excerpt: "", body: "" },
+    source: { sourceText: body },
+  });
+  assert.equal(v.readMinutes, Math.max(1, Math.round(360 / 180)));
 });
 
 // --- end-to-end validation (Steps 2, 7, 9) ---------------------------------
@@ -407,7 +491,11 @@ test("writing instructions carry the writer version, ban list and JSON shape", (
   const instr = buildWritingInstructions("safety_alert");
   assert.ok(instr.includes(WRITER_PROMPT_VERSION));
   assert.ok(instr.includes("ثورة طبية")); // banned-phrase list is present
-  assert.ok(instr.includes("\"profile\":\"safety_alert\""));
+  // Strict 3-field schema only — no profile field is requested anymore.
+  assert.ok(instr.includes("\"title\""));
+  assert.ok(instr.includes("\"excerpt\""));
+  assert.ok(instr.includes("\"body\""));
+  assert.ok(!instr.includes("\"profile\""));
   assert.ok(instr.includes("تحذير سلامة")); // profile-specific guidance
 });
 

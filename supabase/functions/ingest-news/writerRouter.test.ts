@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { WritingProfile } from "./salmaWriter.ts";
-import { selectProfile } from "./salmaWriter.ts";
+import { selectProfile, parseWriterOutput } from "./salmaWriter.ts";
 import {
   SENSITIVE_PROFILES,
   FORBIDDEN_WRITER_MODELS,
@@ -17,6 +17,8 @@ import {
   fallbackAllowed,
   resolveWriterModel,
   orchestrateWriter,
+  evaluateWriterCompletion,
+  type WriterHttpResult,
   type WriterModelConfig,
   type WriterValidation,
 } from "./writerRouter.ts";
@@ -263,4 +265,217 @@ test("the fallback's output is still validated (bad fallback is rejected)", asyn
   assert.equal(r.usedFallback, true);
   assert.equal(r.rejection, "unsupported_number:9999");
   assert.equal(r.validationReason, "unsupported_number:9999");
+});
+
+// --- strict parse failure through the real parser (structured-output hardening)
+//
+// Wires the REAL parseWriterOutput as the validator, exactly as index.ts does,
+// to prove a malformed structured response is treated as a validation failure:
+// a single primary call, NO cheaper-model fallback, NO retry, ok=false (so
+// index.ts creates no content row), and the specific safe parse reason.
+const parseValidate = (content: string): WriterValidation => {
+  const parsed = parseWriterOutput(content);
+  if (!parsed.ok) return { ok: false, reason: parsed.error };
+  return { ok: true, article: parsed.article, readMinutes: 1 };
+};
+
+test("a malformed (truncated) writer response: one call, no fallback, no insert", async () => {
+  const calls: string[] = [];
+  const r = await orchestrateWriter({
+    profile: "safety_alert",
+    config: CONFIG,
+    call: async (model) => {
+      calls.push(model);
+      // The exact class of failure we hardened for: an unterminated object.
+      return { ok: true, content: '{"title":"عنوان","excerpt":"","body":"نص لم يكتمل' };
+    },
+    validate: parseValidate,
+  });
+  assert.equal(r.ok, false); // ok=false → index.ts inserts NO content row
+  assert.equal(r.usedFallback, false); // parse failure never triggers fallback
+  assert.equal(r.rejection, "writer_output_truncated"); // specific safe reason
+  assert.equal(r.validationReason, "writer_output_truncated");
+  assert.deepEqual(calls, ["anthropic/claude-sonnet-5"]); // primary only, no retry
+});
+
+test("a valid strict-JSON response passes orchestration on the sensitive model", async () => {
+  const good = JSON.stringify({
+    title: "تحذير سلامة واضح للجمهور حول منتج",
+    excerpt: "موجز",
+    body: "نص عربي كافٍ لهذا الاختبار.",
+  });
+  const calls: string[] = [];
+  const r = await orchestrateWriter({
+    profile: "safety_alert",
+    config: CONFIG,
+    call: async (model) => {
+      calls.push(model);
+      return { ok: true, content: good };
+    },
+    validate: parseValidate,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.usedFallback, false);
+  assert.equal(r.modelUsed, "anthropic/claude-sonnet-5");
+  assert.deepEqual(calls, ["anthropic/claude-sonnet-5"]);
+});
+
+// --- OpenRouter completion metadata (finish_reason + content shape) ---------
+//
+// evaluateWriterCompletion inspects the raw choice BEFORE any parsing. A "stop"
+// (or absent) reason with a non-empty string may proceed; a "length" truncation,
+// a filtered / tool_calls / error / other unexpected non-null reason, or a
+// non-string content shape is a completed-but-invalid response (reject, no
+// fallback); an empty string stays a technical (fallback-eligible) failure.
+
+const goodJson = JSON.stringify({ title: "عنوان صحي واضح", excerpt: "موجز", body: "نص كافٍ." });
+
+test("finish_reason='stop' with valid JSON content proceeds (ok)", () => {
+  const r = evaluateWriterCompletion({ finish_reason: "stop", message: { content: goodJson } });
+  assert.deepEqual(r, { ok: true, content: goodJson });
+});
+
+test("an absent/null finish_reason with a valid string still proceeds", () => {
+  assert.deepEqual(evaluateWriterCompletion({ message: { content: goodJson } }), { ok: true, content: goodJson });
+  assert.deepEqual(evaluateWriterCompletion({ finish_reason: null, message: { content: goodJson } }), { ok: true, content: goodJson });
+});
+
+test("finish_reason='length' rejects as writer_output_truncated (before parsing)", () => {
+  // Even with parseable-looking content present, a truncation signal wins first.
+  const r = evaluateWriterCompletion({ finish_reason: "length", message: { content: goodJson } });
+  assert.deepEqual(r, { ok: false, kind: "completed_invalid", reason: "writer_output_truncated" });
+});
+
+test("unexpected finish reasons each reject with a specific safe reason", () => {
+  const map: Record<string, string> = {
+    content_filter: "writer_output_content_filtered",
+    tool_calls: "writer_output_tool_calls",
+    error: "writer_output_provider_error",
+    something_new: "writer_output_unexpected_finish",
+    STOP_BUT_WEIRD: "writer_output_unexpected_finish",
+  };
+  for (const [fr, reason] of Object.entries(map)) {
+    const r = evaluateWriterCompletion({ finish_reason: fr, message: { content: goodJson } });
+    assert.deepEqual(r, { ok: false, kind: "completed_invalid", reason }, fr);
+  }
+});
+
+test("finish_reason is matched case-insensitively and trimmed", () => {
+  assert.deepEqual(evaluateWriterCompletion({ finish_reason: "  Length  ", message: { content: goodJson } }), {
+    ok: false, kind: "completed_invalid", reason: "writer_output_truncated",
+  });
+  assert.deepEqual(evaluateWriterCompletion({ finish_reason: "  STOP ", message: { content: goodJson } }), {
+    ok: true, content: goodJson,
+  });
+});
+
+test("null/missing/array/object/non-string content rejects as writer_output_content_invalid", () => {
+  const bad: unknown[] = [
+    { finish_reason: "stop", message: { content: null } },
+    { finish_reason: "stop", message: {} }, // missing content
+    { finish_reason: "stop", message: { content: ["a", "b"] } }, // array
+    { finish_reason: "stop", message: { content: { text: "x" } } }, // object (structured)
+    { finish_reason: "stop", message: { content: 123 } }, // number
+    { finish_reason: "stop", message: null }, // missing message
+    { finish_reason: "stop" }, // missing message entirely
+    null, // missing choice entirely
+    undefined,
+  ];
+  for (const choice of bad) {
+    assert.deepEqual(
+      evaluateWriterCompletion(choice as never),
+      { ok: false, kind: "completed_invalid", reason: "writer_output_content_invalid" },
+      JSON.stringify(choice ?? null),
+    );
+  }
+});
+
+test("an empty/whitespace string stays a technical (fallback-eligible) 'empty' result", () => {
+  assert.deepEqual(evaluateWriterCompletion({ finish_reason: "stop", message: { content: "" } }), { ok: false, kind: "empty" });
+  assert.deepEqual(evaluateWriterCompletion({ finish_reason: "stop", message: { content: "   \n " } }), { ok: false, kind: "empty" });
+});
+
+// Mirror chatWriter's exact mapping from a raw OpenRouter choice to a
+// WriterHttpResult, so orchestration tests reflect index.ts wiring precisely.
+const choiceCall = (choice: unknown): WriterHttpResult => {
+  const evald = evaluateWriterCompletion(choice as never);
+  if (evald.ok) return { ok: true, content: evald.content };
+  if (evald.kind === "completed_invalid") return { ok: false, completedInvalid: true, reason: evald.reason };
+  return { ok: false, httpStatus: 200, emptyOrMalformed: true };
+};
+
+test("a truncated (length) completion: one call, no fallback, no retry, no insert", async () => {
+  const calls: string[] = [];
+  const r = await orchestrateWriter({
+    profile: "safety_alert",
+    config: CONFIG,
+    call: async (model) => {
+      calls.push(model);
+      return choiceCall({ finish_reason: "length", message: { content: goodJson } });
+    },
+    validate: parseValidate,
+  });
+  assert.equal(r.ok, false); // ok=false → index.ts inserts NO content row
+  assert.equal(r.usedFallback, false); // completed-but-invalid never falls back
+  assert.equal(r.rejection, "writer_output_truncated");
+  assert.equal(r.validationReason, "writer_output_truncated");
+  assert.deepEqual(calls, ["anthropic/claude-sonnet-5"]); // primary only, no retry
+});
+
+test("a non-string content shape: rejects writer_output_content_invalid, no fallback", async () => {
+  let parserRuns = 0;
+  const calls: string[] = [];
+  const r = await orchestrateWriter({
+    profile: "safety_alert",
+    config: CONFIG,
+    call: async (model) => {
+      calls.push(model);
+      return choiceCall({ finish_reason: "stop", message: { content: { text: "structured" } } });
+    },
+    validate: (content) => {
+      parserRuns++; // must never run — the completion was rejected before parsing
+      return parseValidate(content);
+    },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.usedFallback, false);
+  assert.equal(r.rejection, "writer_output_content_invalid");
+  assert.equal(r.validationReason, "writer_output_content_invalid");
+  assert.equal(parserRuns, 0); // no parser runs after a completed-invalid signal
+  assert.deepEqual(calls, ["anthropic/claude-sonnet-5"]);
+});
+
+test("a completed-invalid response does NOT reach the parser even after a technical fallback", async () => {
+  // Primary fails technically (503) → one fallback; the fallback then returns a
+  // truncated completion. It must reject with the truncation reason and NOT
+  // retry again or run the parser on the incomplete output.
+  let parserRuns = 0;
+  const calls: string[] = [];
+  const r = await orchestrateWriter({
+    profile: "quick_news",
+    config: CONFIG,
+    call: async (model) => {
+      calls.push(model);
+      if (model === "openai/gpt-5.4-mini") return { ok: false, httpStatus: 503 };
+      return choiceCall({ finish_reason: "length", message: { content: goodJson } });
+    },
+    validate: (content) => {
+      parserRuns++;
+      return parseValidate(content);
+    },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.usedFallback, true);
+  assert.equal(r.modelUsed, "openai/gpt-4o-mini");
+  assert.equal(r.rejection, "writer_output_truncated");
+  assert.equal(r.validationReason, "writer_output_truncated");
+  assert.equal(parserRuns, 0);
+  assert.deepEqual(calls, ["openai/gpt-5.4-mini", "openai/gpt-4o-mini"]); // no third call
+});
+
+test("gemini stays forbidden regardless of completion-metadata handling", () => {
+  // The new completion path never introduces a model choice; the forbidden guard
+  // still holds across every role.
+  assert.throws(() => assertWriterConfig({ ...CONFIG, defaultModel: "google/gemini-3-flash-preview" }), /forbidden_model/);
+  for (const p of ALL_PROFILES) assert.ok(!isForbiddenWriterModel(selectWriterModel(p, CONFIG)));
 });

@@ -41,6 +41,7 @@ import {
 } from "./salmaWriter.ts";
 import {
   assertWriterConfig,
+  evaluateWriterCompletion,
   orchestrateWriter,
   processRepresentativesWithLimit,
   resolvePilotGate,
@@ -298,11 +299,16 @@ async function chatWriter(
     });
     if (!res.ok) return { ok: false, httpStatus: res.status };
     const data = await res.json().catch(() => null);
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || content.trim().length === 0) {
-      return { ok: false, httpStatus: res.status, emptyOrMalformed: true };
+    // Inspect the completion metadata (finish_reason + content shape) BEFORE
+    // parsing: a truncated/filtered/tool_calls completion or a non-string
+    // content shape is a completed-but-invalid response (reject, no fallback);
+    // an empty completion stays a technical failure (fallback-eligible).
+    const evald = evaluateWriterCompletion(data?.choices?.[0]);
+    if (evald.ok) return { ok: true, content: evald.content };
+    if (evald.kind === "completed_invalid") {
+      return { ok: false, completedInvalid: true, reason: evald.reason };
     }
-    return { ok: true, content };
+    return { ok: false, httpStatus: res.status, emptyOrMalformed: true };
   } catch (e) {
     const timedOut = e instanceof DOMException && e.name === "TimeoutError";
     return { ok: false, httpStatus: 0, timedOut, networkError: !timedOut };
@@ -509,7 +515,9 @@ async function writeArticle(input: {
     const parsed = parseWriterOutput(content);
     if (!parsed.ok) return { ok: false, reason: parsed.error };
     const v = validateArticle({
-      article: parsed.article,
+      // The writer output no longer echoes a profile field (strict 3-field
+      // schema); use the deterministic routing profile computed above.
+      article: { ...parsed.article, profile },
       source: {
         sourceText: verifiedFactText,
         originalTitle,
