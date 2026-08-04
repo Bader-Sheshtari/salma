@@ -391,8 +391,22 @@ const OFFICIAL_ACTION_PATTERNS: { code: string; patterns: RegExp[] }[] = [
     /arranging (?:for )?return/,
   ] },
   { code: "discard", patterns: [
-    /التخلص من (?:المنتج|الدواء|المستحضر|العبوة)/, /تخلص(?:وا)? من (?:المنتج|الدواء|العبوة)/,
-    /إتلاف (?:المنتج|الدواء|العبوة)/, /رمي (?:المنتج|الدواء|العبوة)/,
+    // Deterministic Arabic equivalence for "dispose of it": the disposal verb
+    // (التخلص من / تخلصوا من / إتلاف / رمي) followed by an explicit reference to
+    // the affected product OR to its stock/quantities OR by an attached object
+    // pronoun (‑ه/‑ها/‑هما) that, in a recall context, refers back to the same
+    // product. This is a bounded whitelist of grammatical variants — never
+    // free-form fuzzy matching — so "التخلص منه" counts the same as
+    // "التخلص من المنتج", while an unrelated pronoun cannot invent a discard.
+    /التخلص من (?:ال)?(?:منتج|دواء|مستحضر|عبوة|عبوات|كمية|كميات|مخزون)/,
+    /التخلص من الكميات المتأثرة/,
+    /التخلص من(?:ه|ها|هما)/,
+    /تخلص(?:وا)? من (?:ال)?(?:منتج|دواء|عبوة|عبوات|كمية|كميات|مخزون)/,
+    /تخلص(?:وا)? من(?:ه|ها|هما)/,
+    /إتلاف (?:ال)?(?:منتج|دواء|عبوة|عبوات|كمية|كميات|مخزون)/,
+    /إتلاف الكميات المتأثرة/,
+    /إتلاف(?:ه|ها|هما)/,
+    /رمي (?:ال)?(?:منتج|دواء|عبوة)/,
     /discard/, /dispose of/, /throw (?:it|them|the product|the item)? ?away/,
   ] },
   { code: "check", patterns: [
@@ -648,6 +662,155 @@ export function safetyIdentifierNeeded(sourceText: string): boolean {
   return false;
 }
 
+// --- Arabic-first foreign-name naming contract -----------------------------
+//
+// A reader-essential FOREIGN proper name (medicine/company/product/institution)
+// whose exact identity matters must appear in the visible article as:
+//   «Arabic name/transliteration (Exact Original Name)»
+// at the FIRST mention only, then Arabic alone afterward. The exact original
+// identity has to survive (so the reader can pin down the product), but purely
+// formal/regulatory suffixes ("for Injection", "USP", "Inc.", "Ltd", …) are
+// removable — they are not part of the essential identity. This layer enforces
+// that contract deterministically WITHOUT weakening factual validation and
+// WITHOUT accepting fuzzy transliterations: the exact original identity string
+// must still be present verbatim (inside the first-mention parenthetical).
+
+// Removable formal/regulatory suffix words that are NOT part of an entity's
+// essential identity. Only stripped as trailing tokens preceded by space/comma.
+const REMOVABLE_NAME_SUFFIXES = [
+  "for injection",
+  "injection",
+  "for solution",
+  "solution",
+  "for suspension",
+  "suspension",
+  "usp",
+  "bp",
+  "inc",
+  "llc",
+  "ltd",
+  "plc",
+  "corp",
+  "corporation",
+  "company",
+  "gmbh",
+  "ndc",
+  "lot",
+];
+
+/**
+ * Return an entity's ESSENTIAL identity by removing trailing formal/regulatory
+ * suffixes (e.g. "Cyclophosphamide for Injection, USP" → "Cyclophosphamide",
+ * "Sunny Pharmtech Inc." → "Sunny Pharmtech"). A chemical descriptor that IS
+ * part of the identity (e.g. "Hydrochloride") is kept. Only standalone trailing
+ * tokens (preceded by whitespace/comma) are stripped, so a name like "Aramco"
+ * is never truncated.
+ */
+export function stripFormalSuffixes(name: string): string {
+  let s = (name ?? "").trim();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const tok of REMOVABLE_NAME_SUFFIXES) {
+      const esc = tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`[\\s,]+${esc}\\.?\\s*$`, "i");
+      if (re.test(s)) {
+        s = s.replace(re, "").trim();
+        changed = true;
+        break;
+      }
+    }
+  }
+  return s.replace(/[\s,]+$/, "").trim();
+}
+
+const ARABIC_LETTER_RE = /[\u0600-\u06FF]/;
+
+/** Every case-insensitive occurrence of the multi-word `identity` phrase in
+ *  `text`, each tagged with whether it is an Arabic-first parenthetical gloss:
+ *  the phrase sits immediately inside "(" and an Arabic letter appears just
+ *  before that "(" (e.g. "سيكلوفوسفاميد (Cyclophosphamide)"). */
+function findIdentityOccurrences(
+  text: string,
+  identity: string,
+): { index: number; isGloss: boolean }[] {
+  const t = text ?? "";
+  const tokens = identity
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!tokens.length) return [];
+  const re = new RegExp(tokens.join("\\s+"), "gi");
+  const out: { index: number; isGloss: boolean }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    let i = m.index - 1;
+    while (i >= 0 && /\s/.test(t[i])) i--;
+    let isGloss = false;
+    if (i >= 0 && t[i] === "(") {
+      const before = t.slice(Math.max(0, i - 30), i);
+      isGloss = ARABIC_LETTER_RE.test(before);
+    }
+    out.push({ index: m.index, isGloss });
+    if (re.lastIndex === m.index) re.lastIndex++;
+  }
+  return out;
+}
+
+export type ForeignNameStatus = {
+  // "ok": exact identity present, first mention is an Arabic-first gloss, not in
+  //       the title, not repeated. "missing": exact identity absent everywhere.
+  // "flagged": present but violates a placement/repetition/title rule.
+  status: "ok" | "missing" | "flagged";
+  present: boolean;
+  firstMentionGloss: boolean;
+  englishFirst: boolean;
+  englishInTitle: boolean;
+  englishRepeated: boolean;
+};
+
+/**
+ * Deterministically evaluate the Arabic-first naming contract for one protected
+ * foreign entity. The exact ORIGINAL identity (formal suffixes stripped) must
+ * appear verbatim; the first visible mention must be an Arabic-first
+ * parenthetical gloss; the title must stay Arabic-only; and the English form
+ * must not repeat after the first mention.
+ */
+export function foreignEssentialNameStatus(input: {
+  title: string;
+  visible: string; // excerpt + body (the reader-facing story, minus the title)
+  entity: string;
+}): ForeignNameStatus {
+  const identity = stripFormalSuffixes(input.entity);
+  const occ = findIdentityOccurrences(input.visible ?? "", identity);
+  const titleOcc = findIdentityOccurrences(input.title ?? "", identity);
+  const present = occ.length > 0 || titleOcc.length > 0;
+  if (!present) {
+    return {
+      status: "missing",
+      present: false,
+      firstMentionGloss: false,
+      englishFirst: false,
+      englishInTitle: false,
+      englishRepeated: false,
+    };
+  }
+  const firstMentionGloss = occ.length > 0 && occ[0].isGloss;
+  const englishFirst = occ.length > 0 && !occ[0].isGloss;
+  const englishInTitle = titleOcc.length > 0;
+  const englishRepeated = occ.length >= 2;
+  const clean = firstMentionGloss && !englishInTitle && !englishRepeated;
+  return {
+    status: clean ? "ok" : "flagged",
+    present: true,
+    firstMentionGloss,
+    englishFirst,
+    englishInTitle,
+    englishRepeated,
+  };
+}
+
 /**
  * Conservative, blocking fact-grounding checks. Any error here must prevent a
  * pending draft. Nothing is silently repaired — a factual contradiction is a
@@ -726,11 +889,43 @@ export function checkFactGrounding(
     const vis = classifyEntityVisibility(ent, profile, source.sourceText);
     if (vis === "verification_only") continue;
     if (vis === "conditional" && !identifierNeeded) continue;
-    const e = normalizeForCompare(ent);
-    if (e && !genNorm.includes(e)) {
+
+    // The essential identity (formal/regulatory suffixes removed) is what must
+    // survive — never a shortened or altered form. A FOREIGN essential name is
+    // held to the Arabic-first naming contract (exact original once, inside a
+    // first-mention gloss, Arabic-only title, no English repetition); a native
+    // Arabic essential name keeps the plain presence check.
+    const identity = stripFormalSuffixes(ent);
+    const idNorm = normalizeForCompare(identity);
+    if (!idNorm) continue;
+    const foreign = /[a-z]/.test(idNorm);
+
+    if (!foreign) {
+      if (!genNorm.includes(idNorm)) {
+        if (profile === "safety_alert") errors.push(`missing_essential_entity:${ent}`);
+        else warnings.push(`missing_essential_entity:${ent}`);
+      }
+      continue;
+    }
+
+    const rep = foreignEssentialNameStatus({
+      title: article.title,
+      visible: `${article.excerpt}\n${article.body}`,
+      entity: ent,
+    });
+    if (rep.status === "missing") {
+      // Exact original identity absent (or only a shortened/altered form present)
+      // — blocking for a safety alert, a warning elsewhere. Unchanged severity.
       if (profile === "safety_alert") errors.push(`missing_essential_entity:${ent}`);
       else warnings.push(`missing_essential_entity:${ent}`);
+      continue;
     }
+    // Present, but flag placement/repetition deviations (advisory — the editorial
+    // gate independently blocks title-English and inline English-only). These
+    // never weaken factual validation.
+    if (rep.englishInTitle) warnings.push(`essential_entity_english_in_title:${ent}`);
+    if (rep.englishFirst) warnings.push(`essential_entity_not_arabic_first:${ent}`);
+    if (rep.englishRepeated) warnings.push(`essential_entity_english_repeated:${ent}`);
   }
 
   // 6) Safety-alert official actions & unaffected-batch reassurance (blocking).
@@ -769,8 +964,17 @@ export function checkFactGrounding(
     // guidance can cause harm); other profiles keep it as a warning.
     const srcAud = officialActionsByAudience(source.sourceText);
     const genAud = officialActionsByAudience(generated);
+    // Facility-only source action handed to patients (dangerous), and the
+    // symmetric case — a patient-only source action handed to facilities — so a
+    // facility instance can never silently satisfy a patient action or vice
+    // versa. Both directions are BLOCKING for a safety alert.
     for (const a of srcAud.facility) {
       if (!srcAud.patient.has(a) && genAud.patient.has(a)) {
+        errors.push(`audience_misdirected_action:${a}`);
+      }
+    }
+    for (const a of srcAud.patient) {
+      if (!srcAud.facility.has(a) && genAud.facility.has(a)) {
         errors.push(`audience_misdirected_action:${a}`);
       }
     }
@@ -780,6 +984,11 @@ export function checkFactGrounding(
     const genAud = officialActionsByAudience(generated);
     for (const a of srcAud.facility) {
       if (!srcAud.patient.has(a) && genAud.patient.has(a)) {
+        warnings.push(`audience_misdirected_action:${a}`);
+      }
+    }
+    for (const a of srcAud.patient) {
+      if (!srcAud.facility.has(a) && genAud.facility.has(a)) {
         warnings.push(`audience_misdirected_action:${a}`);
       }
     }

@@ -42,6 +42,7 @@ import {
 import {
   assertWriterConfig,
   evaluateWriterCompletion,
+  isForbiddenWriterModel,
   orchestrateWriter,
   processRepresentativesWithLimit,
   resolvePilotGate,
@@ -50,6 +51,17 @@ import {
   type WriterModelConfig,
   type WriterValidation,
 } from "./writerRouter.ts";
+import {
+  buildEditorInstructions,
+  buildFactPacket,
+  type EditorArticle,
+  EDITOR_PROMPT_VERSION,
+  EDITOR_RESPONSE_FORMAT,
+  type EditorCallResult,
+  type EditorialAudit,
+  renderEditorPacket,
+  runEditorPass,
+} from "./salmaEditor.ts";
 import {
   fetchSourceText,
   groundedWrite,
@@ -72,6 +84,20 @@ const WRITER_CONFIG: WriterModelConfig = {
   sensitiveModel: Deno.env.get("OPENROUTER_WRITER_SENSITIVE_MODEL") || "anthropic/claude-sonnet-5",
   fallbackModel: Deno.env.get("OPENROUTER_WRITER_FALLBACK_MODEL") || "openai/gpt-4o-mini",
 };
+
+// E1.4A editorial-director model. Configured INDEPENDENTLY of the writer route
+// (its own env var) so the editor model can be tuned without touching writer
+// routing. It runs once on every validated writer draft; there is no fallback
+// and no retry. google/gemini-3-flash-preview must never be configured here
+// (assertEditorConfig enforces this at run start, same rule as the writer).
+const EDITOR_MODEL = Deno.env.get("OPENROUTER_EDITOR_MODEL") || "openai/gpt-5.4-mini";
+
+function assertEditorConfig(model: string): void {
+  if (!model || !model.trim()) throw new Error("editor model is not configured");
+  if (isForbiddenWriterModel(model)) {
+    throw new Error(`forbidden editor model configured: ${model}`);
+  }
+}
 
 // Fallback set, used only if the categories table can't be read. The live list
 // is fetched from the DB per run so admin-created categories work too.
@@ -155,6 +181,11 @@ type PilotReport = {
   pending_articles_created: number;
   rejection_reason: string | null;
   created_content_id: string | null;
+  // E1.4A: the editorial-director audit for the single draft that reached the
+  // editor stage (null until then). Observability-only — surfaced in the HTTP
+  // pilot report, NOT persisted to ingestion_decisions (no migration).
+  editorial: EditorialAudit | null;
+  editor_prompt_version: string | null;
 };
 
 type Draft = {
@@ -315,6 +346,53 @@ async function chatWriter(
   }
 }
 
+// ---- Editorial-director model client (E1.4A) ----------------------------
+//
+// One OpenRouter call for the single editorial-rewrite attempt. Mirrors
+// chatWriter's transport but returns the editor's own result shape: any
+// transport/HTTP/empty failure is a plain reason string (the editor never
+// falls back or retries — a failed call simply keeps the writer draft). It
+// sends ONLY the neutral headers; never a Supabase secret or the API key in
+// the body. A slightly higher token budget covers the edited body plus the
+// short issues_found/changes_made control lists.
+async function chatEditor(
+  model: string,
+  messages: { role: string; content: string }[],
+): Promise<EditorCallResult> {
+  const apiKey = Deno.env.get("OPENROUTER_API_KEY");
+  if (!apiKey) return { ok: false, reason: "editor_api_key_missing" };
+  try {
+    const res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://salma.health",
+        "X-Title": "Salma",
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.2,
+        max_tokens: 2200,
+        response_format: EDITOR_RESPONSE_FORMAT,
+      }),
+      signal: AbortSignal.timeout(45000),
+    });
+    if (!res.ok) return { ok: false, reason: `editor_http_${res.status}` };
+    const data = await res.json().catch(() => null);
+    const evald = evaluateWriterCompletion(data?.choices?.[0]);
+    if (evald.ok) return { ok: true, content: evald.content };
+    return {
+      ok: false,
+      reason: evald.kind === "completed_invalid" ? `editor_completed_invalid:${evald.reason}` : "editor_empty_completion",
+    };
+  } catch (e) {
+    const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+    return { ok: false, reason: timedOut ? "editor_timeout" : "editor_network_error" };
+  }
+}
+
 // ---- Hardened source-fetch adapter (E1.3D) ------------------------------
 //
 // The real network primitive handed to fetchSourceText. It performs ONE request
@@ -434,7 +512,16 @@ function renderWriterPacket(input: {
 }
 
 type WriterOutcome =
-  | { ok: true; article: { title: string; excerpt: string; body: string; summary?: string }; readMinutes: number; audit: WriterAudit }
+  | {
+    ok: true;
+    article: { title: string; excerpt: string; body: string; summary?: string };
+    readMinutes: number;
+    audit: WriterAudit;
+    // E1.4A editorial-director audit for the single edit attempt on this draft.
+    // Carried SEPARATELY from WriterAudit so the ingestion_decisions insert stays
+    // unchanged (no migration); surfaced only in the pilot HTTP report.
+    editorial: EditorialAudit;
+  }
   | { ok: false; rejection: string; audit: WriterAudit };
 
 // Select the profile, route to the approved model (with technical-failure
@@ -560,10 +647,71 @@ async function writeArticle(input: {
     source_char_count: input.verified.charCount,
     source_word_count: input.verified.wordCount,
   };
-  if (r.ok && r.article) {
-    return { ok: true, article: r.article, readMinutes: r.readMinutes ?? readingTimeMinutes(r.article.body), audit };
+  if (!(r.ok && r.article)) {
+    return { ok: false, rejection: r.rejection ?? "writer_failed", audit };
   }
-  return { ok: false, rejection: r.rejection ?? "writer_failed", audit };
+  const writerArticle = r.article;
+
+  // E1.4A editorial pass: the writer draft is factually valid; now run exactly
+  // ONE automated editorial rewrite over it. The edited draft REPLACES the
+  // writer draft only when it re-passes the SAME factual validation (over the
+  // same verified fact text), preserves the required actions / essential
+  // entities / risk, and clears the deterministic editorial gate. Otherwise the
+  // writer draft is retained unchanged (safe fallback). This never weakens
+  // factual validation — it runs after it and revalidates.
+  const writerReadMinutes = r.readMinutes ?? readingTimeMinutes(writerArticle.body);
+  const packet = buildFactPacket({ profile, sourceText: verifiedFactText, mustPreserve });
+  const revalidate = (a: EditorArticle) => {
+    const v = validateArticle({
+      article: { title: a.title, excerpt: a.excerpt, body: a.body, profile },
+      source: { sourceText: verifiedFactText, originalTitle, brand: input.sourceName ?? null, mustPreserve },
+    });
+    return v.ok
+      ? ({ ok: true, readMinutes: v.readMinutes, cleanTitle: v.cleanTitle } as const)
+      : ({ ok: false, reason: v.rejectionReason ?? "validation_failed" } as const);
+  };
+  const writerDraft: EditorArticle = {
+    title: writerArticle.title,
+    excerpt: writerArticle.excerpt,
+    summary: writerArticle.summary ?? "",
+    body: writerArticle.body,
+  };
+  const editorPass = await runEditorPass({
+    profile,
+    model: EDITOR_MODEL,
+    original: { article: writerDraft, readMinutes: writerReadMinutes },
+    packet,
+    call: (model, opts) =>
+      chatEditor(model, [
+        {
+          role: "system",
+          content: buildEditorInstructions(profile, {
+            strictJsonRecovery: opts?.strictRecovery,
+            repairIssues: opts?.repair?.issues,
+          }),
+        },
+        {
+          role: "user",
+          // Editorial repair works from the FIRST edited draft; every other call
+          // (normal + formatting recovery) works from the writer draft.
+          content: renderEditorPacket({ packet, draft: opts?.repair?.draft ?? writerDraft }),
+        },
+      ]),
+    revalidate,
+    verificationOnly: packet.verificationOnly,
+  });
+
+  // Choose the final stored article. The edited draft carries its own non-empty
+  // summary; when the writer draft is retained, its optional summary is kept.
+  const finalArticle = editorPass.audit.edited_draft_accepted
+    ? {
+      title: editorPass.article.title,
+      excerpt: editorPass.article.excerpt,
+      body: editorPass.article.body,
+      summary: editorPass.article.summary,
+    }
+    : writerArticle;
+  return { ok: true, article: finalArticle, readMinutes: editorPass.readMinutes, audit, editorial: editorPass.audit };
 }
 
 // ---- Helpers ------------------------------------------------------------
@@ -777,12 +925,16 @@ async function runIngestion(
       pending_articles_created: 0,
       rejection_reason: null,
       created_content_id: null,
+      editorial: null,
+      editor_prompt_version: null,
     }
     : null;
 
   // Fail fast on a misconfigured writer route (empty or forbidden model) before
-  // any discovery/model call — never silently route to the wrong model.
+  // any discovery/model call — never silently route to the wrong model. The
+  // editorial-director model is asserted on the same rule (independent config).
   assertWriterConfig(WRITER_CONFIG);
+  assertEditorConfig(EDITOR_MODEL);
 
   const { data: policy } = await db
     .from("editorial_policy")
@@ -1246,6 +1398,12 @@ async function runIngestion(
     if (pilot) {
       pilot.writer_calls_attempted += 1;
       if (written.audit.writer_fallback_used) pilot.fallback_calls_attempted += 1;
+      // The editor runs once inside writeArticle on every validated draft, so a
+      // successful writer outcome always carries an editorial audit to surface.
+      if (written.ok) {
+        pilot.editorial = written.editorial;
+        pilot.editor_prompt_version = EDITOR_PROMPT_VERSION;
+      }
     }
     if (!written.ok) {
       logDecision(draft, chosen, false, written.rejection, {

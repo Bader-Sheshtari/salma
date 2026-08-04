@@ -30,6 +30,8 @@ import {
   classifyEntityVisibility,
   safetyIdentifierNeeded,
   editorialQualityWarnings,
+  stripFormalSuffixes,
+  foreignEssentialNameStatus,
 } from "./salmaWriter.ts";
 
 // --- profile selection -----------------------------------------------------
@@ -1160,4 +1162,237 @@ test("writing instructions carry the compression rules and optional summary fiel
   assert.ok(instr.includes("\"title\""));
   assert.ok(instr.includes("\"body\""));
   assert.ok(!instr.includes("\"profile\""));
+});
+
+// --- Arabic-first foreign-name naming contract -----------------------------
+//
+// A reader-essential foreign proper name must appear as «Arabic (Exact Original)»
+// at the first mention only, then Arabic alone, with an Arabic-only title. The
+// exact original identity must survive; formal/regulatory suffixes are removable.
+
+test("stripFormalSuffixes: removes formal/regulatory suffixes, keeps identity", () => {
+  assert.equal(stripFormalSuffixes("Cyclophosphamide for Injection, USP"), "Cyclophosphamide");
+  assert.equal(stripFormalSuffixes("Papaverine Hydrochloride Injection, USP"), "Papaverine Hydrochloride");
+  assert.equal(stripFormalSuffixes("Sunny Pharmtech Inc."), "Sunny Pharmtech");
+  assert.equal(stripFormalSuffixes("Acme Labs LLC"), "Acme Labs");
+  // A chemical descriptor that IS part of the identity is preserved.
+  assert.equal(stripFormalSuffixes("Papaverine Hydrochloride"), "Papaverine Hydrochloride");
+  // A standalone name is never truncated (no "co"/"inc" false strip).
+  assert.equal(stripFormalSuffixes("Aramco"), "Aramco");
+  assert.equal(stripFormalSuffixes("Cyclophosphamide"), "Cyclophosphamide");
+});
+
+test("foreignEssentialNameStatus: Arabic-first + exact parenthetical passes", () => {
+  const s = foreignEssentialNameStatus({
+    title: "سحب ثلاث دفعات من حقن سيكلوفوسفاميد بسبب جسيمات معدنية",
+    visible:
+      "سحبت شركة سني فارماتيك (Sunny Pharmtech) ثلاث دفعات من حقن سيكلوفوسفاميد (Cyclophosphamide) في الولايات المتحدة، بعد العثور على جسيمات معدنية داخل بعض العبوات.\n\nوطلبت من الصيدليات التوقف عن استخدام المنتج وإرجاعه.",
+    entity: "Cyclophosphamide for Injection, USP",
+  });
+  assert.equal(s.status, "ok");
+  assert.equal(s.firstMentionGloss, true);
+  assert.equal(s.englishInTitle, false);
+  assert.equal(s.englishRepeated, false);
+
+  const p = foreignEssentialNameStatus({
+    title: "سحب دفعة من حقن بابافيرين بعد العثور على جسيمات",
+    visible:
+      "سحبت شركة أميركية دفعة من حقن بابافيرين (Papaverine Hydrochloride)، بعد العثور على جسيمات داخل بعض العبوات.\n\nوطلبت من المرضى التوقف عن الاستخدام.",
+    entity: "Papaverine Hydrochloride",
+  });
+  assert.equal(p.status, "ok");
+  assert.equal(p.firstMentionGloss, true);
+});
+
+test("foreignEssentialNameStatus: dropping the exact original entirely fails", () => {
+  const s = foreignEssentialNameStatus({
+    title: "سحب حقن سيكلوفوسفاميد",
+    visible: "سحبت شركة سني فارماتيك ثلاث دفعات من حقن سيكلوفوسفاميد بعد العثور على جسيمات معدنية.",
+    entity: "Cyclophosphamide",
+  });
+  assert.equal(s.status, "missing");
+  assert.equal(s.present, false);
+});
+
+test("foreignEssentialNameStatus: English-first wording is flagged, not clean", () => {
+  const s = foreignEssentialNameStatus({
+    title: "سحب حقن",
+    visible: "Cyclophosphamide injection recalled بعد رصد جسيمات داخل قوارير سيكلوفوسفاميد.",
+    entity: "Cyclophosphamide",
+  });
+  assert.equal(s.englishFirst, true);
+  assert.equal(s.firstMentionGloss, false);
+  assert.notEqual(s.status, "ok");
+});
+
+test("foreignEssentialNameStatus: English repeated after first mention is flagged", () => {
+  const s = foreignEssentialNameStatus({
+    title: "سحب حقن سيكلوفوسفاميد",
+    visible:
+      "سحبت الجهة حقن سيكلوفوسفاميد (Cyclophosphamide)، ثم أكدت أن Cyclophosphamide غير آمن للاستخدام.",
+    entity: "Cyclophosphamide",
+  });
+  assert.equal(s.englishRepeated, true);
+  assert.notEqual(s.status, "ok");
+});
+
+test("foreignEssentialNameStatus: English in the title is flagged", () => {
+  const s = foreignEssentialNameStatus({
+    title: "سحب دواء Cyclophosphamide للحقن",
+    visible: "سحبت الجهة حقن سيكلوفوسفاميد (Cyclophosphamide) بعد رصد جسيمات.",
+    entity: "Cyclophosphamide",
+  });
+  assert.equal(s.englishInTitle, true);
+  assert.notEqual(s.status, "ok");
+});
+
+test("foreignEssentialNameStatus: a shortened identity does not silently pass", () => {
+  // The protected identity is "Papaverine Hydrochloride"; a bare "Papaverine"
+  // could change identity, so it must NOT count as present.
+  const s = foreignEssentialNameStatus({
+    title: "سحب حقن بابافيرين",
+    visible: "سحبت الجهة حقن بابافيرين (Papaverine) بعد رصد جسيمات داخل العبوات.",
+    entity: "Papaverine Hydrochloride",
+  });
+  assert.equal(s.status, "missing");
+});
+
+// Verified Arabic source for the fact-grounding integration checks below.
+const CYCLO_CONTRACT_SOURCE =
+  "سحبت شركة سني فارماتيك (Sunny Pharmtech) ثلاث دفعات من حقن سيكلوفوسفاميد (Cyclophosphamide for Injection, USP) " +
+  "في الولايات المتحدة بعد العثور على جسيمات معدنية داخل بعض العبوات. وطلبت من الصيدليات والمستشفيات التوقف عن " +
+  "استخدام المنتج وإرجاعه إلى مكان الشراء.";
+
+test("checkFactGrounding: an Arabic-first gloss for a foreign entity is grounded", () => {
+  const { errors } = checkFactGrounding(
+    {
+      title: "سحب ثلاث دفعات من حقن سيكلوفوسفاميد بسبب جسيمات معدنية",
+      excerpt: "قرار احترازي بعد العثور على جسيمات معدنية داخل بعض العبوات.",
+      body:
+        "سحبت شركة سني فارماتيك (Sunny Pharmtech) ثلاث دفعات من حقن سيكلوفوسفاميد (Cyclophosphamide) في الولايات المتحدة، بعد العثور على جسيمات معدنية داخل بعض العبوات.\n\n" +
+        "وطلبت الشركة من الصيدليات والمستشفيات التوقف عن استخدام المنتج وإرجاعه إلى مكان الشراء.",
+    },
+    { sourceText: CYCLO_CONTRACT_SOURCE, mustPreserve: ["Cyclophosphamide for Injection, USP", "Sunny Pharmtech"] },
+    "safety_alert",
+  );
+  assert.ok(!errors.some((e) => e.startsWith("missing_essential_entity")));
+});
+
+test("checkFactGrounding: dropping the parenthetical protected identity fails safely", () => {
+  const { errors } = checkFactGrounding(
+    {
+      title: "سحب ثلاث دفعات من حقن سيكلوفوسفاميد بسبب جسيمات معدنية",
+      excerpt: "قرار احترازي بعد العثور على جسيمات معدنية داخل بعض العبوات.",
+      body:
+        "سحبت شركة سني فارماتيك ثلاث دفعات من حقن سيكلوفوسفاميد في الولايات المتحدة، بعد العثور على جسيمات معدنية داخل بعض العبوات.\n\n" +
+        "وطلبت الشركة من الصيدليات والمستشفيات التوقف عن استخدام المنتج وإرجاعه إلى مكان الشراء.",
+    },
+    { sourceText: CYCLO_CONTRACT_SOURCE, mustPreserve: ["Cyclophosphamide"] },
+    "safety_alert",
+  );
+  assert.ok(errors.includes("missing_essential_entity:Cyclophosphamide"));
+});
+
+test("validateArticle: approved Papaverine Arabic-first gloss passes identity validation", () => {
+  const v = validateArticle({
+    article: {
+      title: "سحب دفعة من حقن بابافيرين بعد العثور على جسيمات داخل العبوات",
+      excerpt: "قرار احترازي بعد رصد جسيمات داخل بعض العبوات قد تضر المرضى.",
+      body:
+        "سحبت السلطات الأميركية دفعة من حقن بابافيرين (Papaverine Hydrochloride) بعد العثور على جسيمات داخل بعض العبوات قد تؤذي المرضى إذا دخلت مجرى الدم.\n\n" +
+        "ونصحت المرضى الذين يستخدمون المنتج بالتوقف عن استخدامه والتواصل مع الطبيب، فيما طُلب من الموزّعين والمنشآت الصحية إرجاع المنتج إلى مكان الشراء أو التخلص منه.\n\n" +
+        "ولم تُسجَّل حتى الآن أي أعراض جانبية مرتبطة بهذا السحب، وتبقى بقية الدفعات غير متأثرة وآمنة.",
+      profile: "safety_alert",
+    },
+    source: { sourceText: PAPAVERINE_SOURCE, mustPreserve: PAPAVERINE_MUST_PRESERVE },
+  });
+  assert.equal(v.ok, true);
+  assert.ok(!v.errors.some((e) => e.startsWith("missing_essential_entity")));
+  // A correct first-mention gloss raises none of the placement warnings.
+  assert.ok(!v.warnings.some((w) => w.startsWith("essential_entity_")));
+});
+
+// --- Deterministic Arabic discard-equivalence (E1.5 action matcher) --------
+//
+// The disposal verb (التخلص من / تخلصوا من / إتلاف) followed by an explicit
+// reference to the affected product, its stock/quantities, or an attached
+// object pronoun (‑ه/‑ها/‑هما) referring back to the same product all count as
+// the SAME "discard" action. This is a bounded whitelist of grammatical
+// variants, never free-form fuzzy matching — an unrelated pronoun does not
+// invent a discard, and discard stays distinct from return.
+
+test("extractOfficialActions: التخلص منه counts as discard (pronoun form)", () => {
+  const actions = extractOfficialActions(
+    "على المنشآت الصحية إرجاع المنتج إلى مكان الشراء أو التخلص منه.",
+  );
+  assert.ok(actions.includes("discard"));
+  assert.ok(actions.includes("return"));
+});
+
+test("extractOfficialActions: التخلص من الكميات المتأثرة counts as discard", () => {
+  const actions = extractOfficialActions("يجب التخلص من الكميات المتأثرة فوراً.");
+  assert.ok(actions.includes("discard"));
+});
+
+test("extractOfficialActions: إتلاف المنتج and إتلافه both count as discard", () => {
+  assert.ok(extractOfficialActions("يُرجى إتلاف المنتج المسحوب.").includes("discard"));
+  assert.ok(extractOfficialActions("يُرجى إتلافه على الفور.").includes("discard"));
+});
+
+test("extractOfficialActions: an unrelated pronoun does NOT invent a discard", () => {
+  // "تخلّصنا من القلق" (we got rid of the worry) is not a disposal instruction:
+  // no whitelisted noun and no attached object pronoun on the preposition.
+  const actions = extractOfficialActions(
+    "أكدت الجهة أنها تابعت الوضع عن كثب دون أي مخاطر على المرضى.",
+  );
+  assert.ok(!actions.includes("discard"));
+});
+
+test("extractOfficialActions: discard stays distinct from return", () => {
+  // Return alone must never register as discard.
+  const actions = extractOfficialActions("على الموزّعين إرجاع المنتج إلى مكان الشراء.");
+  assert.ok(actions.includes("return"));
+  assert.ok(!actions.includes("discard"));
+});
+
+// --- Audience separation is symmetric and BLOCKING for a safety alert ------
+//
+// #5 patient action cannot satisfy a facility action; #6 facility action
+// cannot satisfy a patient action. Both directions block a safety alert.
+
+test("safety_alert: facility-only discard (pronoun form) aimed at patients is BLOCKED", () => {
+  // #6 mirror using the pronoun disposal form: the source assigns discard to
+  // facilities only, the article tells patients to التخلص منه.
+  const src =
+    "Distributors and healthcare facilities should return to place of purchase " +
+    "or discard the product. Patients should stop using it and contact their doctor.";
+  const body =
+    "دعت الجهة المرضى إلى التوقف عن استخدام المنتج والتخلص منه. " +
+    repeatTo(130, "تتابع الجهة الوضع وتوضح أن السحب يشمل الدفعة المعنية فقط");
+  const { errors } = checkFactGrounding(
+    { title: "سحب منتج وإرشادات للمرضى", excerpt: "", body },
+    { sourceText: src },
+    "safety_alert",
+  );
+  assert.ok(errors.includes("audience_misdirected_action:discard"));
+  assert.ok(!errors.some((e) => e.startsWith("invented_official_action")));
+});
+
+test("safety_alert: patient-only contact action given to facilities is BLOCKED", () => {
+  // #5: source assigns contact-a-doctor to patients only; the article puts it on
+  // the facilities. A facility action cannot stand in for the patient one and
+  // vice-versa — this must block.
+  const src =
+    "Distributors and healthcare facilities should return to place of purchase. " +
+    "Patients should stop using it and contact their doctor.";
+  const body =
+    "دعت الجهة الموزّعين والمنشآت الصحية إلى إرجاع المنتج إلى مكان الشراء والتواصل مع الطبيب. " +
+    repeatTo(130, "تتابع الجهة الوضع وتوضح أن السحب يشمل الدفعة المعنية فقط");
+  const { errors } = checkFactGrounding(
+    { title: "سحب منتج وإرشادات للمنشآت", excerpt: "", body },
+    { sourceText: src },
+    "safety_alert",
+  );
+  assert.ok(errors.includes("audience_misdirected_action:contact"));
+  assert.ok(!errors.some((e) => e.startsWith("invented_official_action")));
 });
