@@ -318,6 +318,124 @@ test("a valid strict-JSON response passes orchestration on the sensitive model",
   assert.equal(r.usedFallback, false);
   assert.equal(r.modelUsed, "anthropic/claude-sonnet-5");
   assert.deepEqual(calls, ["anthropic/claude-sonnet-5"]);
+  // A clean first write records exactly one attempt and no second-attempt type.
+  assert.equal(r.writerAttempts, 1);
+  assert.equal(r.secondAttemptType, "none");
+});
+
+// --- writer JSON-recovery (one strict-JSON reparse retry) -------------------
+//
+// Mirrors the editor's single formatting recovery. It fires ONLY when the first
+// response fails JSON parsing with writer_output_invalid_json, reuses the SAME
+// primary model (never Gemini/fallback), and validates the recovered output the
+// SAME way. A still-invalid or failed recovery rejects safely as before.
+const recoveredJson = JSON.stringify({
+  title: "تحذير سلامة واضح للجمهور حول منتج",
+  excerpt: "موجز",
+  body: "نص عربي كافٍ لهذا الاختبار.",
+});
+
+test("invalid-JSON first response → strict-JSON recovery on the SAME model succeeds", async () => {
+  const calls: string[] = [];
+  const flags: (boolean | undefined)[] = [];
+  const r = await orchestrateWriter({
+    profile: "safety_alert",
+    config: CONFIG,
+    call: async (model, opts) => {
+      calls.push(model);
+      flags.push(opts?.strictJsonRecovery);
+      // First call: bare braces that are not valid JSON → writer_output_invalid_json.
+      // Second (recovery) call: valid strict JSON.
+      return { ok: true, content: opts?.strictJsonRecovery ? recoveredJson : "{ليس JSON صالحًا}" };
+    },
+    validate: parseValidate,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.usedFallback, false); // recovery is NOT the fallback model
+  assert.equal(r.writerAttempts, 2);
+  assert.equal(r.secondAttemptType, "json_recovery");
+  // Both calls hit the SAME primary (sensitive) model; the 2nd carried the flag.
+  assert.deepEqual(calls, ["anthropic/claude-sonnet-5", "anthropic/claude-sonnet-5"]);
+  assert.deepEqual(flags, [undefined, true]);
+});
+
+test("invalid-JSON that stays invalid after recovery rejects safely (no fallback)", async () => {
+  const calls: string[] = [];
+  const r = await orchestrateWriter({
+    profile: "quick_news",
+    config: CONFIG,
+    call: async (model) => {
+      calls.push(model);
+      return { ok: true, content: "{ليس JSON صالحًا}" }; // invalid on both calls
+    },
+    validate: parseValidate,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.usedFallback, false);
+  assert.equal(r.rejection, "writer_output_invalid_json"); // same safe reason as before
+  assert.equal(r.validationReason, "writer_output_invalid_json");
+  assert.equal(r.writerAttempts, 2);
+  assert.equal(r.secondAttemptType, "json_recovery");
+  assert.deepEqual(calls, ["openai/gpt-5.4-mini", "openai/gpt-5.4-mini"]); // primary twice, no fallback
+});
+
+test("a recovery call that itself fails transport rejects safely with the original reason", async () => {
+  let n = 0;
+  const r = await orchestrateWriter({
+    profile: "standard_news",
+    config: CONFIG,
+    call: async () => {
+      n += 1;
+      return n === 1 ? { ok: true, content: "{ليس JSON صالحًا}" } : { ok: false, timedOut: true };
+    },
+    validate: parseValidate,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.usedFallback, false); // the recovery is not a fallback attempt
+  assert.equal(r.rejection, "writer_output_invalid_json");
+  assert.equal(r.writerAttempts, 2);
+  assert.equal(r.secondAttemptType, "json_recovery");
+  assert.equal(n, 2); // primary + one recovery, then stop
+});
+
+test("a NON-invalid-json parse failure (truncated) does NOT trigger recovery", async () => {
+  const calls: string[] = [];
+  const r = await orchestrateWriter({
+    profile: "safety_alert",
+    config: CONFIG,
+    call: async (model) => {
+      calls.push(model);
+      return { ok: true, content: '{"title":"عنوان","excerpt":"","body":"نص لم يكتمل' };
+    },
+    validate: parseValidate,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.rejection, "writer_output_truncated");
+  assert.equal(r.writerAttempts, 1); // no recovery: only invalid_json qualifies
+  assert.equal(r.secondAttemptType, "none");
+  assert.deepEqual(calls, ["anthropic/claude-sonnet-5"]);
+});
+
+test("recovery never fires on the FALLBACK path (technical primary, invalid-json fallback)", async () => {
+  const calls: string[] = [];
+  const r = await orchestrateWriter({
+    profile: "quick_news",
+    config: CONFIG,
+    call: async (model) => {
+      calls.push(model);
+      // Primary technical-fails → fallback runs and returns invalid JSON.
+      return model === "openai/gpt-5.4-mini"
+        ? { ok: false, httpStatus: 503 }
+        : { ok: true, content: "{ليس JSON صالحًا}" };
+    },
+    validate: parseValidate,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.usedFallback, true);
+  assert.equal(r.rejection, "writer_output_invalid_json");
+  assert.equal(r.writerAttempts, 2);
+  assert.equal(r.secondAttemptType, "none"); // fallback's invalid json is NOT recovered
+  assert.deepEqual(calls, ["openai/gpt-5.4-mini", "openai/gpt-4o-mini"]);
 });
 
 // --- OpenRouter completion metadata (finish_reason + content shape) ---------

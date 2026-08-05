@@ -350,6 +350,14 @@ export type WriterOrchestrationResult = {
   // Audit `writer_validation_reason`: set only on a factual/parse validation
   // failure (never on a technical/transport failure).
   validationReason: string | null;
+  // Writer JSON-recovery observability (mirrors the editor's one formatting
+  // recovery). `writerAttempts` is the number of writer model calls made for
+  // THIS result: 1 normally, or 2 when either the technical-failure fallback
+  // fired OR the single strict-JSON recovery fired. `secondAttemptType` marks
+  // the kind of the second call when there was one — `json_recovery` only when
+  // it was the strict-JSON reparse retry, otherwise `none`.
+  writerAttempts: number;
+  secondAttemptType: "none" | "json_recovery";
 };
 
 /**
@@ -366,7 +374,7 @@ export type WriterOrchestrationResult = {
 export async function orchestrateWriter(args: {
   profile: WritingProfile;
   config: WriterModelConfig;
-  call: (model: string) => Promise<WriterHttpResult>;
+  call: (model: string, opts?: { strictJsonRecovery?: boolean }) => Promise<WriterHttpResult>;
   validate: (content: string) => WriterValidation;
 }): Promise<WriterOrchestrationResult> {
   const { profile, config, call, validate } = args;
@@ -376,10 +384,12 @@ export async function orchestrateWriter(args: {
     modelUsed: string,
     usedFallback: boolean,
     content: string,
+    writerAttempts: number,
+    secondAttemptType: "none" | "json_recovery",
   ): WriterOrchestrationResult => {
     const v = validate(content);
     if (!v.ok) {
-      return { ok: false, profile, primaryModel, modelUsed, usedFallback, rejection: v.reason, validationReason: v.reason };
+      return { ok: false, profile, primaryModel, modelUsed, usedFallback, rejection: v.reason, validationReason: v.reason, writerAttempts, secondAttemptType };
     }
     return {
       ok: true,
@@ -390,16 +400,32 @@ export async function orchestrateWriter(args: {
       article: v.article,
       readMinutes: v.readMinutes,
       validationReason: null,
+      writerAttempts,
+      secondAttemptType,
     };
   };
 
   const primary = await call(primaryModel);
-  if (primary.ok) return finish(primaryModel, false, primary.content);
+  if (primary.ok) {
+    const first = finish(primaryModel, false, primary.content, 1, "none");
+    // Writer JSON-recovery: ONLY when the sole failure is unparseable JSON, make
+    // exactly one more call to the SAME primary model with a strict-JSON
+    // directive — no fallback/Gemini, no editor attempt consumed. The recovered
+    // output is validated the SAME way; a still-invalid or failed recovery
+    // rejects safely exactly as before (with the original invalid-JSON reason).
+    if (!first.ok && first.validationReason === "writer_output_invalid_json") {
+      const recovery = await call(primaryModel, { strictJsonRecovery: true });
+      return recovery.ok
+        ? finish(primaryModel, false, recovery.content, 2, "json_recovery")
+        : { ...first, writerAttempts: 2, secondAttemptType: "json_recovery" };
+    }
+    return first;
+  }
 
   // Completed-but-invalid (truncated / filtered / non-string content): reject
   // with its specific reason. This is NOT a technical failure — do not fall back.
   if ("completedInvalid" in primary) {
-    return { ok: false, profile, primaryModel, modelUsed: primaryModel, usedFallback: false, rejection: primary.reason, validationReason: primary.reason };
+    return { ok: false, profile, primaryModel, modelUsed: primaryModel, usedFallback: false, rejection: primary.reason, validationReason: primary.reason, writerAttempts: 1, secondAttemptType: "none" };
   }
 
   const tech = classifyTechnicalFailure({
@@ -410,7 +436,7 @@ export async function orchestrateWriter(args: {
   });
   // Non-technical hard failure (e.g. HTTP 400/401): do NOT fall back.
   if (!tech) {
-    return { ok: false, profile, primaryModel, modelUsed: primaryModel, usedFallback: false, rejection: "writer_error", validationReason: null };
+    return { ok: false, profile, primaryModel, modelUsed: primaryModel, usedFallback: false, rejection: "writer_error", validationReason: null, writerAttempts: 1, secondAttemptType: "none" };
   }
 
   // Technical failure: one attempt on the fallback model.
@@ -420,9 +446,9 @@ export async function orchestrateWriter(args: {
     // A completed-but-invalid fallback response rejects with its specific reason;
     // never retry again. A transport failure stays writer_unavailable.
     if ("completedInvalid" in fb) {
-      return { ok: false, profile, primaryModel, modelUsed: fallbackModel, usedFallback: true, rejection: fb.reason, validationReason: fb.reason };
+      return { ok: false, profile, primaryModel, modelUsed: fallbackModel, usedFallback: true, rejection: fb.reason, validationReason: fb.reason, writerAttempts: 2, secondAttemptType: "none" };
     }
-    return { ok: false, profile, primaryModel, modelUsed: fallbackModel, usedFallback: true, rejection: "writer_unavailable", validationReason: null };
+    return { ok: false, profile, primaryModel, modelUsed: fallbackModel, usedFallback: true, rejection: "writer_unavailable", validationReason: null, writerAttempts: 2, secondAttemptType: "none" };
   }
-  return finish(fallbackModel, true, fb.content);
+  return finish(fallbackModel, true, fb.content, 2, "none");
 }

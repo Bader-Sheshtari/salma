@@ -178,6 +178,10 @@ type PilotReport = {
   source_fetches_attempted: number;
   writer_calls_attempted: number;
   fallback_calls_attempted: number;
+  // Writer JSON-recovery observability: total writer model calls for the pilot
+  // draft and whether the second call was the strict-JSON reparse recovery.
+  writer_attempts: number;
+  writer_second_attempt: "none" | "json_recovery";
   pending_articles_created: number;
   rejection_reason: string | null;
   created_content_id: string | null;
@@ -511,6 +515,16 @@ function renderWriterPacket(input: {
   return lines.join("\n");
 }
 
+// Formatting-only directive for the single writer JSON-recovery call. Appended
+// AFTER the same system+user packet; it changes no facts and adds no editorial
+// rule — it only re-instructs strict conformance to the existing writer schema
+// when the first response was unparseable JSON.
+const WRITER_JSON_RECOVERY_MESSAGE = {
+  role: "system",
+  content:
+    "تنبيه تنسيقي فقط: كانت استجابتك السابقة غير قابلة للتحليل كـ JSON. أعِد إخراج نفس المقال ككائن JSON واحد صالح فقط، دون أي نص تمهيدي أو تعليق أو أسيجة برمجية (```) أو أي نص قبل القوس { أو بعده }. استخدم الحقول التالية فقط وكلها قيم نصية: \"title\" و\"excerpt\" و\"body\" (و\"summary\" اختياري). لا تُغيّر الحقائق أو المحتوى؛ الإصلاح مقصور على التنسيق ليصبح JSON صالحًا.",
+} as const;
+
 type WriterOutcome =
   | {
     ok: true;
@@ -521,8 +535,17 @@ type WriterOutcome =
     // Carried SEPARATELY from WriterAudit so the ingestion_decisions insert stays
     // unchanged (no migration); surfaced only in the pilot HTTP report.
     editorial: EditorialAudit;
+    // Writer JSON-recovery observability (surfaced in the pilot report only).
+    writerAttempts: number;
+    writerSecondAttempt: "none" | "json_recovery";
   }
-  | { ok: false; rejection: string; audit: WriterAudit };
+  | {
+    ok: false;
+    rejection: string;
+    audit: WriterAudit;
+    writerAttempts: number;
+    writerSecondAttempt: "none" | "json_recovery";
+  };
 
 // Select the profile, route to the approved model (with technical-failure
 // fallback), and validate the output. The FINAL stored title/excerpt/body/
@@ -629,7 +652,13 @@ async function writeArticle(input: {
   const r = await orchestrateWriter({
     profile,
     config: WRITER_CONFIG,
-    call: (model) => chatWriter(model, messages),
+    // On the one strict-JSON recovery, resend the SAME system+user packet with an
+    // appended formatting-only directive; the base writer prompt is untouched.
+    call: (model, opts) =>
+      chatWriter(
+        model,
+        opts?.strictJsonRecovery ? [...messages, WRITER_JSON_RECOVERY_MESSAGE] : messages,
+      ),
     validate,
   });
 
@@ -648,7 +677,13 @@ async function writeArticle(input: {
     source_word_count: input.verified.wordCount,
   };
   if (!(r.ok && r.article)) {
-    return { ok: false, rejection: r.rejection ?? "writer_failed", audit };
+    return {
+      ok: false,
+      rejection: r.rejection ?? "writer_failed",
+      audit,
+      writerAttempts: r.writerAttempts,
+      writerSecondAttempt: r.secondAttemptType,
+    };
   }
   const writerArticle = r.article;
 
@@ -711,7 +746,15 @@ async function writeArticle(input: {
       summary: editorPass.article.summary,
     }
     : writerArticle;
-  return { ok: true, article: finalArticle, readMinutes: editorPass.readMinutes, audit, editorial: editorPass.audit };
+  return {
+    ok: true,
+    article: finalArticle,
+    readMinutes: editorPass.readMinutes,
+    audit,
+    editorial: editorPass.audit,
+    writerAttempts: r.writerAttempts,
+    writerSecondAttempt: r.secondAttemptType,
+  };
 }
 
 // ---- Helpers ------------------------------------------------------------
@@ -922,6 +965,8 @@ async function runIngestion(
       source_fetches_attempted: 0,
       writer_calls_attempted: 0,
       fallback_calls_attempted: 0,
+      writer_attempts: 1,
+      writer_second_attempt: "none",
       pending_articles_created: 0,
       rejection_reason: null,
       created_content_id: null,
@@ -1398,6 +1443,10 @@ async function runIngestion(
     if (pilot) {
       pilot.writer_calls_attempted += 1;
       if (written.audit.writer_fallback_used) pilot.fallback_calls_attempted += 1;
+      // Surface the writer attempt count + second-attempt type (json_recovery
+      // when the one strict-JSON reparse retry fired). Observability only.
+      pilot.writer_attempts = written.writerAttempts;
+      pilot.writer_second_attempt = written.writerSecondAttempt;
       // The editor runs once inside writeArticle on every validated draft, so a
       // successful writer outcome always carries an editorial audit to surface.
       if (written.ok) {
