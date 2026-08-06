@@ -10,6 +10,7 @@ import {
   classifyContentType,
   extractArticle,
   extractEssentialEntities,
+  looksLikeBatchIdentifier,
   fetchSourceText,
   groundedWrite,
   hostnameMatchesDomain,
@@ -252,6 +253,65 @@ test("product-name extraction stays conservative — no free-form guessing", () 
   // invented (a wrong product name is worse than none).
   const ents = extractEssentialEntities("أعلنت الجهة عن مستجدات صحية عامة دون تفاصيل عن أي منتج بعينه.");
   assert.deepEqual(ents, []);
+});
+
+// --- lot/batch identifier shape guard (false-positive regression) -----------
+// FDA-style recall wording ("lot number displayed on the label") must never turn
+// the ordinary verb after "lot/batch" into a mustPreserve essential entity.
+
+test("'lot number displayed on the label' does not add 'displayed'", () => {
+  const ents = extractEssentialEntities("FDA notes the product can be identified by the lot number displayed on the label.");
+  assert.ok(!ents.includes("displayed"));
+  assert.ok(!ents.some((e) => e.toLowerCase() === "displayed"));
+});
+
+test("'lot number printed on the carton' does not add 'printed'", () => {
+  const ents = extractEssentialEntities("The lot number printed on the carton identifies the affected units.");
+  assert.ok(!ents.some((e) => e.toLowerCase() === "printed"));
+});
+
+test("'batch number shown below' does not add 'shown'", () => {
+  const ents = extractEssentialEntities("Consumers should check the batch number shown below on the packaging.");
+  assert.ok(!ents.some((e) => e.toLowerCase() === "shown"));
+});
+
+test("other ordinary words after lot/batch wording are rejected", () => {
+  for (const w of ["located", "found", "listed", "provided", "appearing"]) {
+    const ents = extractEssentialEntities(`See the lot number ${w} on the label for details.`);
+    assert.ok(!ents.some((e) => e.toLowerCase() === w), `unexpectedly kept "${w}"`);
+  }
+});
+
+test("genuine lot/batch identifiers are still extracted", () => {
+  assert.ok(extractEssentialEntities("Affected: lot number 25202 recalled.").includes("25202"));
+  assert.ok(extractEssentialEntities("Affected: lot AB12C recalled.").includes("AB12C"));
+  assert.ok(extractEssentialEntities("Affected: batch AB-123 recalled.").includes("AB-123"));
+  assert.ok(extractEssentialEntities("Affected: lot 25A recalled.").includes("25A"));
+  assert.ok(extractEssentialEntities("Affected: batch ABC123/4 recalled.").includes("ABC123/4"));
+  // The Arabic-batch fixture identifier is unaffected.
+  assert.ok(extractEssentialEntities("سحب دفعة رقم KW-2291 من الدواء.").includes("KW-2291"));
+});
+
+test("looksLikeBatchIdentifier accepts codes and rejects sentence words", () => {
+  for (const ok of ["25202", "AB12C", "AB-123", "25A", "ABC123/4", "KW-2291", "AB", "XYZ"]) {
+    assert.ok(looksLikeBatchIdentifier(ok), `should accept "${ok}"`);
+  }
+  for (const bad of ["displayed", "printed", "shown", "located", "found", "listed", "provided", "appearing"]) {
+    assert.ok(!looksLikeBatchIdentifier(bad), `should reject "${bad}"`);
+  }
+});
+
+test("genuine company/medicine/product entities remain unaffected by the guard", () => {
+  // Org present in source + English product name via "recall of …" are untouched.
+  const ents = extractEssentialEntities(
+    "U.S. Food & Drug Administration announces a recall of Metformin USP due to a possible impurity in lot number displayed on the label.",
+    { sourceName: "U.S. Food & Drug Administration" },
+  );
+  assert.ok(ents.includes("U.S. Food & Drug Administration"));
+  assert.ok(ents.includes("Metformin"));
+  assert.ok(!ents.some((e) => e.toLowerCase() === "displayed"));
+  // Arabic quoted product name is unaffected.
+  assert.ok(extractEssentialEntities("تحذير بشأن دواء «بانادول اكسترا».").includes("بانادول اكسترا"));
 });
 
 // --- fetch orchestration (mocked) ------------------------------------------

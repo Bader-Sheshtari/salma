@@ -483,6 +483,22 @@ const COUNTRY_TERMS = [
 ];
 
 /**
+ * A lot/batch capture is kept only when it plausibly LOOKS like an identifier,
+ * not an ordinary sentence word that merely followed "lot"/"batch" wording
+ * (e.g. "lot number displayed on the label" must not yield "displayed"). A real
+ * lot/batch code either carries a digit (25202, AB12C, AB-123, 25A, ABC123/4)
+ * or is a short all-uppercase alphanumeric code — the only digit-free shape a
+ * genuine code takes. Lowercase/mixed-case words with no digit (displayed,
+ * printed, shown, located, found, listed, provided, appearing, …) are rejected.
+ */
+export function looksLikeBatchIdentifier(value: string): boolean {
+  const v = (value ?? "").trim();
+  if (!v) return false;
+  if (/\d/.test(v)) return true; // any digit → identifier (covers 25202, AB12C, AB-123, 25A, ABC123/4)
+  return /^[A-Z][A-Z/-]*$/.test(v) && v.length <= 6; // short all-uppercase digit-free code
+}
+
+/**
  * Extract essential entities that appear IN the verified source text: the
  * registered organization name (only if present in the text), country names,
  * batch/lot identifiers, and a study sample size. Model-generated entities are
@@ -510,7 +526,9 @@ export function extractEssentialEntities(
   ];
   for (const re of batchRes) {
     let m: RegExpExecArray | null;
-    while ((m = re.exec(t)) !== null) out.push(m[1]);
+    while ((m = re.exec(t)) !== null) {
+      if (looksLikeBatchIdentifier(m[1])) out.push(m[1]);
+    }
   }
 
   // Medicine / product names, extracted conservatively so a safety alert keeps
