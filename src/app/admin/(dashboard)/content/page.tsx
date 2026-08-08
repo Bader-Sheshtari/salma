@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { listContent } from "@/lib/admin-queries";
-import { setStatus, softDeleteContent } from "../../actions";
-import { timeAgoAr } from "@/lib/format";
+import { setStatus, softDeleteContent, rejectContent } from "../../actions";
+import { timeAgoAr, formatDateTimeAr } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +10,7 @@ const FILTERS = [
   { key: "published", label: "منشور" },
   { key: "pending", label: "بانتظار المراجعة" },
   { key: "draft", label: "مسودّة" },
+  { key: "rejected", label: "مرفوض" },
 ];
 
 const STATUS_LABEL: Record<string, string> = {
@@ -60,13 +61,18 @@ export default async function ContentList({ searchParams }: Props) {
                     <span className="rounded bg-cream px-1.5 py-0.5 font-sans text-[10px] font-semibold text-teal">
                       {c.type}
                     </span>
-                    <span className="rounded px-1.5 py-0.5 font-sans text-[10px] font-semibold text-white" style={{ background: c.status === "published" ? "var(--salma-teal)" : c.status === "pending" ? "var(--salma-blue)" : "var(--salma-gray)" }}>
+                    <span className="rounded px-1.5 py-0.5 font-sans text-[10px] font-semibold text-white" style={{ background: c.status === "published" ? "var(--salma-teal)" : c.status === "pending" ? "var(--salma-blue)" : c.status === "rejected" ? "var(--salma-coral)" : "var(--salma-gray)" }}>
                       {STATUS_LABEL[c.status] ?? c.status}
                     </span>
+                    {c.origin === "ai" ? (
+                      <span className="rounded border border-teal bg-teal/5 px-1.5 py-0.5 font-sans text-[10px] font-bold text-teal">
+                        AI
+                      </span>
+                    ) : null}
                     <span className="truncate text-[14px] font-semibold">{c.title}</span>
                   </div>
                   <div className="mt-1 font-sans text-[11px] text-gray">
-                    {c.category_slug ?? "—"} · {timeAgoAr(c.updated_at)}
+                    {c.category_slug ?? "—"} · أُضيف {formatDateTimeAr(c.created_at)} · آخر تحديث {timeAgoAr(c.updated_at)}
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -86,6 +92,12 @@ export default async function ContentList({ searchParams }: Props) {
                       <button className="rounded-lg border border-line px-3 py-1.5 text-[12.5px] font-semibold">إلغاء النشر</button>
                     </form>
                   )}
+                  {c.status === "pending" ? (
+                    <form action={rejectContent}>
+                      <input type="hidden" name="id" value={c.id} />
+                      <button className="rounded-lg border border-coral/50 px-3 py-1.5 text-[12.5px] font-semibold text-coral hover:bg-cream">رفض</button>
+                    </form>
+                  ) : null}
                   <form action={softDeleteContent}>
                     <input type="hidden" name="id" value={c.id} />
                     <button className="rounded-lg border border-line px-3 py-1.5 text-[12.5px] font-semibold text-coral hover:bg-cream">حذف</button>

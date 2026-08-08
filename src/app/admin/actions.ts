@@ -173,6 +173,25 @@ export async function softDeleteContent(formData: FormData) {
   revalidatePath("/");
 }
 
+/**
+ * Reject a content item: an explicit editorial "no" for a pending (typically
+ * AI-generated) article. Sets `status = "rejected"` WITHOUT deleting the row, so
+ * the article stays stored for audit/history. Rejected content never appears
+ * publicly (every public query filters `status = "published"`), and this never
+ * stamps `published_at` — publishing remains a separate, explicit action.
+ */
+export async function rejectContent(formData: FormData) {
+  await requireAdmin();
+  const supabase = await createClient();
+  const id = String(formData.get("id"));
+  await supabase
+    .from("content")
+    .update({ status: "rejected" } as unknown as never)
+    .eq("id", id);
+  revalidatePath("/admin/content");
+  revalidatePath("/");
+}
+
 export type IngestResult =
   | { error: string }
   | { found: number; kept: number; filtered: number; duplicates: number }
