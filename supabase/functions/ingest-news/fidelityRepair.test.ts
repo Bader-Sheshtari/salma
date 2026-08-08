@@ -28,6 +28,7 @@ import {
   type FidelityRepairCall,
   type FidelityValidation,
 } from "./fidelityRepair.ts";
+import { parseWriterOutput } from "./salmaWriter.ts";
 
 const DRAFT: FidelityArticle = {
   title: "عنوان تجريبي",
@@ -229,4 +230,119 @@ test("13: unknown fidelity codes fail closed to blocking", () => {
   assert.deepEqual(a.repairable, ["unsupported_number:3"]);
   assert.deepEqual(a.omission, ["missing_official_action"]);
   assert.deepEqual(a.blocking, ["malformed_output:body", "brand_new_code"]);
+});
+
+// --- BBC regression: unsupported_number:11 through the REAL parser contract --
+//
+// Reproduces the v26 pilot failure (writer_output_schema_invalid) at the exact
+// boundary that produced it: the fidelity-repair transport runs the model's raw
+// text through parseWriterOutput. The repair transport below is byte-for-byte
+// the same shape as index.ts writeArticle().repair — call → parseWriterOutput →
+// map to the article (summary defaults to the draft). This proves the CONTRACT,
+// not a stub: a complete valid article JSON is accepted; a partial-patch or
+// extra-key object still rejects safely; and repair is spent at most once.
+
+// The Editorial Director's chosen draft still carries the ungrounded number 11.
+const BBC_EDITOR_DRAFT: FidelityArticle = {
+  title: "تحذير صحي: تفشٍّ مرتبط بمنتج غذائي",
+  excerpt: "مقتطف موجز عن التحذير الصحي.",
+  summary: "ملخّص موجز.",
+  body: "أفاد المصدر بوقوع حالات إصابة، وذكر النص أن العدد بلغ 11 حالة دون تأكيد رسمي في المصدر.",
+};
+
+// A validator that only fails while the ungrounded "11" is still in the body —
+// exactly the unsupported_number:11 breach the pilot hit.
+const numberAwareValidate = (a: FidelityArticle): FidelityValidation =>
+  a.body.includes("11") ? val(["unsupported_number:11"]) : val([]);
+
+/**
+ * A repair transport identical in shape to the real index.ts one: it feeds a
+ * fixed RAW model string through parseWriterOutput and maps the result. Counts
+ * its invocations so we can assert the one-call-max guarantee at this boundary.
+ */
+function repairThroughParser(rawModelText: string): FidelityRepairCall & { count: () => number } {
+  let n = 0;
+  const call: FidelityRepairCall = async (_issues, draft) => {
+    n++;
+    const parsed = parseWriterOutput(rawModelText);
+    if (!parsed.ok) return { ok: false, reason: parsed.error };
+    return {
+      ok: true,
+      article: {
+        title: parsed.article.title,
+        excerpt: parsed.article.excerpt,
+        summary: parsed.article.summary ?? draft.summary,
+        body: parsed.article.body,
+      },
+    };
+  };
+  (call as FidelityRepairCall & { count: () => number }).count = () => n;
+  return call as FidelityRepairCall & { count: () => number };
+}
+
+// A COMPLETE, valid repaired article: every field echoed, number removed, and
+// ONLY the allowed keys — this is what the strengthened contract now demands.
+const BBC_REPAIRED_JSON = JSON.stringify({
+  title: "تحذير صحي: تفشٍّ مرتبط بمنتج غذائي",
+  excerpt: "مقتطف موجز عن التحذير الصحي.",
+  body: "أفاد المصدر بوقوع حالات إصابة دون ذكر عددٍ غير مؤكد، مع دعوة الجهات المعنية للمتابعة.",
+});
+
+test("BBC: a complete valid repaired article JSON is accepted and ends pending", async () => {
+  const repair = repairThroughParser(BBC_REPAIRED_JSON);
+  const r = await orchestrateFidelityRepair({
+    draft: BBC_EDITOR_DRAFT,
+    readMinutes: 3,
+    validate: numberAwareValidate,
+    repair,
+  });
+  // Editor output DID contain the ungrounded number (initial validation caught it).
+  assert.deepEqual(r.audit.original_repairable, ["unsupported_number:11"]);
+  // Repair invoked exactly once, through the real parser.
+  assert.equal(repair.count(), 1);
+  assert.equal(r.audit.repair_call_succeeded, true);
+  // The repaired full article parsed cleanly and the number is gone.
+  assert.equal(r.audit.draft_source, "repaired");
+  assert.equal(r.article.body.includes("11"), false);
+  // Final fidelity validation passes → clean → the pipeline makes it pending
+  // (clean and needs_human_review both become pending; only reject blocks it).
+  assert.equal(r.decision, "clean");
+  assert.notEqual(r.decision as string, "reject");
+  assert.equal(r.rejectionReason, null);
+});
+
+test("BBC: a partial-patch repair object (missing fields) rejects safely", async () => {
+  // The exact v26 failure mode: the model returned only the field it edited.
+  const partial = JSON.stringify({ body: "أفاد المصدر بوقوع حالات إصابة دون عدد غير مؤكد." });
+  const repair = repairThroughParser(partial);
+  const r = await orchestrateFidelityRepair({
+    draft: BBC_EDITOR_DRAFT,
+    readMinutes: 3,
+    validate: numberAwareValidate,
+    repair,
+  });
+  assert.equal(repair.count(), 1); // still exactly one repair call
+  assert.equal(r.decision, "reject");
+  assert.equal(r.rejectionReason, "unsupported_number:11");
+  assert.equal(r.audit.repair_call_succeeded, false);
+  assert.equal(r.audit.repair_failure_reason, "writer_output_schema_invalid");
+});
+
+test("BBC: an extra-key repair object rejects safely (no schema drift)", async () => {
+  const extraKey = JSON.stringify({
+    title: "تحذير صحي: تفشٍّ مرتبط بمنتج غذائي",
+    excerpt: "مقتطف موجز عن التحذير الصحي.",
+    body: "أفاد المصدر بوقوع حالات إصابة دون عددٍ غير مؤكد.",
+    changes: "removed unsupported number 11",
+  });
+  const repair = repairThroughParser(extraKey);
+  const r = await orchestrateFidelityRepair({
+    draft: BBC_EDITOR_DRAFT,
+    readMinutes: 3,
+    validate: numberAwareValidate,
+    repair,
+  });
+  assert.equal(repair.count(), 1);
+  assert.equal(r.decision, "reject");
+  assert.equal(r.audit.repair_failure_reason, "writer_output_schema_invalid");
 });
