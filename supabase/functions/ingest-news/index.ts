@@ -68,6 +68,12 @@ import {
   type RawResponse,
   type SourceText,
 } from "./fetchSourceText.ts";
+import {
+  type FidelityArticle,
+  type FidelityRepairAudit,
+  type FidelityValidation,
+  finalizeWriterDraft,
+} from "./fidelityRepair.ts";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = Deno.env.get("OPENROUTER_MODEL") || "openai/gpt-oss-20b:free";
@@ -190,6 +196,11 @@ type PilotReport = {
   // pilot report, NOT persisted to ingestion_decisions (no migration).
   editorial: EditorialAudit | null;
   editor_prompt_version: string | null;
+  // Post-editor source-fidelity stage audit (original error, repair attempt,
+  // repair outcome, final validation, needs_human_review). Observability-only.
+  fidelity: FidelityRepairAudit | null;
+  // True when the pilot draft became pending WITH an unresolved omission warning.
+  needs_human_review: boolean;
 };
 
 type Draft = {
@@ -525,6 +536,69 @@ const WRITER_JSON_RECOVERY_MESSAGE = {
     "تنبيه تنسيقي فقط: كانت استجابتك السابقة غير قابلة للتحليل كـ JSON. أعِد إخراج نفس المقال ككائن JSON واحد صالح فقط، دون أي نص تمهيدي أو تعليق أو أسيجة برمجية (```) أو أي نص قبل القوس { أو بعده }. استخدم الحقول التالية فقط وكلها قيم نصية: \"title\" و\"excerpt\" و\"body\" (و\"summary\" اختياري). لا تُغيّر الحقائق أو المحتوى؛ الإصلاح مقصور على التنسيق ليصبح JSON صالحًا.",
 } as const;
 
+// ---- Constrained source-fidelity repair (editorial-policy alignment) -----
+//
+// A SINGLE post-editor call that fixes ONLY the listed source-fidelity issues
+// using ONLY the extracted source. It never adds a new fact/number/quote/claim/
+// cause/recommendation/advice; it may delete the unsupported addition, replace it
+// with the correct source value, or rewrite the sentence without the detail. It
+// returns the same strict writer JSON schema so parseWriterOutput can read it.
+
+/** Human-readable Arabic instruction for one deterministic fidelity issue code. */
+function fidelityIssueInstruction(code: string): string {
+  const [kind, detail] = code.split(/:(.+)/);
+  switch (kind) {
+    case "unsupported_number":
+      return `الرقم أو التاريخ «${detail ?? ""}» غير وارد في نص المصدر. احذفه، أو استبدله بالقيمة الصحيحة كما وردت حرفيًا في المصدر، أو أعِد صياغة الجملة دون هذا الرقم.`;
+    case "unsupported_claim":
+      return `الادّعاء المتعلق بـ«${detail ?? ""}» (فعالية أو موافقة أو نتيجة) غير مدعوم بنص المصدر. احذفه أو خفّف الصياغة لتطابق ما ورد في المصدر فقط، دون إضافة أي حكم جديد.`;
+    case "invented_quotation":
+      return "يوجد اقتباس مباشر بين علامتَي تنصيص غير وارد حرفيًا في نص المصدر. احذف الاقتباس أو أعِد صياغته بأسلوب غير مباشر دون علامات تنصيص، دون اختلاق أي كلام منسوب.";
+    case "missing_official_action":
+      return "أشار المصدر إلى إجراء رسمي (سحب أو تحذير أو إيقاف أو ما شابه) لم يُذكر في المقال. أضِف هذا الإجراء فقط إذا ورد صراحةً في نص المصدر، بصياغة مطابقة للمصدر.";
+    case "missing_unaffected_batch_statement":
+      return "ذكر المصدر أن دفعات أو منتجات أخرى غير متأثرة. أضِف هذا التوضيح فقط إذا ورد صراحةً في نص المصدر.";
+    default:
+      return `أصلح المشكلة «${code}» بالاعتماد على نص المصدر فقط دون إضافة أي معلومة جديدة.`;
+  }
+}
+
+/** Build the two-message packet for the single constrained fidelity-repair call. */
+function buildFidelityRepairMessages(input: {
+  verifiedFactText: string;
+  sourceName: string | null;
+  draft: FidelityArticle;
+  issues: string[];
+}): { role: string; content: string }[] {
+  const instructions = input.issues.map((c, i) => `${i + 1}. ${fidelityIssueInstruction(c)}`).join("\n");
+  const system =
+    "أنت محرّر تدقيق أمانة المصدر في «سلمى». مهمتك الوحيدة: إصلاح مخالفات الأمانة المُدرَجة أدناه بالاعتماد الحصري على نص المصدر المُرفق. " +
+    "لا تُضِف أي حقيقة أو رقم أو تاريخ أو اقتباس أو ادّعاء أو سبب أو توصية أو نصيحة طبية غير واردة حرفيًا في نص المصدر. " +
+    "لكل مخالفة اختر أحد الحلول: حذف الإضافة غير المدعومة، أو استبدالها بالقيمة الصحيحة من المصدر، أو إعادة صياغة الجملة دون التفصيلة غير المدعومة. " +
+    "لا تُغيّر أي معلومة صحيحة أخرى، وحافظ على الأسلوب العربي المتقن. " +
+    "أخرِج كائن JSON واحدًا صالحًا فقط بالحقول النصية: \"title\" و\"excerpt\" و\"body\" (و\"summary\" اختياري)، دون أي نص خارج القوسين.";
+  const user = [
+    input.sourceName ? `المصدر المُتحقَّق منه: ${input.sourceName}` : "",
+    "— نص المصدر المُتحقَّق منه (الحقيقة الوحيدة المسموح الاعتماد عليها) —",
+    input.verifiedFactText,
+    "",
+    "— المسودة الحالية —",
+    `العنوان: ${input.draft.title}`,
+    `المقتطف: ${input.draft.excerpt}`,
+    input.draft.summary ? `الملخّص: ${input.draft.summary}` : "",
+    `النص: ${input.draft.body}`,
+    "",
+    "— مخالفات الأمانة الواجب إصلاحها (وهي فقط) —",
+    instructions,
+  ]
+    .filter((s) => s !== "")
+    .join("\n");
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+}
+
 type WriterOutcome =
   | {
     ok: true;
@@ -535,6 +609,12 @@ type WriterOutcome =
     // Carried SEPARATELY from WriterAudit so the ingestion_decisions insert stays
     // unchanged (no migration); surfaced only in the pilot HTTP report.
     editorial: EditorialAudit;
+    // Post-editor source-fidelity stage audit (original error, repair attempt,
+    // repair outcome, final validation, needs_human_review). Observability-only.
+    fidelity: FidelityRepairAudit | null;
+    // True when the draft was allowed to become pending despite an unresolved
+    // omission (missing_official_action / missing_unaffected_batch_statement).
+    needsHumanReview: boolean;
     // Writer JSON-recovery observability (surfaced in the pilot report only).
     writerAttempts: number;
     writerSecondAttempt: "none" | "json_recovery";
@@ -543,6 +623,10 @@ type WriterOutcome =
     ok: false;
     rejection: string;
     audit: WriterAudit;
+    // Present when the rejection happened at the post-editor fidelity stage
+    // (the editorial pass ran first); null when the writer stage failed early.
+    editorial: EditorialAudit | null;
+    fidelity: FidelityRepairAudit | null;
     writerAttempts: number;
     writerSecondAttempt: "none" | "json_recovery";
   };
@@ -621,13 +705,14 @@ async function writeArticle(input: {
     },
   ];
 
-  const validate = (content: string): WriterValidation => {
-    const parsed = parseWriterOutput(content);
-    if (!parsed.ok) return { ok: false, reason: parsed.error };
+  // Build the full source-fidelity validation once; reused by the writer-stage
+  // structural gate, the Editorial Director's re-validation, and the post-editor
+  // fidelity stage — always over the SAME verified source text.
+  const validateFidelity = (a: { title: string; excerpt: string; body: string }): FidelityValidation => {
     const v = validateArticle({
       // The writer output no longer echoes a profile field (strict 3-field
       // schema); use the deterministic routing profile computed above.
-      article: { ...parsed.article, profile },
+      article: { title: a.title, excerpt: a.excerpt, body: a.body, profile },
       source: {
         sourceText: verifiedFactText,
         originalTitle,
@@ -635,7 +720,20 @@ async function writeArticle(input: {
         mustPreserve,
       },
     });
-    if (!v.ok) return { ok: false, reason: v.rejectionReason ?? "validation_failed" };
+    return { ok: v.ok, errors: v.errors, cleanTitle: v.cleanTitle, readMinutes: v.readMinutes };
+  };
+
+  // Writer-stage gate: parse + STRUCTURAL (malformed_output) only. Source-fidelity
+  // breaches are NO LONGER blocked here — the Editorial Director runs first and a
+  // single constrained fidelity repair may fix them (editorial-policy alignment).
+  // parseWriterOutput still drives the strict-JSON recovery via writer_output_
+  // invalid_json, and malformed_output:* remains a hard writer-stage rejection.
+  const validate = (content: string): WriterValidation => {
+    const parsed = parseWriterOutput(content);
+    if (!parsed.ok) return { ok: false, reason: parsed.error };
+    const v = validateFidelity(parsed.article);
+    const structural = v.errors.filter((e) => e.startsWith("malformed_output"));
+    if (structural.length) return { ok: false, reason: structural[0] };
     return {
       ok: true,
       article: {
@@ -681,29 +779,29 @@ async function writeArticle(input: {
       ok: false,
       rejection: r.rejection ?? "writer_failed",
       audit,
+      editorial: null,
+      fidelity: null,
       writerAttempts: r.writerAttempts,
       writerSecondAttempt: r.secondAttemptType,
     };
   }
   const writerArticle = r.article;
 
-  // E1.4A editorial pass: the writer draft is factually valid; now run exactly
-  // ONE automated editorial rewrite over it. The edited draft REPLACES the
-  // writer draft only when it re-passes the SAME factual validation (over the
-  // same verified fact text), preserves the required actions / essential
-  // entities / risk, and clears the deterministic editorial gate. Otherwise the
-  // writer draft is retained unchanged (safe fallback). This never weakens
-  // factual validation — it runs after it and revalidates.
+  // Editorial-policy alignment: the Editorial Director runs FIRST — BEFORE any
+  // source-fidelity rejection — so it can improve the headline/lead/compression/
+  // Arabic style/attribution and remove unnecessary additions on every writer
+  // draft (even one that still carries a fidelity breach). The editor keeps an
+  // edit only when it re-passes the SAME source-fidelity validation and preserves
+  // the required actions / essential entities / risk; otherwise it retains the
+  // writer draft. THEN the post-editor fidelity stage validates, attempts exactly
+  // ONE constrained repair when eligible, and re-validates (see fidelityRepair.ts).
   const writerReadMinutes = r.readMinutes ?? readingTimeMinutes(writerArticle.body);
   const packet = buildFactPacket({ profile, sourceText: verifiedFactText, mustPreserve });
   const revalidate = (a: EditorArticle) => {
-    const v = validateArticle({
-      article: { title: a.title, excerpt: a.excerpt, body: a.body, profile },
-      source: { sourceText: verifiedFactText, originalTitle, brand: input.sourceName ?? null, mustPreserve },
-    });
+    const v = validateFidelity({ title: a.title, excerpt: a.excerpt, body: a.body });
     return v.ok
       ? ({ ok: true, readMinutes: v.readMinutes, cleanTitle: v.cleanTitle } as const)
-      : ({ ok: false, reason: v.rejectionReason ?? "validation_failed" } as const);
+      : ({ ok: false, reason: v.errors[0] ?? "validation_failed" } as const);
   };
   const writerDraft: EditorArticle = {
     title: writerArticle.title,
@@ -711,47 +809,96 @@ async function writeArticle(input: {
     summary: writerArticle.summary ?? "",
     body: writerArticle.body,
   };
-  const editorPass = await runEditorPass({
-    profile,
-    model: EDITOR_MODEL,
-    original: { article: writerDraft, readMinutes: writerReadMinutes },
-    packet,
-    call: (model, opts) =>
-      chatEditor(model, [
-        {
-          role: "system",
-          content: buildEditorInstructions(profile, {
-            strictJsonRecovery: opts?.strictRecovery,
-            repairIssues: opts?.repair?.issues,
-          }),
+
+  const { editorial, fidelity } = await finalizeWriterDraft<EditorialAudit>({
+    runEditor: async () => {
+      const editorPass = await runEditorPass({
+        profile,
+        model: EDITOR_MODEL,
+        original: { article: writerDraft, readMinutes: writerReadMinutes },
+        packet,
+        call: (model, opts) =>
+          chatEditor(model, [
+            {
+              role: "system",
+              content: buildEditorInstructions(profile, {
+                strictJsonRecovery: opts?.strictRecovery,
+                repairIssues: opts?.repair?.issues,
+              }),
+            },
+            {
+              role: "user",
+              // Editorial repair works from the FIRST edited draft; every other
+              // call (normal + formatting recovery) works from the writer draft.
+              content: renderEditorPacket({ packet, draft: opts?.repair?.draft ?? writerDraft }),
+            },
+          ]),
+        revalidate,
+        verificationOnly: packet.verificationOnly,
+      });
+      // The editor's chosen draft (an accepted edit, else the writer draft) is the
+      // single draft the fidelity stage validates and may repair.
+      const chosen: FidelityArticle = {
+        title: editorPass.article.title,
+        excerpt: editorPass.article.excerpt,
+        summary: editorPass.article.summary ?? "",
+        body: editorPass.article.body,
+      };
+      return { article: chosen, readMinutes: editorPass.readMinutes, audit: editorPass.audit };
+    },
+    validate: (a) => validateFidelity({ title: a.title, excerpt: a.excerpt, body: a.body }),
+    // Exactly ONE constrained repair via the existing editor model (non-Gemini,
+    // asserted at run start). No loop, no fallback expansion.
+    repair: async (issues, draft) => {
+      const res = await chatEditor(
+        EDITOR_MODEL,
+        buildFidelityRepairMessages({ verifiedFactText, sourceName: input.sourceName ?? null, draft, issues }),
+      );
+      if (!res.ok) return { ok: false, reason: res.reason };
+      const parsed = parseWriterOutput(res.content);
+      if (!parsed.ok) return { ok: false, reason: parsed.error };
+      return {
+        ok: true,
+        article: {
+          title: parsed.article.title,
+          excerpt: parsed.article.excerpt,
+          summary: parsed.article.summary ?? draft.summary,
+          body: parsed.article.body,
         },
-        {
-          role: "user",
-          // Editorial repair works from the FIRST edited draft; every other call
-          // (normal + formatting recovery) works from the writer draft.
-          content: renderEditorPacket({ packet, draft: opts?.repair?.draft ?? writerDraft }),
-        },
-      ]),
-    revalidate,
-    verificationOnly: packet.verificationOnly,
+      };
+    },
   });
 
-  // Choose the final stored article. The edited draft carries its own non-empty
-  // summary; when the writer draft is retained, its optional summary is kept.
-  const finalArticle = editorPass.audit.edited_draft_accepted
-    ? {
-      title: editorPass.article.title,
-      excerpt: editorPass.article.excerpt,
-      body: editorPass.article.body,
-      summary: editorPass.article.summary,
-    }
-    : writerArticle;
+  // A hard-blocking breach, or a repairable breach still present after the single
+  // repair, rejects: NO pending draft is created (the reason is audited).
+  if (fidelity.decision === "reject") {
+    return {
+      ok: false,
+      rejection: fidelity.rejectionReason ?? "validation_failed",
+      audit,
+      editorial,
+      fidelity: fidelity.audit,
+      writerAttempts: r.writerAttempts,
+      writerSecondAttempt: r.secondAttemptType,
+    };
+  }
+
+  // clean OR needs_human_review → a PENDING draft (auto-publish stays disabled).
+  // The stored title is the brand-stripped clean title, matching the writer path.
+  const finalArticle = {
+    title: fidelity.cleanTitle || fidelity.article.title,
+    excerpt: fidelity.article.excerpt,
+    body: fidelity.article.body,
+    ...(fidelity.article.summary ? { summary: fidelity.article.summary } : {}),
+  };
   return {
     ok: true,
     article: finalArticle,
-    readMinutes: editorPass.readMinutes,
+    readMinutes: fidelity.readMinutes,
     audit,
-    editorial: editorPass.audit,
+    editorial,
+    fidelity: fidelity.audit,
+    needsHumanReview: fidelity.decision === "needs_human_review",
     writerAttempts: r.writerAttempts,
     writerSecondAttempt: r.secondAttemptType,
   };
@@ -972,6 +1119,8 @@ async function runIngestion(
       created_content_id: null,
       editorial: null,
       editor_prompt_version: null,
+      fidelity: null,
+      needs_human_review: false,
     }
     : null;
 
@@ -1447,12 +1596,16 @@ async function runIngestion(
       // when the one strict-JSON reparse retry fired). Observability only.
       pilot.writer_attempts = written.writerAttempts;
       pilot.writer_second_attempt = written.writerSecondAttempt;
-      // The editor runs once inside writeArticle on every validated draft, so a
-      // successful writer outcome always carries an editorial audit to surface.
-      if (written.ok) {
+      // The editor + fidelity stages run inside writeArticle on every draft that
+      // reached the writer, so surface their audits on BOTH outcomes (a
+      // fidelity-stage rejection still ran the editor first — editorial-policy
+      // ordering — and carries a fidelity audit).
+      if (written.editorial) {
         pilot.editorial = written.editorial;
         pilot.editor_prompt_version = EDITOR_PROMPT_VERSION;
       }
+      pilot.fidelity = written.fidelity;
+      if (written.ok) pilot.needs_human_review = written.needsHumanReview;
     }
     if (!written.ok) {
       logDecision(draft, chosen, false, written.rejection, {
