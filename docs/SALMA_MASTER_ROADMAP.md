@@ -124,14 +124,14 @@ Priority tags: **before launch** / **after launch** / **optional**.
 - **Dependencies:** None.
 - **Refs:** commits `c69d7f5`, `e13fefb`, `0ee4ca7` (v26), `8b60487` (v27); memory `project_editor_eval.md`.
 
-### 8. Controlled ten-article pilot
-- **Status:** IN PROGRESS — **before launch**
-- **Completed:** Deployment prerequisites in place (v27 active; pending‑only; rollback ready). Targeted‑pilot provenance column exists. **First real end‑to‑end production pilot completed** on v27: a live BBC article ran the full pipeline and was accepted into pending as article ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8` — nothing published.
-- **Remaining:** Continue the staged review — the remaining pilot articles (toward the 3‑then‑7 total) for human verdicts; decide on permanent cron integration afterward.
-- **Next action:** Produce the remaining pending articles for review (no publishing).
-- **Dependencies:** WS 6, WS 7 (done); WS 9 (audit persistence) strongly recommended before scaling.
-- **Priority:** before launch.
-- **Preserved rule:** never auto‑publish; start with 3, then 7.
+### 8. Controlled editorial-pipeline pilot
+- **Status:** COMPLETE (2026-08-10) — implementation-validation phase closed
+- **Completed:** The controlled initial editorial-pipeline pilot is **complete**. Deployment prerequisites in place (v27 active; pending‑only; rollback ready). The successful BBC v27 end‑to‑end pending article (ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8`, ran the full pipeline and was accepted into pending — nothing published) is **sufficient to close the implementation-validation phase**. **No additional seven‑article pilot is required.**
+- **Remaining:** None as a mandatory pilot. Future real‑world monitoring happens during **normal controlled operations**, not as a required remaining pilot.
+- **Next action:** None. Writer + Editorial Director + fidelity pipeline remain **CLOSED** unless a repeated critical defect appears.
+- **Dependencies:** WS 6, WS 7 (done).
+- **Priority:** closed (implementation-validation).
+- **Preserved rule:** all AI‑generated content remains **pending** and requires **explicit human review before publication**; never auto‑publish.
 
 ### 9. Editorial audit persistence
 - **Status:** LATER BACKLOG — **not required for the current basic human-review workflow** (2026-08-10). The human editorial-review workflow (WS 1) ships without persisted editorial/fidelity audit; full audit persistence stays a later observability enhancement, deferred until scaling.
@@ -345,6 +345,7 @@ Priority tags: **before launch** / **after launch** / **optional**.
 | 2026-08-05 | 18. Video support | DONE | DONE (revalidated) | Verified `video_url`/type admin controls → `saveContent` → `/video/[slug]` + in‑article embed + homepage video lane; status stands. |
 | 2026-08-10 | 7. AI Editorial Director | DONE (deployed v23) | DONE — implementation phase CLOSED | Full pipeline (trusted‑source → writer → Editorial Director → fidelity validation → constrained repair → final validation → pending) live in `ingest-news` v27 (commit `8b60487`); all AI content stays pending; auto‑publish remains disabled. |
 | 2026-08-10 | 8. Controlled ten-article pilot | NEXT | IN PROGRESS | First real end‑to‑end production pilot completed on v27 — one BBC article accepted (ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8`); staged 3‑then‑7 review continues, pending‑only. |
+| 2026-08-10 | 8. Controlled editorial-pipeline pilot | IN PROGRESS | COMPLETE | Approved decision reversal: the successful BBC v27 pending article closes the implementation-validation phase; no additional seven‑article pilot required. Future monitoring happens during normal controlled operations. Writer + Editorial Director + fidelity pipeline remain CLOSED unless a repeated critical defect appears; all AI content stays pending, explicit human review required. |
 | 2026-08-10 | 1. Core platform and admin (human editorial-review workflow) | (not tracked) | COMPLETE | Human editorial-review workflow shipped — production web commit `556965b`, Vercel deployment Ready on main: AI badge, source‑first review panel, verified original source link, admin‑only unpublished preview (`/admin/preview/[id]`, `requireAdmin` + noindex), explicit Reject (`status="rejected"`, non‑destructive/non‑public); publication remains explicit human‑admin action; no schema/migration. |
 | 2026-08-10 | 9. Editorial audit persistence | NEXT | LATER BACKLOG | Full Editorial Director/fidelity audit persistence deferred; not required for the current basic human‑review workflow. |
 
