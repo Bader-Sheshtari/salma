@@ -4,7 +4,7 @@
 
 This is the permanent, canonical roadmap for the entire Salma project. It supersedes ad‑hoc notes. When a fact cannot be established from the repository or a confirmed decision, it is marked **NEEDS CONFIRMATION** rather than guessed.
 
-- **Last updated:** 2026-08-05
+- **Last updated:** 2026-08-10
 - **Product:** Salma — Arabic‑first (RTL) health & treatment news platform for Kuwait/GCC public + healthcare professionals.
 - **Stack (from `package.json`):** Next.js 16.2.9 (App Router), React 19.2.4, Supabase (`@supabase/ssr`, `@supabase/supabase-js`), TailwindCSS v4, `@dnd-kit` for admin ordering. AI ingestion runs inside the Supabase Edge Function `ingest-news` (Deno). AI via OpenRouter.
 - **Production Supabase project ref:** `ukraltlejlfkqbcifgcq`.
@@ -24,22 +24,22 @@ Priority tags: **before launch** / **after launch** / **optional**.
 
 ---
 
-## Current Production Milestone (authoritative snapshot — 2026-08-05)
+## Current Production Milestone (authoritative snapshot — 2026-08-10)
 
 | Item | Value |
 |---|---|
-| Edge Function `ingest-news` | **v23, ACTIVE** |
-| Deployed commit | `e13fefb` (feat(ingestion): wire Salma Editorial Director into ingest-news) |
-| Deployed source vs committed HEAD | **Byte‑identical** (all 8 runtime files sha256‑verified) |
-| Rollback tag | `stable/pre-editorial-pilot` — **pushed: available locally and on `origin`** |
-| Rollback commit | `c69d7f5` (pre‑editorial; = previous function v22 source) |
+| Edge Function `ingest-news` | **v27, ACTIVE** |
+| Deployed commit | `8b60487ee6bd547b3d1e2c002c4dfa1465459433` (fix(ingestion): enforce full fidelity repair schema) |
+| Production web (Vercel) commit | `556965bfe40bf496f426bb4f9f76319ee2b79810` (feat(admin): add AI editorial review workflow) — **deployment Ready on `main`** |
+| Editorial AI pipeline | trusted‑source → writer → Editorial Director → fidelity validation → constrained repair (≤1 LLM call) → final validation → **pending** |
+| BBC end‑to‑end production pilot | **Completed successfully** on v27 — accepted article ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8` |
 | `verify_jwt` | **false** (function does its own auth) |
 | Cron | **Unchanged** — jobid 1, `0 */6 * * *`, `salma-news-ingest` → `select public.run_news_ingestion();`, active |
 | AI‑created content | **pending‑only** (`registry.ts` `DRAFT_STATUS = "pending"`) |
 | Automatic publishing | **Disabled** |
-| Production pilot after v23 | **None run yet** |
 | Migrations applied since deploy | **None** |
-| Temporary deployment access token | **Revoked** |
+
+**Rollback (ingest-news):** previous version **v26** = commit `0ee4ca71f652c9d2a0105aacc5795cdf4df9fd85` (parent of `8b60487`); redeploy from that source to roll back. Cron, secrets, and schema need no change — none were altered. The earlier pre‑editorial rollback tag `stable/pre-editorial-pilot` → `c69d7f5` remains available locally and on `origin`.
 
 **Rollback procedure (documented, not executed):**
 1. `git checkout c69d7f5 -- supabase/functions/ingest-news` (or check out tag `stable/pre-editorial-pilot`).
@@ -68,11 +68,12 @@ Priority tags: **before launch** / **after launch** / **optional**.
 
 ### 1. Core platform and admin
 - **Status:** DONE (core) / IN PROGRESS (ongoing polish) — **before launch**
-- **Completed:** Next.js 16 App Router app; public site (home, article, category, video, doctors, transfers, search, about, contact); admin dashboard under `src/app/admin/(dashboard)` with content, categories, comments, doctors, departments, transfers, homepage, users, ingest, synthesize; content model with `draft/pending/approved/published` statuses; role hierarchy (`role_hierarchy`, `promote_owner`, manager update policy).
+- **Completed:** Next.js 16 App Router app; public site (home, article, category, video, doctors, transfers, search, about, contact); admin dashboard under `src/app/admin/(dashboard)` with content, categories, comments, doctors, departments, transfers, homepage, users, ingest, synthesize; content model with `draft/pending/approved/published/rejected` statuses; role hierarchy (`role_hierarchy`, `promote_owner`, manager update policy).
+- **Human editorial‑review workflow (COMPLETE, 2026-08-10 — production web commit `556965b`, Vercel deployment Ready on `main`):** UI‑only additions on top of the existing content model so an admin can review AI‑generated pending articles quickly and safely — an **AI badge** in the Admin content list (driven by the existing `content.origin` field), a **source‑first review panel** on the edit screen showing provenance/status/created date with a verified **original source link** (opens in a new tab), an **admin‑only unpublished preview** (`/admin/preview/[id]`, `requireAdmin` + `noindex`, verified in production) rendered with the real article layout, and an **explicit Reject action** (`status = "rejected"`, non‑destructive, non‑public). Publication remains an explicit human‑admin action; no auto‑publish path was introduced; no schema/migration change.
 - **Remaining:** Ongoing UX polish; admin ergonomics as features grow.
 - **Next action:** None blocking; address per‑feature items in their workstreams.
 - **Dependencies:** None.
-- **Refs:** migrations `create_profiles`, `create_content_schema`, `content_rls_policies`, `role_hierarchy`, `promote_owner`, `profiles_manager_update_policy`.
+- **Refs:** migrations `create_profiles`, `create_content_schema`, `content_rls_policies`, `role_hierarchy`, `promote_owner`, `profiles_manager_update_policy`; commit `556965b` (human editorial‑review workflow).
 
 ### 2. SEO and sharing
 - **Status:** DONE (core) — **before launch**
@@ -116,24 +117,24 @@ Priority tags: **before launch** / **after launch** / **optional**.
 - **Note (verified enforcement boundary):** the factual validator rejects unsupported **numbers** but does not catch purely qualitative exaggeration — "no exaggeration" is a prompt‑level guarantee.
 
 ### 7. AI Editorial Director
-- **Status:** DONE (deployed, approved for controlled pilot) — **before launch**
-- **Completed:** `salmaEditor.ts` (`runEditorPass`): English‑placement gate, factual re‑validation, safety‑alert risk retention (E1.9), bounded second call (formatting recovery **or** editorial repair), safe fallback to original writer draft with `needs_human_review`. Prompt version `e1.8-salma-editor`. Wired into `index.ts`; a factually valid edit is retained, else original kept. 69 editor tests green. Deployed in v23 (commit `e13fefb`).
-- **Remaining:** Observe behavior on real pending articles during the 10‑article pilot (WS 8); do **not** add new editorial rules unasked.
-- **Next action:** Feed pilot outputs; collect human verdicts.
-- **Dependencies:** WS 8 (pilot).
-- **Refs:** commits `c69d7f5`, `e13fefb`; memory `project_editor_eval.md`.
+- **Status:** DONE — **implementation phase CLOSED** (2026-08-10) — **before launch**
+- **Completed:** `salmaEditor.ts` (`runEditorPass`): English‑placement gate, factual re‑validation, safety‑alert risk retention (E1.9), bounded second call (formatting recovery **or** editorial repair), safe fallback to original writer draft with `needs_human_review`. Full editorial AI pipeline live in production **v27** (commit `8b60487`): trusted‑source → writer → Editorial Director → fidelity validation → constrained repair (max one LLM call, must return the complete valid article JSON) → final validation → **pending**. A successful real BBC end‑to‑end production pilot completed, accepted into pending as article ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8`. All AI content remains pending; automatic publishing remains disabled.
+- **Remaining:** None for the Writer + Editorial Director + fidelity‑repair implementation — this phase is **closed**. Do **not** add new editorial rules unasked. Any future work is tuning driven by real review findings, not new implementation.
+- **Next action:** None (phase closed).
+- **Dependencies:** None.
+- **Refs:** commits `c69d7f5`, `e13fefb`, `0ee4ca7` (v26), `8b60487` (v27); memory `project_editor_eval.md`.
 
 ### 8. Controlled ten-article pilot
-- **Status:** NEXT — **before launch**
-- **Completed:** Deployment prerequisites in place (v23 active; pending‑only; rollback ready). Targeted‑pilot provenance column exists.
-- **Remaining:** Execute the staged review — **generate/collect 3 real pending articles → human review → then 7 more**; record verdicts; decide on permanent cron integration afterward.
-- **Next action:** Produce the first **3** pending articles for review (no publishing).
+- **Status:** IN PROGRESS — **before launch**
+- **Completed:** Deployment prerequisites in place (v27 active; pending‑only; rollback ready). Targeted‑pilot provenance column exists. **First real end‑to‑end production pilot completed** on v27: a live BBC article ran the full pipeline and was accepted into pending as article ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8` — nothing published.
+- **Remaining:** Continue the staged review — the remaining pilot articles (toward the 3‑then‑7 total) for human verdicts; decide on permanent cron integration afterward.
+- **Next action:** Produce the remaining pending articles for review (no publishing).
 - **Dependencies:** WS 6, WS 7 (done); WS 9 (audit persistence) strongly recommended before scaling.
 - **Priority:** before launch.
 - **Preserved rule:** never auto‑publish; start with 3, then 7.
 
 ### 9. Editorial audit persistence
-- **Status:** NEXT — **before launch**
+- **Status:** LATER BACKLOG — **not required for the current basic human-review workflow** (2026-08-10). The human editorial-review workflow (WS 1) ships without persisted editorial/fidelity audit; full audit persistence stays a later observability enhancement, deferred until scaling.
 - **Completed:** Writer audit, source‑extraction audit, and dedupe audit are persisted on `ingestion_decisions`. Editorial audit (`EditorialAudit`) is currently **observability‑only** — computed and returned in the pilot report but **NOT persisted** (index.ts intentionally leaves the `ingestion_decisions` insert unchanged; no migration in v23).
 - **Remaining:** Design a non‑destructive column/table to persist editorial audit (verdict, `final_draft_source`, rejection reason, second‑attempt type, gate warnings) so pilot reviews are queryable.
 - **Next action:** Draft a nullable, additive migration for editorial audit fields (review‑only; do not apply without authorization).
@@ -342,6 +343,10 @@ Priority tags: **before launch** / **after launch** / **optional**.
 | 2026-08-05 | 16. "In Brief" summaries | DONE | DONE (revalidated) | Verified admin‑authored «باختصار» textarea → `saveContent` → rendered box in `ArticleView`; an editable/rendered field, not a bare column; status stands. |
 | 2026-08-05 | 17. Breaking News | DONE | DONE (revalidated) | Verified `is_breaking` toggle → `saveContent` → `getHomepage` `is_breaking=true` → `BreakingTicker` on homepage; status stands. |
 | 2026-08-05 | 18. Video support | DONE | DONE (revalidated) | Verified `video_url`/type admin controls → `saveContent` → `/video/[slug]` + in‑article embed + homepage video lane; status stands. |
+| 2026-08-10 | 7. AI Editorial Director | DONE (deployed v23) | DONE — implementation phase CLOSED | Full pipeline (trusted‑source → writer → Editorial Director → fidelity validation → constrained repair → final validation → pending) live in `ingest-news` v27 (commit `8b60487`); all AI content stays pending; auto‑publish remains disabled. |
+| 2026-08-10 | 8. Controlled ten-article pilot | NEXT | IN PROGRESS | First real end‑to‑end production pilot completed on v27 — one BBC article accepted (ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8`); staged 3‑then‑7 review continues, pending‑only. |
+| 2026-08-10 | 1. Core platform and admin (human editorial-review workflow) | (not tracked) | COMPLETE | Human editorial-review workflow shipped — production web commit `556965b`, Vercel deployment Ready on main: AI badge, source‑first review panel, verified original source link, admin‑only unpublished preview (`/admin/preview/[id]`, `requireAdmin` + noindex), explicit Reject (`status="rejected"`, non‑destructive/non‑public); publication remains explicit human‑admin action; no schema/migration. |
+| 2026-08-10 | 9. Editorial audit persistence | NEXT | LATER BACKLOG | Full Editorial Director/fidelity audit persistence deferred; not required for the current basic human‑review workflow. |
 
 ---
 
