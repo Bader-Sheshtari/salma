@@ -194,6 +194,76 @@ export function resolveTargetedSource(
   return { ok: true, source };
 }
 
+// --- URL-scoped human-authorized targeted pilot (Radar one-click publish) ---
+//
+// A synthetic, TRANSIENT registry source minted in-memory for exactly one
+// admin-authorized Radar article URL. It is NEVER written to news_sources and
+// grants NO global trust: only its hostname is used to authorize the fetch of
+// that one URL (fetchSourceText validates every hop against this domain, so
+// SSRF/redirect protections are fully preserved). tier "3"/trust 0 keep it the
+// weakest possible source; final_source_allowed lets the pilot cite the fetched
+// page. discovery_enabled=false so it can never leak into Discovery targeting.
+export function syntheticAuthorizedSource(host: string): RegistrySource {
+  return {
+    name: host,
+    domain: host,
+    region: "",
+    source_type: "radar_authorized",
+    tier: "3",
+    trust_score: 0,
+    discovery_enabled: false,
+    final_source_allowed: true,
+    active: true,
+  };
+}
+
+export type AuthorizedTargetedSourcePick =
+  | { ok: true; source: RegistrySource; authorized: boolean }
+  | { ok: false; reason: TargetedRejection };
+
+/**
+ * Resolve a targeted-pilot URL, allowing an EXACT admin-authorized Radar URL to
+ * bypass the registry requirement. Resolution order:
+ *   1. Try the normal registry resolution (resolveTargetedSource). If it already
+ *      resolves to a registered final source, use it unchanged (authorized:false).
+ *   2. Otherwise, ONLY if `authorizedUrl` is provided AND `rawUrl` canonically
+ *      equals it (both parsed via new URL().href, so query/casing/path must all
+ *      match), and the URL is a valid http/https URL with a usable host, mint a
+ *      transient synthetic source for that exact host (authorized:true).
+ *   3. Any other case returns the original registry rejection unchanged.
+ *
+ * The bypass is scoped to the one URL the admin selected: a different URL in the
+ * same request, or a mismatched query/path, does NOT get the synthetic source.
+ * The domain is never persisted or trusted beyond this single fetch.
+ */
+export function resolveAuthorizedTargetedSource(
+  rawUrl: string,
+  index: Map<string, RegistrySource>,
+  authorizedUrl: string | null | undefined,
+): AuthorizedTargetedSourcePick {
+  const registryPick = resolveTargetedSource(rawUrl, index);
+  if (registryPick.ok) return { ok: true, source: registryPick.source, authorized: false };
+
+  // Registry said no. Only the exact authorized URL may bypass.
+  if (!authorizedUrl) return registryPick;
+
+  let reqUrl: URL;
+  let authUrl: URL;
+  try {
+    reqUrl = new URL(rawUrl);
+    authUrl = new URL(authorizedUrl);
+  } catch {
+    return registryPick;
+  }
+  if (reqUrl.href !== authUrl.href) return registryPick;
+  if (reqUrl.protocol !== "http:" && reqUrl.protocol !== "https:") return registryPick;
+
+  const host = normalizeHost(reqUrl.host);
+  if (!host) return registryPick;
+
+  return { ok: true, source: syntheticAuthorizedSource(host), authorized: true };
+}
+
 /**
  * Deterministic backstop over the model's own editorial judgement: an
  * institutional PR release with high promotional score and low editorial value

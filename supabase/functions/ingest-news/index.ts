@@ -27,7 +27,7 @@ import {
   type RegistrySource,
   type RejectionReason,
   registryUsable,
-  resolveTargetedSource,
+  resolveAuthorizedTargetedSource,
 } from "./registry.ts";
 import { clusterStories, pickBestIndex, type StoryText, storyDuplicate } from "./dedupe.ts";
 import { finalizeRun, selectRollbackTargets } from "./runFinalize.ts";
@@ -201,13 +201,16 @@ type PilotReport = {
   fidelity: FidelityRepairAudit | null;
   // True when the pilot draft became pending WITH an unresolved omission warning.
   needs_human_review: boolean;
+  // True when the targeted source was resolved via the URL-scoped human-authorized
+  // Radar bypass (synthetic transient source) rather than a registered news_source.
+  authorized_source_bypass: boolean;
 };
 
 type Draft = {
   title: string;
   excerpt: string;
   body: string;
-  category_slug: string;
+  category_slug: string | null;
   read_minutes: number;
   relevance_score: number;
   original_title: string;
@@ -991,7 +994,15 @@ function buildSystem(policy: Policy, validCategories: string[]): string {
 ${block}
 - أعطِ الأولوية للمواضيع التالية:
 ${priority}
-- صنّف كل خبر إلى أحد الأقسام: ${validCategories.join(", ")}.
+- صنّف كل خبر في قسم واحد رئيسي (category_slug) من: ${validCategories.join(", ")}.
+  حدّد أولاً الطبيعة التحريرية الجوهرية للخبر، ثم طبّق هذا الترتيب في الأسبقية:
+  1) dawi-news: فقط إذا كان الخبر تحديداً عن "داوي" (منتجاتها، شراكاتها، إطلاقاتها، إعلاناتها، مبادراتها، أو تطوّرات الشركة). مجرّد أن يكون الخبر منشوراً أو مصدره داوي لا يجعله dawi-news.
+  2) investigations: فقط للأخبار الاستقصائية فعلاً، القائمة على الأدلة، أو تقارير المساءلة/الكشف. لا تستخدمه لمجرّد أنّ المقال طويل.
+  3) health-economy: إذا كان جوهر الخبر اقتصاد/أعمال القطاع الصحي (استحواذات، اندماجات، استثمارات، تمويل، أسواق صحية، أعمال الأدوية/التقنية الحيوية، أعمال المستشفيات، اقتصاد التأمين، نتائج مالية، استراتيجية شركة، شراكات تجارية كبرى). هذا القسم يتقدّم على الجغرافيا حين تكون الطبيعة الاقتصادية/التجارية هي محور الخبر — مثال: صفقة استحواذ دوائية أميركية تُصنّف health-economy لا world.
+  4) lifestyle: للصحة الشخصية العملية، والعافية، والوقاية، والتغذية، والرياضة، والنوم، وصحة الحياة اليومية، والمواضيع الموجّهة للقارئ.
+  5) الأقسام الجغرافية: للأخبار الطبية/الصحة العامة/الصحية الاعتيادية التي لا تنتمي أساساً لأحد الأقسام الموضوعية أعلاه — محورها الكويت → kuwait؛ محورها دولة خليجية أخرى أو شأن خليجي عام → gulf؛ دولية/خارج الخليج → world.
+  قواعد حاسمة: ذكرٌ عابر للكويت لا يجعل الخبر kuwait، وذكرٌ عابر لدولة خليجية لا يجعله gulf. حدّد ما يدور حوله الخبر أساساً بالاعتماد على العنوان والموجز والنص المتاح والمصدر والجهات والشركات والجغرافيا، لا على مطابقة كلمات مفتاحية سطحية. اختر قسماً رئيسياً واحداً فقط.
+  إذا كانت الثقة منخفضة فعلاً، اترك category_slug فارغاً (null) بدل التخمين؛ سيراجعه المحرّر البشري يدوياً.
 - relevance_score: رقم 0-100 يقيس مدى أهمية الخبر لقارئ صحي في الكويت/الخليج.
 
 التقييم التحريري (مهم — ثقة المصدر لا تعني القيمة التحريرية):
@@ -1045,9 +1056,14 @@ function sanitize(items: unknown, validCategories: string[]): Draft[] {
       title,
       excerpt: String(o.excerpt ?? "").trim(),
       body: String(o.body ?? "").trim(),
-      category_slug: validCategories.includes(String(o.category_slug))
-        ? String(o.category_slug)
-        : fallbackCat,
+      // Empty/omitted → null (genuinely low confidence; admin classifies it in
+      // the inbox). A non-empty but INVALID slug is still coerced to the
+      // fallback so we never write a dangling category_slug that fails the FK.
+      category_slug: String(o.category_slug ?? "").trim() === ""
+        ? null
+        : validCategories.includes(String(o.category_slug))
+          ? String(o.category_slug)
+          : fallbackCat,
       read_minutes: Number(o.read_minutes) || 3,
       relevance_score: Math.min(Math.max(Number(o.relevance_score) || 0, 0), 100),
       original_title: String(o.original_title ?? "").trim(),
@@ -1089,6 +1105,12 @@ async function runIngestion(
     // final_source_allowed source (verified below against the loaded registry);
     // ignored entirely in legacy mode.
     targetedSourceUrl?: string | null;
+    // Radar one-click publish: the EXACT admin-authorized article URL permitted
+    // to bypass the news_sources registry (URL-scoped human authorization). Only
+    // set by the entrypoint for an authenticated manual trigger; when it equals
+    // targetedSourceUrl the pilot may fetch that one URL via a transient synthetic
+    // source. Cron/legacy runs never receive it, so they can never bypass.
+    radarAuthorizedUrl?: string | null;
   } = {},
 ): Promise<RunStats & { pilot?: PilotReport }> {
   const trigger = opts.trigger ?? "manual";
@@ -1105,6 +1127,9 @@ async function runIngestion(
   // E1.3F: the targeted-pilot URL is honored ONLY in pilot mode; legacy/cron
   // runs ignore it so the scheduled path can never be steered to an arbitrary URL.
   const targetedSourceUrl: string | null = writerMode === "pilot" ? (opts.targetedSourceUrl ?? null) : null;
+  // Honored ONLY in pilot mode; the entrypoint additionally restricts it to an
+  // authenticated manual trigger. Never consulted in legacy/cron runs.
+  const radarAuthorizedUrl: string | null = writerMode === "pilot" ? (opts.radarAuthorizedUrl ?? null) : null;
   // Live pilot counters, mutated as the single candidate is processed; assembled
   // into the returned PilotReport after finalize. null in legacy mode.
   const pilot: PilotReport | null = writerMode === "pilot"
@@ -1124,6 +1149,7 @@ async function runIngestion(
       editor_prompt_version: null,
       fidelity: null,
       needs_human_review: false,
+      authorized_source_bypass: false,
     }
     : null;
 
@@ -1704,7 +1730,17 @@ async function runIngestion(
       // must supply every fact. An unregistered/blocked/context-only URL is a
       // hard rejection here: no fetch, no writer call, no insert.
       sourcesChecked.add(hostFromUrl(targetedSourceUrl));
-      const resolved = resolveTargetedSource(targetedSourceUrl, registry.index);
+      // URL-scoped human-authorized bypass: when the entrypoint marked this exact
+      // URL as admin-authorized (radarAuthorizedUrl === targetedSourceUrl), an
+      // unregistered host resolves to a TRANSIENT synthetic source scoped to that
+      // one URL. Otherwise this is identical to resolveTargetedSource (registry
+      // required). SSRF/redirect/DNS protections are unchanged — fetchSourceText
+      // still validates every hop against the resolved host.
+      const resolved = resolveAuthorizedTargetedSource(
+        targetedSourceUrl,
+        registry.index,
+        radarAuthorizedUrl,
+      );
       const key = dedupeKeyFromUrl(targetedSourceUrl);
       if (!resolved.ok || !key) {
         const reason = resolved.ok ? "pilot_source_url_invalid" : resolved.reason;
@@ -1719,6 +1755,7 @@ async function runIngestion(
         if (pilot) pilot.rejection_reason = reason;
         plans = [];
       } else {
+        if (pilot) pilot.authorized_source_bypass = resolved.authorized;
         const draft = buildTargetedDraft(targetedSourceUrl, resolved.source);
         const chosen: Candidate = { url: targetedSourceUrl, source: resolved.source };
         const rep: PendingItem = {
@@ -1926,8 +1963,26 @@ Deno.serve(async (req: Request) => {
   const pilotLimit = gate.mode === "pilot" ? gate.limit : null;
   const targetedSourceUrl = gate.mode === "pilot" ? (gate.sourceUrl ?? null) : null;
 
+  // Radar one-click publish: URL-scoped human authorization to fetch an
+  // unregistered source. Granted ONLY when ALL hold: an ADMIN JWT (trigger
+  // "manual", never the cron secret's "cron"), an explicit radar_authorized_source
+  // === true flag, and a resolved targeted pilot URL. The authorization is scoped
+  // to exactly that URL — runIngestion mints the transient synthetic source only
+  // when the pilot URL equals this value. Cron can never set trigger "manual", so
+  // the scheduled path can never bypass the registry.
+  const radarAuthorizedFlag = (body as { radar_authorized_source?: unknown })?.radar_authorized_source === true;
+  const radarAuthorizedUrl = trigger === "manual" && radarAuthorizedFlag && targetedSourceUrl
+    ? targetedSourceUrl
+    : null;
+
   try {
-    const result = await runIngestion(admin, { trigger, writerMode, pilotLimit, targetedSourceUrl });
+    const result = await runIngestion(admin, {
+      trigger,
+      writerMode,
+      pilotLimit,
+      targetedSourceUrl,
+      radarAuthorizedUrl,
+    });
     // The pilot report (if any) is present only because runIngestion returned
     // normally, i.e. AFTER the mandatory audit persisted. It carries operational
     // counts only — no source text, keys, tokens, or headers.

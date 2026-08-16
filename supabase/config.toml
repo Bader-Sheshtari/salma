@@ -14,3 +14,9 @@ verify_jwt = true
 # gateway so no unauthenticated request can run the ranker.
 [functions.radar-rank]
 verify_jwt = true
+
+# radar-translate fetches an external URL and spends OpenRouter credit on an
+# on-demand reading-aid translation. It is admin-only: require a valid signed JWT
+# at the gateway (the function additionally re-checks the caller's admin role).
+[functions.radar-translate]
+verify_jwt = true

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import {
   type RadarArticle,
@@ -10,6 +10,11 @@ import {
   DUPLICATE_LABEL,
   langLabel,
 } from "@/lib/radar";
+import {
+  publishRadarStory,
+  translateRadarStory,
+  type PublishRadarResult,
+} from "../../radar-actions";
 
 type Cat = { slug: string; name_ar: string };
 
@@ -59,10 +64,22 @@ function timeLabel(iso: string | null): string {
   return new Date(iso).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" });
 }
 
+// Per-article local UI state for translation-on-demand (never persisted).
+type TranslationState = { loading: boolean; text?: string; title?: string; error?: string };
+
 export default function RadarInbox({ items, categories }: { items: RadarArticle[]; categories: Cat[] }) {
   const [importance, setImportance] = useState<ImportanceMode>("default");
   const [dupe, setDupe] = useState<DupeMode>("opportunities");
   const [cat, setCat] = useState<string>("");
+
+  // Interaction state (details drawer, publish feedback, translation, category).
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
+  const [feedback, setFeedback] = useState<Record<string, string>>({});
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [catOverride, setCatOverride] = useState<Record<string, string>>({});
+  const [translation, setTranslation] = useState<Record<string, TranslationState>>({});
 
   const catName = useMemo(() => {
     const m = new Map(categories.map((c) => [c.slug, c.name_ar]));
@@ -114,6 +131,48 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
     }
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [filtered]);
+
+  function applyPublishResult(a: RadarArticle, res: PublishRadarResult) {
+    if ("error" in res) { setFeedback((f) => ({ ...f, [a.id]: res.error })); return; }
+    if ("ok" in res && res.ok) {
+      if (res.status === "published") setFeedback((f) => ({ ...f, [a.id]: "✅ نُشر في سلمى." }));
+      else if (res.status === "already_published") setFeedback((f) => ({ ...f, [a.id]: "منشور مسبقًا في سلمى." }));
+      else if (res.status === "needs_review")
+        setFeedback((f) => ({ ...f, [a.id]: "⏸ توقف بأمان — بحاجة لمراجعة في صندوق المحتوى." }));
+      return;
+    }
+    if ("status" in res) {
+      if (res.status === "already_processing") setFeedback((f) => ({ ...f, [a.id]: "جارٍ النشر بالفعل…" }));
+      else if (res.status === "already_in_salma")
+        setFeedback((f) => ({ ...f, [a.id]: "موجود في سلمى — لن يُنشأ تكرار." }));
+      else if (res.status === "needs_confirmation") setConfirmId(a.id);
+      else if (res.status === "failed")
+        setFeedback((f) => ({ ...f, [a.id]: `⛔ لم يُنشر (${res.reason ?? "سبب غير معروف"}) — لا يزال متاحًا للمراجعة.` }));
+    }
+  }
+
+  function doPublish(a: RadarArticle, confirmPossibleDuplicate = false) {
+    setBusyId(a.id);
+    setFeedback((f) => ({ ...f, [a.id]: "" }));
+    startTransition(async () => {
+      const res = await publishRadarStory(a.id, {
+        categorySlug: catOverride[a.id] ?? a.expected_category_slug ?? null,
+        confirmPossibleDuplicate,
+      });
+      applyPublishResult(a, res);
+      setBusyId(null);
+      setConfirmId((c) => (c === a.id ? null : c));
+    });
+  }
+
+  function doTranslate(a: RadarArticle) {
+    setTranslation((t) => ({ ...t, [a.id]: { loading: true } }));
+    startTransition(async () => {
+      const res = await translateRadarStory(a.id);
+      if ("error" in res) setTranslation((t) => ({ ...t, [a.id]: { loading: false, error: res.error } }));
+      else setTranslation((t) => ({ ...t, [a.id]: { loading: false, text: res.text, title: res.titleOriginal ?? undefined } }));
+    });
+  }
 
   return (
     <div>
@@ -172,61 +231,213 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
         <section key={key} className="mb-5">
           <h2 className="mb-2 text-[13px] font-bold text-gray">{dateGroupLabel(key)}</h2>
           <div className="space-y-2">
-            {rows.map((a) => (
-              <article key={a.id} className="rounded-xl border border-line bg-white p-3">
-                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                  <span className={`rounded-md border px-1.5 py-0.5 text-[11px] font-bold ${priorityClass(a.priority_level)}`}>
-                    {a.priority_level ? PRIORITY_LABEL[a.priority_level] : UNRANKED_LABEL}
-                    {a.priority_score !== null && <span className="opacity-60"> · {a.priority_score}</span>}
-                  </span>
-                  <span className="rounded-md border border-line bg-cream px-1.5 py-0.5 text-[11px] font-semibold text-teal">
-                    {catName(a.expected_category_slug)}
-                  </span>
-                  {a.duplicate_status && a.duplicate_status !== "new" ? (
-                    a.matched_content_id ? (
-                      <Link
-                        href={`/admin/content/${a.matched_content_id}`}
-                        className="rounded-md border border-line px-1.5 py-0.5 text-[11px] font-semibold text-ink underline hover:bg-cream"
-                      >
-                        {DUPLICATE_LABEL[a.duplicate_status]} ↗
-                      </Link>
-                    ) : (
-                      <span className="rounded-md border border-line px-1.5 py-0.5 text-[11px] font-semibold text-gray">
-                        {DUPLICATE_LABEL[a.duplicate_status]}
-                      </span>
-                    )
-                  ) : a.duplicate_status === "new" ? (
-                    <span className="rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700">
-                      جديد
+            {rows.map((a) => {
+              const isOpen = openId === a.id;
+              const isBusy = busyId === a.id;
+              const published = a.publish_status === "published";
+              const processing = a.publish_status === "processing";
+              const needsReview = a.publish_status === "needs_review";
+              const tr = translation[a.id];
+              const selectedCat = catOverride[a.id] ?? a.expected_category_slug ?? "";
+              return (
+                <article key={a.id} className="rounded-xl border border-line bg-white p-3">
+                  <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className={`rounded-md border px-1.5 py-0.5 text-[11px] font-bold ${priorityClass(a.priority_level)}`}>
+                      {a.priority_level ? PRIORITY_LABEL[a.priority_level] : UNRANKED_LABEL}
+                      {a.priority_score !== null && <span className="opacity-60"> · {a.priority_score}</span>}
                     </span>
-                  ) : null}
-                  <span className="rounded-md bg-ink px-1.5 py-0.5 font-sans text-[9px] font-bold tracking-wide text-white">
-                    RADAR
-                  </span>
-                </div>
+                    <span className="rounded-md border border-line bg-cream px-1.5 py-0.5 text-[11px] font-semibold text-teal">
+                      {catName(a.expected_category_slug)}
+                    </span>
+                    {a.duplicate_status && a.duplicate_status !== "new" ? (
+                      a.matched_content_id ? (
+                        <Link
+                          href={`/admin/content/${a.matched_content_id}`}
+                          className="rounded-md border border-line px-1.5 py-0.5 text-[11px] font-semibold text-ink underline hover:bg-cream"
+                        >
+                          {DUPLICATE_LABEL[a.duplicate_status]} ↗
+                        </Link>
+                      ) : (
+                        <span className="rounded-md border border-line px-1.5 py-0.5 text-[11px] font-semibold text-gray">
+                          {DUPLICATE_LABEL[a.duplicate_status]}
+                        </span>
+                      )
+                    ) : a.duplicate_status === "new" ? (
+                      <span className="rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700">
+                        جديد
+                      </span>
+                    ) : null}
+                    {published && (
+                      <span className="rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700">
+                        منشور
+                      </span>
+                    )}
+                    {needsReview && (
+                      <span className="rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">
+                        يحتاج مراجعة
+                      </span>
+                    )}
+                    <span className="rounded-md bg-ink px-1.5 py-0.5 font-sans text-[9px] font-bold tracking-wide text-white">
+                      RADAR
+                    </span>
+                  </div>
 
-                <a
-                  href={a.url ?? "#"}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block text-[14.5px] font-semibold leading-snug text-ink hover:text-teal"
-                  dir="auto"
-                >
-                  {a.title ?? "—"}
-                </a>
+                  {/* Arabic headline (primary) with original underneath. */}
+                  <div className="mb-1" dir="rtl">
+                    <span className="block text-[15.5px] font-bold leading-snug text-ink" dir="auto">
+                      {a.title_ar ?? a.title ?? "—"}
+                    </span>
+                    {a.title_ar && a.title && (
+                      <span className="mt-0.5 block text-[12px] leading-snug text-gray" dir="auto">
+                        {a.title}
+                      </span>
+                    )}
+                  </div>
 
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-sans text-[11.5px] text-gray">
-                  <span>{a.source_title ?? a.source_domain ?? "—"}</span>
-                  {a.country && <span>· {a.country}</span>}
-                  <span>· {langLabel(a.language)}</span>
-                  {a.published_at && <span>· نُشر {timeLabel(a.published_at)}</span>}
-                  <span>· رُصد {timeLabel(a.first_seen_at)}</span>
-                </div>
-              </article>
-            ))}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-sans text-[11.5px] text-gray">
+                    <span>{a.source_title ?? a.source_domain ?? "—"}</span>
+                    {a.country && <span>· {a.country}</span>}
+                    <span>· {langLabel(a.language)}</span>
+                    {a.published_at && <span>· نُشر {timeLabel(a.published_at)}</span>}
+                    <span>· رُصد {timeLabel(a.first_seen_at)}</span>
+                  </div>
+
+                  {/* Two primary actions. */}
+                  <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setOpenId(isOpen ? null : a.id)}
+                      className="rounded-lg border border-line bg-white px-3 py-1.5 text-[12.5px] font-semibold text-ink hover:bg-cream"
+                    >
+                      {isOpen ? "إخفاء التفاصيل" : "عرض التفاصيل"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isBusy || published || processing}
+                      onClick={() => doPublish(a)}
+                      className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-50"
+                    >
+                      {published ? "منشور ✓" : processing || isBusy ? "…جارٍ النشر" : "نشر في سلمى"}
+                    </button>
+                    {(published || needsReview) && a.published_content_id && (
+                      <Link
+                        href={`/admin/content/${a.published_content_id}`}
+                        className="text-[12px] font-semibold text-teal underline"
+                      >
+                        فتح في المحتوى ↗
+                      </Link>
+                    )}
+                  </div>
+
+                  {/* Possible-duplicate confirmation. */}
+                  {confirmId === a.id && (
+                    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[12.5px] text-amber-900">
+                      قد يكون هذا الخبر مكررًا لخبر موجود في سلمى.
+                      {a.matched_content_id && (
+                        <Link href={`/admin/content/${a.matched_content_id}`} className="mx-1 underline">
+                          افتح الخبر الموجود ↗
+                        </Link>
+                      )}
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => doPublish(a, true)}
+                          className="rounded-md bg-amber-600 px-2.5 py-1 text-[12px] font-bold text-white disabled:opacity-50"
+                        >
+                          انشر على أي حال
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmId(null)}
+                          className="rounded-md border border-amber-300 px-2.5 py-1 text-[12px] font-semibold text-amber-800"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {feedback[a.id] && (
+                    <div className="mt-2 text-[12px] font-semibold text-ink">{feedback[a.id]}</div>
+                  )}
+
+                  {/* Details drawer. */}
+                  {isOpen && (
+                    <div className="mt-2.5 rounded-lg border border-line bg-cream/60 p-3">
+                      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[12px] text-gray sm:grid-cols-3">
+                        <Meta label="المصدر" value={a.source_title ?? a.source_domain ?? "—"} />
+                        <Meta label="الدولة" value={a.country ?? "—"} />
+                        <Meta label="اللغة" value={langLabel(a.language)} />
+                        <Meta label="القيمة التحريرية" value={a.priority_level ? PRIORITY_LABEL[a.priority_level] : UNRANKED_LABEL} />
+                        <Meta label="القسم المقترح" value={catName(a.expected_category_slug)} />
+                        <Meta label="التكرار" value={a.duplicate_status ? DUPLICATE_LABEL[a.duplicate_status] : "—"} />
+                      </dl>
+
+                      <div className="mt-2 flex flex-wrap items-center gap-3">
+                        <a
+                          href={a.url ?? "#"}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[12.5px] font-semibold text-teal underline"
+                        >
+                          فتح المصدر الأصلي ↗
+                        </a>
+
+                        {/* Inline category override before publishing. */}
+                        <label className="flex items-center gap-1.5 text-[12px] text-gray">
+                          القسم عند النشر:
+                          <select
+                            value={selectedCat}
+                            onChange={(e) => setCatOverride((m) => ({ ...m, [a.id]: e.target.value }))}
+                            className="rounded-md border border-line bg-white px-2 py-1 text-[12.5px] text-ink"
+                          >
+                            <option value="">— اختر —</option>
+                            {categories.map((c) => (
+                              <option key={c.slug} value={c.slug}>{c.name_ar}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+
+                      {/* On-demand translation (reading aid; never auto, never published). */}
+                      <div className="mt-3 border-t border-line pt-2.5">
+                        <button
+                          type="button"
+                          disabled={tr?.loading}
+                          onClick={() => doTranslate(a)}
+                          className="rounded-lg border border-teal px-3 py-1.5 text-[12.5px] font-semibold text-teal hover:bg-teal/5 disabled:opacity-50"
+                        >
+                          {tr?.loading ? "…جارٍ الترجمة" : "ترجمة الخبر (قراءة فقط)"}
+                        </button>
+                        <p className="mt-1 text-[11px] text-gray">
+                          ترجمة للقراءة فقط — لا تُنشر ولا تُستخدم في الكتابة. يعتمد النشر دائمًا على المصدر الأصلي.
+                        </p>
+                        {tr?.error && <div className="mt-2 text-[12px] text-red-600">{tr.error}</div>}
+                        {tr?.text && (
+                          <div className="mt-2 rounded-md border border-line bg-white p-2.5" dir="rtl">
+                            {tr.title && <div className="mb-1 text-[13px] font-bold text-ink" dir="auto">{tr.title}</div>}
+                            <div className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-ink">{tr.text}</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
         </section>
       ))}
+    </div>
+  );
+}
+
+function Meta({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-[10.5px] font-semibold text-gray/70">{label}</dt>
+      <dd className="font-semibold text-ink">{value}</dd>
     </div>
   );
 }

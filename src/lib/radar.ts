@@ -7,6 +7,10 @@
 
 export type RadarPriorityLevel = "very_important" | "important" | "low";
 export type RadarDuplicateStatus = "new" | "already_in_salma" | "possible_duplicate";
+// One-click publish latch: null (never attempted), 'processing' (a publish job is
+// running — blocks a second start), 'published' (linked to Content), or
+// 'needs_review' (a prior attempt stopped safely at pending / failed — retryable).
+export type RadarPublishStatus = "processing" | "published" | "needs_review";
 
 /** A row of radar_shadow_articles plus the nullable ranking/dedupe fields.
  *  Any ranking field may be null → the row is UNRANKED (not yet evaluated). */
@@ -16,6 +20,9 @@ export type RadarArticle = {
   provider_uri: string;
   event_uri: string | null;
   title: string | null;
+  // Faithful Arabic translation of the ORIGINAL headline (or the Arabic original
+  // verbatim). Reading aid only — never Writer input. Null until translated.
+  title_ar: string | null;
   url: string | null;
   source_title: string | null;
   source_domain: string | null;
@@ -31,6 +38,12 @@ export type RadarArticle = {
   duplicate_status: RadarDuplicateStatus | null;
   matched_content_id: string | null;
   ranked_at: string | null;
+  // One-click publish state (see RadarPublishStatus). published_content_id is the
+  // soft link to the created content row; publish_error carries the last failure.
+  publish_status: RadarPublishStatus | null;
+  published_content_id: string | null;
+  publish_error: string | null;
+  publish_authorized_at: string | null;
 };
 
 // --- Score → level thresholds (single tuning surface; easy to change later) --

@@ -225,6 +225,27 @@ const VI_VERIFY_PROMPT =
   'أعد فقط كائن JSON واحدًا صالحًا دون أي نص آخر بالشكل: ' +
   '{"very_important_eligible": <true|false>, "reason_code": "<CODE>", "reason": "<جملة قصيرة>"}';
 
+// --- Arabic headline translation (reading aid; NOT editorial input) ----------
+// A faithful Arabic translation of the ORIGINAL headline, stored in title_ar so
+// the admin can read every Radar story in Arabic. This is a TRANSLATION ONLY:
+// no rewriting, no added context, names/numbers/organizations preserved. It is
+// completely separate from ranking — it never feeds the classifier, priority,
+// editorial value, category, or dedupe, and the Writer NEVER grounds on it.
+// Arabic-language originals bypass the model entirely (title_ar = title verbatim).
+const TRANSLATE_PROMPT =
+  "أنت مترجم عناوين محترف لمنصة أخبار صحية عربية (سلمى). مهمتك ترجمة عنوان الخبر الأصلي إلى العربية الفصحى ترجمةً " +
+  "أمينة فقط. قواعد صارمة: (1) ترجمة فقط، بلا إعادة صياغة أو تحرير أو تلخيص أو إضافة أي سياق أو رأي. " +
+  "(2) حافظ على المعنى الأصلي بدقة. (3) احتفظ بأسماء الأشخاص والمؤسسات والأماكن والأرقام والإحصاءات والوحدات كما هي. " +
+  "(4) لا تضف معلومات غير موجودة في العنوان الأصلي ولا تحذف أي معلومة منه. (5) أعِد عنوانًا عربيًا طبيعيًا موجزًا " +
+  "مطابقًا لمضمون الأصل. " +
+  'أعد فقط مصفوفة JSON صالحة، عنصر لكل عنوان بنفس الأرقام المُعطاة، بالشكل: ' +
+  '[{"i":<رقم>,"ar":"<العنوان بالعربية>"}] دون أي نص آخر.';
+
+// Original languages that are already Arabic → keep the headline verbatim.
+function isArabicLang(lang: string | null): boolean {
+  return (lang ?? "").trim().toLowerCase().startsWith("ar");
+}
+
 type RadarRow = {
   id: string;
   title: string | null;
@@ -408,6 +429,78 @@ Deno.serve(async (req) => {
     return null;
   }
 
+  // Batched faithful Arabic-headline translation. Arabic-language originals are
+  // resolved locally (verbatim, no LLM). Non-Arabic titles are translated in one
+  // batched call per chunk. Returns id → title_ar for every row we could resolve;
+  // rows left unresolved simply keep title_ar NULL and are retried next cycle.
+  async function translateTitles(items: RadarRow[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const needModel: RadarRow[] = [];
+    for (const a of items) {
+      const t = (a.title ?? "").trim();
+      if (!t) continue;
+      if (isArabicLang(a.language)) out.set(a.id, t); // Arabic original → verbatim
+      else needModel.push(a);
+    }
+    for (const batch of chunk(needModel, 20)) {
+      const lines = batch.map((a, j) => `${j}. ${a.title ?? ""}`).join("\n");
+      let parsed: { i: number; ar: string }[] = [];
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) await sleep(1000 * 2 ** (attempt - 1));
+        calls++;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 45000);
+        let json: {
+          choices?: { message?: { content?: string } }[];
+          usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number };
+          error?: { message?: string };
+        };
+        try {
+          const res = await fetch(OPENROUTER_URL, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${openrouterKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model,
+              temperature: 0,
+              messages: [
+                { role: "system", content: TRANSLATE_PROMPT },
+                { role: "user", content: `ترجم هذه العناوين:\n${lines}` },
+              ],
+            }),
+            signal: ctrl.signal,
+          });
+          json = await res.json();
+        } catch {
+          continue;
+        } finally {
+          clearTimeout(timer);
+        }
+        if (json.usage) {
+          usage.prompt += json.usage.prompt_tokens ?? 0;
+          usage.completion += json.usage.completion_tokens ?? 0;
+          usage.total += json.usage.total_tokens ?? 0;
+          usage.cost += json.usage.cost ?? 0;
+        }
+        const raw = json.choices?.[0]?.message?.content ?? "";
+        if (json.error || !raw) continue;
+        try {
+          const s = raw.indexOf("["); const e = raw.lastIndexOf("]");
+          parsed = JSON.parse(raw.slice(s, e + 1));
+          break;
+        } catch {
+          parsed = [];
+        }
+      }
+      for (const p of parsed) {
+        const a = batch[p.i];
+        const ar = String(p.ar ?? "").trim();
+        if (a && ar) out.set(a.id, ar);
+      }
+      await sleep(200);
+    }
+    return out;
+  }
+
   let attemptedCount = 0;
   let rankedCount = 0;
   let retryCount = 0;
@@ -512,9 +605,15 @@ Deno.serve(async (req) => {
       await sleep(200);
     }
 
+    // 3c) Faithful Arabic-headline translation (title_ar) for this batch. Fully
+    //     independent of ranking: a translation failure never blocks ranking, and
+    //     an unresolved title_ar simply stays NULL and is retried next cycle.
+    const titleArOf = await translateTitles(radar);
+
     // 4) Persist per-article results. Success writes all fields + ranked_at and
     //    clears rank_error. Failure sets rank_error + increments rank_attempts
-    //    and LEAVES ranked_at NULL so the row is retried next cycle.
+    //    and LEAVES ranked_at NULL so the row is retried next cycle. title_ar is
+    //    written whenever resolved, on both the ranked and UNRANKED paths.
     const nowIso = new Date().toISOString();
     for (const a of radar) {
       let r = rankOf.get(a.id);
@@ -536,6 +635,8 @@ Deno.serve(async (req) => {
         }
       }
 
+      const titleAr = titleArOf.get(a.id) ?? null;
+
       if (r) {
         const { error: upErr } = await supabase
           .from("radar_shadow_articles")
@@ -546,6 +647,7 @@ Deno.serve(async (req) => {
             expected_category_slug: r.category,
             duplicate_status: d.status,
             matched_content_id: d.matched,
+            title_ar: titleAr,
             ranked_at: nowIso,
             rank_error: null,
             rank_attempts: 1,
@@ -569,6 +671,7 @@ Deno.serve(async (req) => {
           .update({
             duplicate_status: d.status,
             matched_content_id: d.matched,
+            title_ar: titleAr,
             rank_error: "ranking_incomplete_after_retries",
             rank_attempts: attempts,
           })
