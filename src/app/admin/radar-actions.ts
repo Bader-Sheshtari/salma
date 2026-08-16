@@ -109,12 +109,16 @@ export async function publishRadarStory(
     return { status: "needs_confirmation", matchedContentId: row.matched_content_id };
   }
 
-  // 2) Idempotency compare-and-swap. Only a retryable state — NULL / 'needs_review'
-  //    / 'failed' — may start a run; the same statement stamps the authorization
-  //    audit. 0 rows updated → a concurrent click already latched it (or the row
-  //    is already published/processing) → no second publish flow. 'failed' is the
-  //    pre-Content rejection state (see markPublishFailed); retrying it simply
-  //    re-runs the unchanged pipeline for the same article.
+  // 2) Idempotency compare-and-swap. A run may start ONLY from a genuinely
+  //    retryable state, enforced server-side (not just in the UI):
+  //      • publish_status IS NULL            → never attempted
+  //      • publish_status = 'failed'         → pre-Content rejection (retryable)
+  //      • publish_status = 'needs_review'   → ONLY when published_content_id IS
+  //        NULL (a legacy row from before the failed-state split). A needs_review
+  //        row that DOES have a Content id is a real item awaiting human review —
+  //        it must be opened/reviewed, never re-run (would risk a duplicate).
+  //    'published' / 'processing' never match. The same statement stamps the
+  //    authorization audit; 0 rows updated → nothing retryable → no second flow.
   const { data: latched, error: latchErr } = await svc
     .from("radar_shadow_articles")
     .update({
@@ -124,7 +128,7 @@ export async function publishRadarStory(
       publish_error: null,
     } as unknown as never)
     .eq("id", id)
-    .or("publish_status.is.null,publish_status.eq.needs_review,publish_status.eq.failed")
+    .or("publish_status.is.null,publish_status.eq.failed,and(publish_status.eq.needs_review,published_content_id.is.null)")
     .select("id");
   if (latchErr) return { error: "تعذّر بدء النشر." };
   if (!latched || latched.length === 0) {
