@@ -152,6 +152,18 @@ export async function setStatus(formData: FormData) {
   const supabase = await createClient();
   const id = String(formData.get("id"));
   const status = String(formData.get("status"));
+  // Publication is only ever permitted from `pending` — the intended flow is
+  // Writer → Editorial Director → Fidelity → pending → human review → publish.
+  // A draft/rejected/published/deleted row can never be published here.
+  if (status === "published") {
+    const { data } = await supabase
+      .from("content")
+      .select("status,deleted_at")
+      .eq("id", id)
+      .maybeSingle();
+    const row = data as { status: string; deleted_at: string | null } | null;
+    if (!row || row.deleted_at || row.status !== "pending") return;
+  }
   const patch =
     status === "published"
       ? { status, published_at: new Date().toISOString() }
@@ -190,6 +202,146 @@ export async function rejectContent(formData: FormData) {
     .eq("id", id);
   revalidatePath("/admin/content");
   revalidatePath("/");
+}
+
+/** Per-item note in a bulk report (skipped or failed). */
+export type BulkItemNote = { id: string; title: string; reason: string };
+
+/**
+ * Per-item outcome of a bulk action, so the admin sees exactly what happened.
+ * `skipped` = deliberately not acted on (ineligible), `failed` = attempted but
+ * errored. Neither is ever silently swallowed.
+ */
+export type BulkActionResult = {
+  succeeded: number;
+  skipped: BulkItemNote[];
+  failed: BulkItemNote[];
+};
+
+type ContentRow = { id: string; title: string; status: string; deleted_at: string | null };
+
+/** Load the current rows (title/status/deleted_at) so bulk actions can enforce
+ * eligibility and name each item in the report. */
+async function contentRows(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  ids: string[],
+): Promise<Map<string, ContentRow>> {
+  const map = new Map<string, ContentRow>();
+  if (ids.length === 0) return map;
+  const { data } = await supabase
+    .from("content")
+    .select("id,title,status,deleted_at")
+    .in("id", ids);
+  for (const r of (data as ContentRow[]) ?? []) map.set(r.id, r);
+  return map;
+}
+
+/**
+ * Bulk status change (e.g. publish selected). This is a HUMAN ADMIN action and
+ * applies the SAME update `setStatus` uses for a single item — identical patch,
+ * identical `published_at` stamping when publishing — one row at a time so a
+ * single failure never aborts the rest. It does NOT run or bypass Writer /
+ * Editorial Director / Fidelity: publishing is only ever a status flip.
+ *
+ * Eligibility: publication is only ever permitted from `pending` — matching the
+ * single-item Publish button and the intended flow (Writer → Editorial Director
+ * → Fidelity → pending → human review → publish). draft / rejected / already
+ * published / deleted rows are skipped with an exact reason, never force-published.
+ */
+export async function bulkSetStatus(ids: string[], status: string): Promise<BulkActionResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const clean = [...new Set((ids ?? []).map(String))].filter(Boolean);
+  const rows = await contentRows(supabase, clean);
+  const patch =
+    status === "published"
+      ? { status, published_at: new Date().toISOString() }
+      : { status };
+  const skipped: BulkItemNote[] = [];
+  const failed: BulkItemNote[] = [];
+  let succeeded = 0;
+  for (const id of clean) {
+    const row = rows.get(id);
+    if (!row || row.deleted_at) {
+      skipped.push({ id, title: row?.title ?? id, reason: "العنصر غير موجود أو محذوف." });
+      continue;
+    }
+    if (status === "published" && row.status !== "pending") {
+      const reason =
+        row.status === "published"
+          ? "منشور بالفعل — غير مؤهّل للنشر الجماعي."
+          : "النشر مسموح فقط من حالة (بانتظار المراجعة).";
+      skipped.push({ id, title: row.title, reason });
+      continue;
+    }
+    const { error } = await supabase.from("content").update(patch as unknown as never).eq("id", id);
+    if (error) failed.push({ id, title: row.title, reason: error.message });
+    else succeeded++;
+  }
+  revalidatePath("/admin/content");
+  revalidatePath("/");
+  return { succeeded, skipped, failed };
+}
+
+/** Bulk soft-delete: same `deleted_at` stamp `softDeleteContent` uses, per row,
+ * collecting per-item outcomes rather than aborting on the first error. Rows
+ * that are missing or already deleted are skipped (nothing to do). */
+export async function bulkSoftDelete(ids: string[]): Promise<BulkActionResult> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const clean = [...new Set((ids ?? []).map(String))].filter(Boolean);
+  const rows = await contentRows(supabase, clean);
+  const stamp = new Date().toISOString();
+  const skipped: BulkItemNote[] = [];
+  const failed: BulkItemNote[] = [];
+  let succeeded = 0;
+  for (const id of clean) {
+    const row = rows.get(id);
+    if (!row || row.deleted_at) {
+      skipped.push({ id, title: row?.title ?? id, reason: "العنصر غير موجود أو محذوف مسبقاً." });
+      continue;
+    }
+    const { error } = await supabase
+      .from("content")
+      .update({ deleted_at: stamp } as unknown as never)
+      .eq("id", id);
+    if (error) failed.push({ id, title: row.title, reason: error.message });
+    else succeeded++;
+  }
+  revalidatePath("/admin/content");
+  revalidatePath("/");
+  return { succeeded, skipped, failed };
+}
+
+/**
+ * Manually set (or clear) an item's primary category from the content inbox.
+ * The admin is always allowed to override the AI's category. The slug is
+ * validated against the live `categories` table (the single source of truth);
+ * an empty value clears it back to "needs review".
+ */
+export async function setCategory(
+  id: string,
+  slug: string,
+): Promise<{ error: string } | { ok: true }> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const category_slug = String(slug ?? "").trim() || null;
+  if (category_slug) {
+    const { data } = await supabase
+      .from("categories")
+      .select("slug")
+      .eq("slug", category_slug)
+      .maybeSingle();
+    if (!data) return { error: "قسم غير معروف." };
+  }
+  const { error } = await supabase
+    .from("content")
+    .update({ category_slug } as unknown as never)
+    .eq("id", String(id));
+  if (error) return { error: "تعذّر تحديث القسم." };
+  revalidatePath("/admin/content");
+  revalidatePath("/");
+  return { ok: true };
 }
 
 export type IngestResult =
