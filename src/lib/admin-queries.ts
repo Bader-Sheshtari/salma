@@ -92,6 +92,27 @@ export async function listRadarArticles(limit = 500): Promise<RadarArticle[]> {
   return (data ?? []) as RadarArticle[];
 }
 
+// Resolve the slug + status of the content rows a Radar row points at
+// (published_content_id / matched_content_id) so the Radar card can link the
+// "open the article" / "open the existing article" actions to the actual public
+// Salma article (/article/<slug>) rather than a raw id. Read-only; a missing id
+// simply yields no entry (the card then falls back to a non-link state).
+export type RadarContentLink = { slug: string; status: string };
+export async function listRadarContentLinks(
+  ids: (string | null)[],
+): Promise<Record<string, RadarContentLink>> {
+  const unique = [...new Set(ids.filter((x): x is string => !!x))];
+  if (unique.length === 0) return {};
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const { data } = await client.from("content").select("id,slug,status").in("id", unique);
+  const map: Record<string, RadarContentLink> = {};
+  for (const r of (data ?? []) as { id: string; slug: string; status: string }[]) {
+    map[r.id] = { slug: r.slug, status: r.status };
+  }
+  return map;
+}
+
 export async function getContentForEdit(
   id: string,
 ): Promise<{ content: Content; sources: ContentSource[]; media: ContentMedia[] } | null> {

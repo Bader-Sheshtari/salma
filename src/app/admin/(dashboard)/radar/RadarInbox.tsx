@@ -16,8 +16,18 @@ import {
   translateRadarStory,
   type PublishRadarResult,
 } from "../../radar-actions";
+import type { RadarContentLink } from "@/lib/admin-queries";
 
 type Cat = { slug: string; name_ar: string };
+
+// Per-article one-click publish result, held in the client so the card shows an
+// unmistakable state without leaving the page or exposing raw internal codes.
+type PublishUi =
+  | { kind: "published" } // ✅ تم النشر في سلمى — open the article
+  | { kind: "needs_review" } // ⚠️ يحتاج مراجعة — open in Content
+  | { kind: "already" } // موجود في سلمى — open the existing article
+  | { kind: "failed" } // ⛔ content could not be obtained — retry / open source
+  | { kind: "info"; msg: string }; // transient note (e.g. already publishing)
 
 // Importance filter modes. "default" = editorial opportunities (very + important).
 type ImportanceMode = "default" | "very_important" | "low" | "unranked" | "all";
@@ -68,19 +78,34 @@ function timeLabel(iso: string | null): string {
 // Per-article local UI state for translation-on-demand (never persisted).
 type TranslationState = { loading: boolean; text?: string; title?: string; error?: string };
 
-export default function RadarInbox({ items, categories }: { items: RadarArticle[]; categories: Cat[] }) {
+export default function RadarInbox({
+  items,
+  categories,
+  contentLinks,
+}: {
+  items: RadarArticle[];
+  categories: Cat[];
+  contentLinks: Record<string, RadarContentLink>;
+}) {
   const [importance, setImportance] = useState<ImportanceMode>("default");
   const [dupe, setDupe] = useState<DupeMode>("opportunities");
   const [cat, setCat] = useState<string>("");
 
-  // Interaction state (details drawer, publish feedback, translation, category).
+  // Interaction state (details drawer, publish result, translation, category).
   const [openId, setOpenId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
-  const [feedback, setFeedback] = useState<Record<string, string>>({});
+  const [pubUi, setPubUi] = useState<Record<string, PublishUi>>({});
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [catOverride, setCatOverride] = useState<Record<string, string>>({});
   const [translation, setTranslation] = useState<Record<string, TranslationState>>({});
+
+  // Open the actual public Salma article by content id, when its slug is known.
+  const articleHref = (contentId: string | null): string | null => {
+    if (!contentId) return null;
+    const link = contentLinks[contentId];
+    return link?.slug ? `/article/${link.slug}` : null;
+  };
 
   const catName = useMemo(() => {
     const m = new Map(categories.map((c) => [c.slug, c.name_ar]));
@@ -133,28 +158,27 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [filtered]);
 
+  // Map the server result to a single clear card state. Raw internal reasons
+  // (e.g. source_fetch_failed) are NEVER surfaced here — they stay in the logs.
   function applyPublishResult(a: RadarArticle, res: PublishRadarResult) {
-    if ("error" in res) { setFeedback((f) => ({ ...f, [a.id]: res.error })); return; }
+    const set = (ui: PublishUi) => setPubUi((m) => ({ ...m, [a.id]: ui }));
+    if ("error" in res) { set({ kind: "info", msg: res.error }); return; }
     if ("ok" in res && res.ok) {
-      if (res.status === "published") setFeedback((f) => ({ ...f, [a.id]: "✅ نُشر في سلمى." }));
-      else if (res.status === "already_published") setFeedback((f) => ({ ...f, [a.id]: "منشور مسبقًا في سلمى." }));
-      else if (res.status === "needs_review")
-        setFeedback((f) => ({ ...f, [a.id]: "⏸ توقف بأمان — بحاجة لمراجعة في صندوق المحتوى." }));
+      if (res.status === "published" || res.status === "already_published") set({ kind: "published" });
+      else if (res.status === "needs_review") set({ kind: "needs_review" });
       return;
     }
     if ("status" in res) {
-      if (res.status === "already_processing") setFeedback((f) => ({ ...f, [a.id]: "جارٍ النشر بالفعل…" }));
-      else if (res.status === "already_in_salma")
-        setFeedback((f) => ({ ...f, [a.id]: "موجود في سلمى — لن يُنشأ تكرار." }));
+      if (res.status === "already_processing") set({ kind: "info", msg: "جارٍ النشر بالفعل…" });
+      else if (res.status === "already_in_salma") set({ kind: "already" });
       else if (res.status === "needs_confirmation") setConfirmId(a.id);
-      else if (res.status === "failed")
-        setFeedback((f) => ({ ...f, [a.id]: `⛔ لم يُنشر (${res.reason ?? "سبب غير معروف"}) — لا يزال متاحًا للمراجعة.` }));
+      else if (res.status === "failed") set({ kind: "failed" });
     }
   }
 
   function doPublish(a: RadarArticle, confirmPossibleDuplicate = false) {
     setBusyId(a.id);
-    setFeedback((f) => ({ ...f, [a.id]: "" }));
+    setPubUi((m) => { const n = { ...m }; delete n[a.id]; return n; });
     startTransition(async () => {
       const res = await publishRadarStory(a.id, {
         categorySlug: catOverride[a.id] ?? a.expected_category_slug ?? null,
@@ -235,9 +259,20 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
             {rows.map((a) => {
               const isOpen = openId === a.id;
               const isBusy = busyId === a.id;
-              const published = a.publish_status === "published";
-              const processing = a.publish_status === "processing";
-              const needsReview = a.publish_status === "needs_review";
+              const ui = pubUi[a.id];
+              // Effective state = persisted publish_status (after revalidation)
+              // overlaid with this session's one-click result. Published wins,
+              // then needs-review, then the transient "failed"/"already" notes.
+              const published = a.publish_status === "published" || ui?.kind === "published";
+              const processing = !published && (a.publish_status === "processing" || isBusy);
+              const needsReview = !published &&
+                (a.publish_status === "needs_review" || ui?.kind === "needs_review");
+              const alreadyInSalma = a.duplicate_status === "already_in_salma" || ui?.kind === "already";
+              const failed = ui?.kind === "failed" && !published && !needsReview;
+              // Link targets: published → the public article; needs-review → the
+              // Content item; duplicate → the existing public article.
+              const publishedArticleHref = articleHref(a.published_content_id);
+              const existingArticleHref = articleHref(a.matched_content_id);
               const tr = translation[a.id];
               const selectedCat = catOverride[a.id] ?? a.expected_category_slug ?? "";
               const country = countryDisplay(a.country);
@@ -319,7 +354,8 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
                     <span>· رُصد {timeLabel(a.first_seen_at)}</span>
                   </div>
 
-                  {/* Two primary actions. */}
+                  {/* Actions + the unmistakable one-click publish result. Stays
+                      on this page; never shows a raw internal code. */}
                   <div className="mt-2.5 flex flex-wrap items-center gap-2">
                     <button
                       type="button"
@@ -328,21 +364,70 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
                     >
                       {isOpen ? "إخفاء التفاصيل" : "عرض التفاصيل"}
                     </button>
-                    <button
-                      type="button"
-                      disabled={isBusy || published || processing}
-                      onClick={() => doPublish(a)}
-                      className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-50"
-                    >
-                      {published ? "منشور ✓" : processing || isBusy ? "…جارٍ النشر" : "نشر في سلمى"}
-                    </button>
-                    {(published || needsReview) && a.published_content_id && (
-                      <Link
-                        href={`/admin/content/${a.published_content_id}`}
-                        className="text-[12px] font-semibold text-teal underline"
-                      >
-                        فتح في المحتوى ↗
-                      </Link>
+
+                    {published ? (
+                      <>
+                        <span className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[12.5px] font-bold text-emerald-700">
+                          ✅ تم النشر في سلمى
+                        </span>
+                        {publishedArticleHref ? (
+                          <Link href={publishedArticleHref} target="_blank" className="text-[12.5px] font-semibold text-teal underline">
+                            فتح المقال ↗
+                          </Link>
+                        ) : a.published_content_id ? (
+                          <Link href={`/admin/content/${a.published_content_id}`} className="text-[12.5px] font-semibold text-teal underline">
+                            فتح في المحتوى ↗
+                          </Link>
+                        ) : null}
+                      </>
+                    ) : alreadyInSalma ? (
+                      <>
+                        <span className="rounded-lg border border-line bg-cream px-3 py-1.5 text-[12.5px] font-bold text-gray">
+                          موجود في سلمى
+                        </span>
+                        {existingArticleHref ? (
+                          <Link href={existingArticleHref} target="_blank" className="text-[12.5px] font-semibold text-teal underline">
+                            فتح المقال الموجود ↗
+                          </Link>
+                        ) : a.matched_content_id ? (
+                          <Link href={`/admin/content/${a.matched_content_id}`} className="text-[12.5px] font-semibold text-teal underline">
+                            فتح في المحتوى ↗
+                          </Link>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          disabled={isBusy || processing}
+                          onClick={() => doPublish(a)}
+                          className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-50"
+                        >
+                          {processing ? "جاري النشر…" : failed ? "إعادة المحاولة" : "نشر في سلمى"}
+                        </button>
+                        {needsReview && (
+                          <>
+                            <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12.5px] font-bold text-amber-700">
+                              ⚠️ يحتاج مراجعة
+                            </span>
+                            {a.published_content_id && (
+                              <Link href={`/admin/content/${a.published_content_id}`} className="text-[12.5px] font-semibold text-teal underline">
+                                فتح في المحتوى ↗
+                              </Link>
+                            )}
+                          </>
+                        )}
+                        {failed && (
+                          <>
+                            <span className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[12.5px] font-bold text-red-700">
+                              ⛔ تعذر جلب محتوى المصدر — لم يتم النشر
+                            </span>
+                            <a href={a.url ?? "#"} target="_blank" rel="noopener noreferrer" className="text-[12.5px] font-semibold text-teal underline">
+                              فتح المصدر الأصلي ↗
+                            </a>
+                          </>
+                        )}
+                      </>
                     )}
                   </div>
 
@@ -375,8 +460,8 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
                     </div>
                   )}
 
-                  {feedback[a.id] && (
-                    <div className="mt-2 text-[12px] font-semibold text-ink">{feedback[a.id]}</div>
+                  {ui?.kind === "info" && (
+                    <div className="mt-2 text-[12px] font-semibold text-ink">{ui.msg}</div>
                   )}
 
                   {/* Details drawer. */}

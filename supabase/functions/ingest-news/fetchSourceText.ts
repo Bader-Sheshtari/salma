@@ -35,7 +35,19 @@ export type SourceFetchReason =
   | "source_private_address"
   | "source_unsafe_resolved_address";
 
-export type ExtractionMethod = "json-ld" | "article" | "main" | "paragraphs";
+// The four HTML extraction methods, plus the two Event Registry technical
+// retrieval methods used ONLY by the admin-authorized Radar publish fallback
+// (see erSourceFallback.ts). These extra values let the recovered-body source
+// carry its true retrieval method into the existing free-text audit column
+// (ingestion_decisions.source_extraction_method) with NO schema change; they
+// never appear to readers and never make ER the editorial source.
+export type ExtractionMethod =
+  | "json-ld"
+  | "article"
+  | "main"
+  | "paragraphs"
+  | "eventregistry_stored"
+  | "eventregistry_extract";
 
 export type SourceText = {
   ok: true;

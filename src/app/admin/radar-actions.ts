@@ -42,6 +42,13 @@ type RadarPublishRow = {
   expected_category_slug: string | null;
   publish_status: string | null;
   published_content_id: string | null;
+  // Event Registry identifiers (trusted, from the stored radar row) used ONLY to
+  // recover the EXACT SAME article's body when direct extraction fails, and to
+  // preserve the original publisher name as the editorial source. Never operator
+  // free text; forwarded to ingest-news only alongside the URL-scoped bypass.
+  provider: string | null;
+  provider_uri: string | null;
+  source_title: string | null;
 };
 
 type PilotReport = {
@@ -82,7 +89,7 @@ export async function publishRadarStory(
   // 1) Load the radar row + enforce duplicate safety.
   const { data: rowData, error: rowErr } = await svc
     .from("radar_shadow_articles")
-    .select("id,url,duplicate_status,matched_content_id,expected_category_slug,publish_status,published_content_id")
+    .select("id,url,duplicate_status,matched_content_id,expected_category_slug,publish_status,published_content_id,provider,provider_uri,source_title")
     .eq("id", id)
     .maybeSingle();
   if (rowErr) return { error: "تعذّر قراءة الخبر." };
@@ -140,6 +147,12 @@ export async function publishRadarStory(
         pilot_limit: 1,
         pilot_source_url: row.url,
         radar_authorized_source: true,
+        // Exact-article source fallback + original-publisher preservation. These
+        // are read from the trusted radar row above (never client input) and are
+        // honored by ingest-news only alongside the URL-scoped authorization.
+        radar_provider: row.provider,
+        radar_provider_uri: row.provider_uri,
+        radar_source_title: row.source_title,
       },
       headers: { Authorization: `Bearer ${token}` },
     });

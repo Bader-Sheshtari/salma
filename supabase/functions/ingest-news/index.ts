@@ -66,8 +66,10 @@ import {
   fetchSourceText,
   groundedWrite,
   type RawResponse,
+  type SourceFetchResult,
   type SourceText,
 } from "./fetchSourceText.ts";
+import { type ErPost, fetchErArticleSource } from "./erSourceFallback.ts";
 import {
   type FidelityArticle,
   type FidelityRepairAudit,
@@ -485,6 +487,36 @@ async function denoResolveDns(hostname: string): Promise<string[]> {
     }
   }
   return out;
+}
+
+// ---- Event Registry POST (Radar exact-article fallback only) -------------
+//
+// A FIXED trusted host we own the request to (never operator-supplied), so the
+// SSRF host-validation that guards fetchSourceText does not apply: Event
+// Registry itself fetches the target and returns the stored/extracted body. The
+// apiKey is folded in here and never passed to the pure erSourceFallback module.
+// Used ONLY on the admin-authorized Radar publish path (see runIngestion).
+const ER_HOST = "https://eventregistry.org";
+// ER performs its own remote extraction, so allow more headroom than the direct
+// single-page fetch while staying bounded.
+const ER_FETCH_TIMEOUT_MS = 15000;
+function denoErPost(apiKey: string): ErPost {
+  return async (path, body) => {
+    const res = await fetch(ER_HOST + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, apiKey }),
+      signal: AbortSignal.timeout(ER_FETCH_TIMEOUT_MS),
+    });
+    const text = await res.text();
+    let json: unknown = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // Leave json null; the caller treats an unparseable body as unavailable.
+    }
+    return { status: res.status, ok: res.ok, json };
+  };
 }
 
 // Render the Arabic user message the writer works from. It draws a HARD line
@@ -1111,6 +1143,14 @@ async function runIngestion(
     // targetedSourceUrl the pilot may fetch that one URL via a transient synthetic
     // source. Cron/legacy runs never receive it, so they can never bypass.
     radarAuthorizedUrl?: string | null;
+    // Radar exact-article source fallback identifiers (from the TRUSTED radar row,
+    // never free text). Honored ONLY when radarAuthorizedUrl is set. provider must
+    // be "eventregistry"; providerUri is the stored ER article uri used for the
+    // exact-article stored-body recovery; sourceTitle is the ORIGINAL publisher
+    // name (e.g. "CNN International") preserved as the editorial source.
+    radarErProvider?: string | null;
+    radarErProviderUri?: string | null;
+    radarSourceTitle?: string | null;
   } = {},
 ): Promise<RunStats & { pilot?: PilotReport }> {
   const trigger = opts.trigger ?? "manual";
@@ -1130,6 +1170,23 @@ async function runIngestion(
   // Honored ONLY in pilot mode; the entrypoint additionally restricts it to an
   // authenticated manual trigger. Never consulted in legacy/cron runs.
   const radarAuthorizedUrl: string | null = writerMode === "pilot" ? (opts.radarAuthorizedUrl ?? null) : null;
+  // Radar exact-article ER fallback, built ONCE. Available ONLY when: pilot mode,
+  // a URL-scoped Radar authorization exists, the provider is Event Registry, and
+  // the ER key is configured. null in every other path → the direct fetch is the
+  // sole source (unchanged behavior). This closure NEVER searches ER; it recovers
+  // only the body of the exact authorized article (by provider_uri, then by URL).
+  const erApiKey = Deno.env.get("EVENTREGISTRY_API_KEY") ?? "";
+  const radarSourceTitle = radarAuthorizedUrl ? (opts.radarSourceTitle ?? null) : null;
+  const radarErFetch: ((url: string, sourceName: string | null) => Promise<SourceFetchResult>) | null =
+    radarAuthorizedUrl && erApiKey && opts.radarErProvider === "eventregistry"
+      ? (url, sourceName) =>
+        fetchErArticleSource({
+          erPost: denoErPost(erApiKey),
+          providerUri: opts.radarErProviderUri ?? null,
+          url,
+          sourceName,
+        })
+      : null;
   // Live pilot counters, mutated as the single candidate is processed; assembled
   // into the returned PilotReport after finalize. null in legacy mode.
   const pilot: PilotReport | null = writerMode === "pilot"
@@ -1581,8 +1638,11 @@ async function runIngestion(
     // likewise a rejection that creates no draft (fallback never runs after a
     // factual validation failure — see orchestrateWriter).
     const grounded = await groundedWrite<WriterOutcome>({
-      fetchSource: () =>
-        fetchSourceText({
+      fetchSource: async () => {
+        // Attempt 1 — direct extraction of the ORIGINAL publisher page, with ALL
+        // SSRF/DNS/redirect/domain protections intact. This is the ONLY path for
+        // every non-Radar candidate and the preferred path for Radar too.
+        const direct = await fetchSourceText({
           url: chosen.url,
           registeredDomain,
           sourceName: chosen.source?.name ?? null,
@@ -1591,7 +1651,20 @@ async function runIngestion(
           // DNS/security failure returns a discrete source_* reason → no writer
           // call, no pending draft, and a rejection audit row (below).
           resolveDns: denoResolveDns,
-        }),
+        });
+        if (direct.ok) return direct;
+        // Attempt 2 & 3 — admin-authorized Radar exact-article ER fallback, ONLY
+        // for the exact authorized URL (chosen.url === radarAuthorizedUrl). ER is
+        // a technical fetch provider: it recovers the SAME article's body (by
+        // provider_uri, then by exact URL) — never a different/similar story, and
+        // never becomes the editorial source. On ER failure we keep the DIRECT
+        // failure reason so the audit/UX reflects the original-source outcome.
+        if (radarErFetch && chosen.url === radarAuthorizedUrl) {
+          const recovered = await radarErFetch(chosen.url, chosen.source?.name ?? null);
+          if (recovered.ok) return recovered;
+        }
+        return direct;
+      },
       write: (verified) =>
         writeArticle({
           verified,
@@ -1756,6 +1829,16 @@ async function runIngestion(
         plans = [];
       } else {
         if (pilot) pilot.authorized_source_bypass = resolved.authorized;
+        // Preserve the ORIGINAL publisher identity: the URL-scoped synthetic
+        // Radar source defaults its name to the bare host (e.g. "edition.cnn.com").
+        // When the trusted radar row carries the publisher title (e.g. "CNN
+        // International"), use it as the editorial source name so the stored
+        // content and its content_sources show the publisher, never the host and
+        // never Event Registry. Applied ONLY to the transient authorized source
+        // (never a registered news_source, which already has its proper name).
+        if (resolved.authorized && resolved.source && radarSourceTitle) {
+          resolved.source.name = radarSourceTitle;
+        }
         const draft = buildTargetedDraft(targetedSourceUrl, resolved.source);
         const chosen: Candidate = { url: targetedSourceUrl, source: resolved.source };
         const rep: PendingItem = {
@@ -1975,6 +2058,25 @@ Deno.serve(async (req: Request) => {
     ? targetedSourceUrl
     : null;
 
+  // Radar exact-article fallback identifiers, honored ONLY alongside a valid
+  // URL-scoped authorization (same admin-manual + flag + resolved-URL scope).
+  // These come from the TRUSTED radar_shadow_articles row (the server action
+  // reads them from the DB, never from operator free text): provider selects the
+  // fetch provider, provider_uri is the exact ER article id for the same-article
+  // stored-body recovery, and source_title is the original publisher preserved as
+  // the editorial source. A non-Radar/cron request never sets any of them.
+  const asTrimmed = (v: unknown): string | null => {
+    const s = String(v ?? "").trim();
+    return s ? s : null;
+  };
+  const radarErProvider = radarAuthorizedUrl ? asTrimmed((body as { radar_provider?: unknown })?.radar_provider) : null;
+  const radarErProviderUri = radarAuthorizedUrl
+    ? asTrimmed((body as { radar_provider_uri?: unknown })?.radar_provider_uri)
+    : null;
+  const radarSourceTitle = radarAuthorizedUrl
+    ? asTrimmed((body as { radar_source_title?: unknown })?.radar_source_title)
+    : null;
+
   try {
     const result = await runIngestion(admin, {
       trigger,
@@ -1982,6 +2084,9 @@ Deno.serve(async (req: Request) => {
       pilotLimit,
       targetedSourceUrl,
       radarAuthorizedUrl,
+      radarErProvider,
+      radarErProviderUri,
+      radarSourceTitle,
     });
     // The pilot report (if any) is present only because runIngestion returned
     // normally, i.e. AFTER the mandatory audit persisted. It carries operational
