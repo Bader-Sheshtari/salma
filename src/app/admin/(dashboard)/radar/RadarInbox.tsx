@@ -24,10 +24,28 @@ type Cat = { slug: string; name_ar: string };
 // unmistakable state without leaving the page or exposing raw internal codes.
 type PublishUi =
   | { kind: "published" } // ✅ تم النشر في سلمى — open the article
-  | { kind: "needs_review" } // ⚠️ يحتاج مراجعة — open in Content
+  | { kind: "needs_review" } // ⚠️ يحتاج مراجعة — a Content row exists, open it
   | { kind: "already" } // موجود في سلمى — open the existing article
-  | { kind: "failed" } // ⛔ content could not be obtained — retry / open source
+  | { kind: "rejected"; reason: string | null } // ⛔ pipeline stopped before Content — retry
   | { kind: "info"; msg: string }; // transient note (e.g. already publishing)
+
+// Human-readable Arabic for an internal rejection code. Raw codes are NEVER
+// shown in the normal admin UI; anything unmapped falls back to a safe generic
+// editorial-validation message.
+function rejectionMessage(reason: string | null): string {
+  switch (reason) {
+    case "invented_quotation":
+      return "تم إيقاف النشر بسبب وجود اقتباس غير موثق في المسودة.";
+    case "source_fetch_failed":
+    case "ingest_invoke_failed":
+    case "no_content_created":
+      return "تعذّر تجهيز المقال من المصدر — لم يجتز التحقق التحريري.";
+    case "session_expired":
+      return "انتهت الجلسة أثناء المعالجة. أعد المحاولة.";
+    default:
+      return "لم يتم النشر — لم تجتز المسودة التحقق التحريري.";
+  }
+}
 
 // Importance filter modes. "default" = editorial opportunities (very + important).
 type ImportanceMode = "default" | "very_important" | "low" | "unranked" | "all";
@@ -172,7 +190,7 @@ export default function RadarInbox({
       if (res.status === "already_processing") set({ kind: "info", msg: "جارٍ النشر بالفعل…" });
       else if (res.status === "already_in_salma") set({ kind: "already" });
       else if (res.status === "needs_confirmation") setConfirmId(a.id);
-      else if (res.status === "failed") set({ kind: "failed" });
+      else if (res.status === "failed") set({ kind: "rejected", reason: res.reason });
     }
   }
 
@@ -262,13 +280,25 @@ export default function RadarInbox({
               const ui = pubUi[a.id];
               // Effective state = persisted publish_status (after revalidation)
               // overlaid with this session's one-click result. Published wins,
-              // then needs-review, then the transient "failed"/"already" notes.
+              // then needs-review, then rejected, then the "already" note.
+              const hasContent = !!a.published_content_id;
               const published = a.publish_status === "published" || ui?.kind === "published";
               const processing = !published && (a.publish_status === "processing" || isBusy);
-              const needsReview = !published &&
+              // Case 1 — a Content row exists and awaits human review. This is the
+              // ONLY case that shows the visible "needs review" state (+ its link).
+              const needsReview = !published && hasContent &&
                 (a.publish_status === "needs_review" || ui?.kind === "needs_review");
               const alreadyInSalma = a.duplicate_status === "already_in_salma" || ui?.kind === "already";
-              const failed = ui?.kind === "failed" && !published && !needsReview;
+              // Case 2 — the pipeline stopped BEFORE any Content row: source
+              // retrieval failed, or Writer/Editor/Fidelity/validation rejected the
+              // draft. Includes legacy rows persisted as 'needs_review' before this
+              // fix (needs_review + null published_content_id).
+              const rejected = !published && !needsReview && (
+                a.publish_status === "failed" ||
+                ui?.kind === "rejected" ||
+                (a.publish_status === "needs_review" && !hasContent)
+              );
+              const rejectionReason = ui?.kind === "rejected" ? ui.reason : a.publish_error;
               // Link targets: published → the public article; needs-review → the
               // Content item; duplicate → the existing public article.
               const publishedArticleHref = articleHref(a.published_content_id);
@@ -403,7 +433,7 @@ export default function RadarInbox({
                           onClick={() => doPublish(a)}
                           className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-50"
                         >
-                          {processing ? "جاري النشر…" : failed ? "إعادة المحاولة" : "نشر في سلمى"}
+                          {processing ? "جاري النشر…" : rejected ? "إعادة المحاولة" : "نشر في سلمى"}
                         </button>
                         {needsReview && (
                           <>
@@ -417,11 +447,12 @@ export default function RadarInbox({
                             )}
                           </>
                         )}
-                        {failed && (
+                        {rejected && (
                           <>
                             <span className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[12.5px] font-bold text-red-700">
-                              ⛔ تعذر جلب محتوى المصدر — لم يتم النشر
+                              ⛔ لم يتم النشر — لم يجتز التحقق التحريري
                             </span>
+                            <span className="text-[12px] text-gray">{rejectionMessage(rejectionReason)}</span>
                             <a href={a.url ?? "#"} target="_blank" rel="noopener noreferrer" className="text-[12.5px] font-semibold text-teal underline">
                               فتح المصدر الأصلي ↗
                             </a>

@@ -10,7 +10,12 @@ export type RadarDuplicateStatus = "new" | "already_in_salma" | "possible_duplic
 // One-click publish latch: null (never attempted), 'processing' (a publish job is
 // running — blocks a second start), 'published' (linked to Content), or
 // 'needs_review' (a prior attempt stopped safely at pending / failed — retryable).
-export type RadarPublishStatus = "processing" | "published" | "needs_review";
+// Persisted one-click publish state. `needs_review` means a Content row WAS
+// created and is awaiting human review (published_content_id is set). `failed`
+// means the pipeline stopped BEFORE any Content row was created (source
+// retrieval failure, or Writer/Editor/Fidelity/validation rejection) — there is
+// nothing in Content to review; the card shows an editorial-failure state.
+export type RadarPublishStatus = "processing" | "published" | "needs_review" | "failed";
 
 /** A row of radar_shadow_articles plus the nullable ranking/dedupe fields.
  *  Any ranking field may be null → the row is UNRANKED (not yet evaluated). */

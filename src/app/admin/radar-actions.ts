@@ -66,8 +66,8 @@ type PilotReport = {
  *   1. Load the radar row; enforce duplicate safety (already_in_salma blocks;
  *      possible_duplicate requires confirmPossibleDuplicate).
  *   2. Idempotency latch: compare-and-swap publish_status → 'processing' ONLY
- *      from NULL/'needs_review'. A losing racer / already-processing / already-
- *      published row does NOT start a second job.
+ *      from a retryable state (NULL/'needs_review'/'failed'). A losing racer /
+ *      already-processing / already-published row does NOT start a second job.
  *   3. Run the ingest-news targeted pilot for this exact URL with a URL-scoped,
  *      admin-authorized source bypass (Writer v27 → Editorial Director →
  *      Fidelity, grounded on the ORIGINAL source, never on title_ar).
@@ -109,9 +109,12 @@ export async function publishRadarStory(
     return { status: "needs_confirmation", matchedContentId: row.matched_content_id };
   }
 
-  // 2) Idempotency compare-and-swap. Only NULL / 'needs_review' may start a run;
-  //    the same statement stamps the authorization audit. 0 rows updated → a
-  //    concurrent click already latched it → no second publish flow.
+  // 2) Idempotency compare-and-swap. Only a retryable state — NULL / 'needs_review'
+  //    / 'failed' — may start a run; the same statement stamps the authorization
+  //    audit. 0 rows updated → a concurrent click already latched it (or the row
+  //    is already published/processing) → no second publish flow. 'failed' is the
+  //    pre-Content rejection state (see markPublishFailed); retrying it simply
+  //    re-runs the unchanged pipeline for the same article.
   const { data: latched, error: latchErr } = await svc
     .from("radar_shadow_articles")
     .update({
@@ -121,7 +124,7 @@ export async function publishRadarStory(
       publish_error: null,
     } as unknown as never)
     .eq("id", id)
-    .or("publish_status.is.null,publish_status.eq.needs_review")
+    .or("publish_status.is.null,publish_status.eq.needs_review,publish_status.eq.failed")
     .select("id");
   if (latchErr) return { error: "تعذّر بدء النشر." };
   if (!latched || latched.length === 0) {
@@ -134,7 +137,7 @@ export async function publishRadarStory(
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
     if (!token) {
-      await resetToNeedsReview(svc, id, "session_expired");
+      await markPublishFailed(svc, id, "session_expired");
       return { error: "انتهت الجلسة. سجّل الدخول مرة أخرى." };
     }
 
@@ -158,7 +161,7 @@ export async function publishRadarStory(
     });
 
     if (error || !data || data.ok === false) {
-      await resetToNeedsReview(svc, id, "ingest_invoke_failed");
+      await markPublishFailed(svc, id, "ingest_invoke_failed");
       return { status: "failed", reason: "ingest_invoke_failed" };
     }
 
@@ -169,7 +172,7 @@ export async function publishRadarStory(
     //     published; mark needs_review (retryable) with the rejection reason.
     if (!contentId) {
       const reason = pilot?.rejection_reason ?? "no_content_created";
-      await resetToNeedsReview(svc, id, reason);
+      await markPublishFailed(svc, id, reason);
       return { status: "failed", reason };
     }
 
@@ -239,16 +242,23 @@ export async function publishRadarStory(
     revalidatePath("/");
     return { ok: true, status: "published", contentId };
   } catch {
-    await resetToNeedsReview(svc, id, "unexpected_error");
+    await markPublishFailed(svc, id, "unexpected_error");
     return { status: "failed", reason: "unexpected_error" };
   }
 }
 
-/** Release the idempotency latch back to a retryable terminal state. */
-async function resetToNeedsReview(svc: SupabaseClient, id: string, reason: string): Promise<void> {
+/**
+ * Release the idempotency latch to the retryable 'failed' state. Used ONLY when
+ * the pipeline stopped before any Content row was created — source retrieval
+ * failed, or Writer/Editorial Director/Fidelity/quotation validation rejected
+ * the draft. This is deliberately NOT 'needs_review': there is no Content item
+ * to review, so the Radar card surfaces it as an editorial-validation failure
+ * with a retry (which simply re-runs the unchanged one-click pipeline).
+ */
+async function markPublishFailed(svc: SupabaseClient, id: string, reason: string): Promise<void> {
   await svc
     .from("radar_shadow_articles")
-    .update({ publish_status: "needs_review", publish_error: reason } as unknown as never)
+    .update({ publish_status: "failed", publish_error: reason } as unknown as never)
     .eq("id", id);
   revalidatePath("/admin/radar");
 }
