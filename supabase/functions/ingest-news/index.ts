@@ -2006,6 +2006,126 @@ async function authorize(
   return null;
 }
 
+// --- Radar one-click publish: terminal-state ownership ----------------------
+//
+// For a Radar-authorized one-click publish, THIS Edge Function owns the final
+// radar_shadow_articles state transition — it must be written BEFORE the HTTP
+// response returns, using the service-role client already created below. This
+// closes the failure mode where the Next.js server action was terminated after
+// the invoke returned 200, orphaning the row in 'processing'. The server action
+// now only latches 'processing' and reads back the terminal state we write.
+//
+// Terminal outcomes (mirror the previously server-action-owned semantics):
+//   (a) published      — content created AND clean → flip pending→published.
+//   (b) needs_review   — a real Content row exists but is not clean, OR a clean
+//                        row that was no longer 'pending' at publish time.
+//   (c) failed         — the pipeline stopped BEFORE any Content row (source
+//                        retrieval / Writer / Editor / Fidelity / validation).
+// A duplicate/existing-content match never reaches here: the server action
+// blocks it before invoking, so no run is started and no Content is created.
+type RadarPublishOutcome =
+  | { status: "published"; content_id: string }
+  | { status: "needs_review"; content_id: string; reason: string | null }
+  | { status: "failed"; reason: string | null };
+
+// Write a terminal radar state, but ONLY for the row still owned by this
+// authorized run (publish_status = 'processing'). Scoping to 'processing'
+// guarantees the Edge Function finalizes exactly the row the server action
+// latched for THIS invocation and never mutates an unrelated radar row.
+async function setRadarTerminal(
+  admin: SupabaseClient,
+  radarId: string,
+  patch: { publish_status: string; published_content_id: string | null; publish_error: string | null },
+): Promise<void> {
+  await admin
+    .from("radar_shadow_articles")
+    .update(patch)
+    .eq("id", radarId)
+    .eq("publish_status", "processing");
+}
+
+/** Validate a category slug against the live categories table; null if unknown. */
+async function resolveRadarCategory(admin: SupabaseClient, slug: string | null): Promise<string | null> {
+  const s = String(slug ?? "").trim();
+  if (!s) return null;
+  const { data } = await admin.from("categories").select("slug").eq("slug", s).maybeSingle();
+  return data ? s : null;
+}
+
+/**
+ * Finalize the Radar row for an authorized one-click publish from the pilot
+ * outcome, writing the terminal state before the HTTP response returns. This is
+ * the SAME terminal decision the server action used to own — moved here so the
+ * write survives server-action termination. It changes no editorial safeguard;
+ * it only persists the pipeline's already-decided outcome.
+ */
+async function finalizeRadarPublish(
+  admin: SupabaseClient,
+  radarId: string,
+  pilot: PilotReport | null,
+  categorySlugInput: string | null,
+): Promise<RadarPublishOutcome> {
+  const contentId = pilot?.created_content_id ?? null;
+
+  // (c) No Content row → the pipeline stopped before creation. Retryable failed.
+  if (!contentId) {
+    const reason = pilot?.rejection_reason ?? "no_content_created";
+    await setRadarTerminal(admin, radarId, {
+      publish_status: "failed",
+      published_content_id: null,
+      publish_error: reason,
+    });
+    return { status: "failed", reason };
+  }
+
+  // (b) Content exists but not clean → leave it pending for human review, and
+  //     record needs_review WITH the content id (the card links to Content).
+  const clean = pilot?.needs_human_review === false && pilot?.fidelity?.decision === "clean";
+  if (!clean) {
+    const reason = pilot?.rejection_reason ?? "needs_human_review";
+    await setRadarTerminal(admin, radarId, {
+      publish_status: "needs_review",
+      published_content_id: contentId,
+      publish_error: reason,
+    });
+    return { status: "needs_review", content_id: contentId, reason };
+  }
+
+  // (a) Clean → apply the optional category, then flip pending→published. Only a
+  //     'pending' row is ever published (mirrors setStatus); a non-pending row
+  //     is linked and left for review rather than force-published.
+  const categorySlug = await resolveRadarCategory(admin, categorySlugInput);
+  const publishPatch: Record<string, unknown> = {
+    status: "published",
+    published_at: new Date().toISOString(),
+  };
+  if (categorySlug) publishPatch.category_slug = categorySlug;
+
+  const { data: published } = await admin
+    .from("content")
+    .update(publishPatch)
+    .eq("id", contentId)
+    .eq("status", "pending")
+    .is("deleted_at", null)
+    .select("id");
+
+  if (!published || published.length === 0) {
+    await setRadarTerminal(admin, radarId, {
+      publish_status: "needs_review",
+      published_content_id: contentId,
+      publish_error: "content_not_pending",
+    });
+    return { status: "needs_review", content_id: contentId, reason: "content_not_pending" };
+  }
+
+  await setRadarTerminal(admin, radarId, {
+    publish_status: "published",
+    published_content_id: contentId,
+    publish_error: null,
+  });
+  return { status: "published", content_id: contentId };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return Response.json({ error: "method not allowed" }, { status: 405 });
@@ -2077,6 +2197,17 @@ Deno.serve(async (req: Request) => {
     ? asTrimmed((body as { radar_source_title?: unknown })?.radar_source_title)
     : null;
 
+  // Radar row to finalize (terminal-state ownership). Present ONLY for an
+  // authorized Radar one-click publish; a generic/cron/pilot request leaves it
+  // null and this function never touches any radar row. radar_category_slug is
+  // the optional operator category override, validated against categories.
+  const radarArticleId = radarAuthorizedUrl
+    ? asTrimmed((body as { radar_article_id?: unknown })?.radar_article_id)
+    : null;
+  const radarCategorySlug = radarArticleId
+    ? asTrimmed((body as { radar_category_slug?: unknown })?.radar_category_slug)
+    : null;
+
   try {
     const result = await runIngestion(admin, {
       trigger,
@@ -2091,9 +2222,32 @@ Deno.serve(async (req: Request) => {
     // The pilot report (if any) is present only because runIngestion returned
     // normally, i.e. AFTER the mandatory audit persisted. It carries operational
     // counts only — no source text, keys, tokens, or headers.
-    return Response.json({ ok: true, writer_mode: writerMode, ...result });
+    const pilot = (result as { pilot?: PilotReport }).pilot ?? null;
+
+    // Radar one-click publish: own the terminal radar state transition here,
+    // BEFORE responding, so it survives a terminated server action. The returned
+    // outcome is echoed back for the server action to map to its UI result.
+    let radarPublish: RadarPublishOutcome | null = null;
+    if (radarArticleId) {
+      radarPublish = await finalizeRadarPublish(admin, radarArticleId, pilot, radarCategorySlug);
+    }
+
+    return Response.json({ ok: true, writer_mode: writerMode, radar_publish: radarPublish, ...result });
   } catch (e) {
     const message = e instanceof Error ? e.message : "ingestion failed";
+    // The pipeline threw before producing a pilot report → no Content was
+    // created for this authorized run. Finalize the radar row as retryable
+    // 'failed' (scoped to the 'processing' row we own) so the click never
+    // orphans in 'processing'. Best-effort; a failure here still returns 500.
+    if (radarArticleId) {
+      try {
+        await setRadarTerminal(admin, radarArticleId, {
+          publish_status: "failed",
+          published_content_id: null,
+          publish_error: "pipeline_error",
+        });
+      } catch { /* ignore: response still reports the underlying error */ }
+    }
     return Response.json({ ok: false, error: message }, { status: 500 });
   }
 });

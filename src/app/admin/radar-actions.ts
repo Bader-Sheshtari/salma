@@ -42,6 +42,7 @@ type RadarPublishRow = {
   expected_category_slug: string | null;
   publish_status: string | null;
   published_content_id: string | null;
+  publish_authorized_at: string | null;
   // Event Registry identifiers (trusted, from the stored radar row) used ONLY to
   // recover the EXACT SAME article's body when direct extraction fails, and to
   // preserve the original publisher name as the editorial source. Never operator
@@ -49,14 +50,6 @@ type RadarPublishRow = {
   provider: string | null;
   provider_uri: string | null;
   source_title: string | null;
-};
-
-type PilotReport = {
-  created_content_id: string | null;
-  needs_human_review: boolean;
-  rejection_reason: string | null;
-  fidelity: { decision: "clean" | "needs_human_review" | "reject" } | null;
-  authorized_source_bypass?: boolean;
 };
 
 /**
@@ -89,7 +82,7 @@ export async function publishRadarStory(
   // 1) Load the radar row + enforce duplicate safety.
   const { data: rowData, error: rowErr } = await svc
     .from("radar_shadow_articles")
-    .select("id,url,duplicate_status,matched_content_id,expected_category_slug,publish_status,published_content_id,provider,provider_uri,source_title")
+    .select("id,url,duplicate_status,matched_content_id,expected_category_slug,publish_status,published_content_id,publish_authorized_at,provider,provider_uri,source_title")
     .eq("id", id)
     .maybeSingle();
   if (rowErr) return { error: "تعذّر قراءة الخبر." };
@@ -100,7 +93,13 @@ export async function publishRadarStory(
     return { ok: true, status: "already_published", contentId: row.published_content_id };
   }
   if (row.publish_status === "processing") {
-    return { status: "already_processing" };
+    // Self-recovery: a row can only remain 'processing' if a run was genuinely
+    // abandoned (the Edge Function now writes the terminal state before it
+    // returns 200). If the authorization is older than the conservative
+    // threshold, release it to retryable 'failed' and fall through to re-latch;
+    // otherwise a legitimate run may still be in flight — do not disturb it.
+    const released = await recoverStaleProcessing(svc, id, row.publish_authorized_at);
+    if (!released) return { status: "already_processing" };
   }
   if (row.duplicate_status === "already_in_salma") {
     return { status: "already_in_salma", matchedContentId: row.matched_content_id };
@@ -147,13 +146,18 @@ export async function publishRadarStory(
 
     // 3) Run the targeted pilot with the URL-scoped human authorization. The URL
     //    is taken from the radar row (not free text), and radar_authorized_source
-    //    binds the registry bypass to exactly this URL.
+    //    binds the registry bypass to exactly this URL. radar_article_id +
+    //    radar_category_slug hand terminal-state ownership to ingest-news: it
+    //    writes the final radar state (published / needs_review / failed) BEFORE
+    //    returning, so the outcome survives even if this action is terminated.
     const { data, error } = await supabase.functions.invoke("ingest-news", {
       body: {
         writer_mode: "pilot",
         pilot_limit: 1,
         pilot_source_url: row.url,
         radar_authorized_source: true,
+        radar_article_id: id,
+        radar_category_slug: opts?.categorySlug ?? row.expected_category_slug ?? null,
         // Exact-article source fallback + original-publisher preservation. These
         // are read from the trusted radar row above (never client input) and are
         // honored by ingest-news only alongside the URL-scoped authorization.
@@ -164,91 +168,186 @@ export async function publishRadarStory(
       headers: { Authorization: `Bearer ${token}` },
     });
 
+    // Orchestration, not terminal authority: the Edge Function already wrote the
+    // terminal radar state. On a transport/500 error the write may or may not
+    // have happened, so we reconcile by reading the row back rather than
+    // assuming failure. Only if the row is STILL 'processing' (the write truly
+    // never landed) do we finalize it here as retryable 'failed'.
     if (error || !data || data.ok === false) {
-      await markPublishFailed(svc, id, "ingest_invoke_failed");
-      return { status: "failed", reason: "ingest_invoke_failed" };
+      return await reconcileAfterInvoke(svc, id, "ingest_invoke_failed");
     }
 
-    const pilot = (data.pilot ?? null) as PilotReport | null;
-    const contentId = pilot?.created_content_id ?? null;
-
-    // 4a) No content row → extraction/Writer/Editor/Fidelity rejected it. Nothing
-    //     published; mark needs_review (retryable) with the rejection reason.
-    if (!contentId) {
-      const reason = pilot?.rejection_reason ?? "no_content_created";
-      await markPublishFailed(svc, id, reason);
-      return { status: "failed", reason };
-    }
-
-    // 4b) Content created but not clean → leave it pending in the Content Inbox
-    //     for human review. Do NOT auto-publish.
-    const clean = pilot?.needs_human_review === false && pilot?.fidelity?.decision === "clean";
-    if (!clean) {
-      await svc
-        .from("radar_shadow_articles")
-        .update({
-          publish_status: "needs_review",
-          published_content_id: contentId,
-          publish_error: pilot?.rejection_reason ?? "needs_human_review",
-        } as unknown as never)
-        .eq("id", id);
+    // Preferred path: map the terminal outcome the Edge Function reported. This
+    // is a mirror of the DB write it already performed, not an independent one.
+    const rp = (data.radar_publish ?? null) as EdgeRadarPublish | null;
+    if (rp) {
       revalidatePath("/admin/radar");
       revalidatePath("/admin/content");
-      return { ok: true, status: "needs_review", contentId, reason: pilot?.rejection_reason ?? null };
+      if (rp.status === "published") {
+        revalidatePath("/");
+        return { ok: true, status: "published", contentId: rp.content_id };
+      }
+      if (rp.status === "needs_review") {
+        return { ok: true, status: "needs_review", contentId: rp.content_id, reason: rp.reason };
+      }
+      return { status: "failed", reason: rp.reason };
     }
 
-    // 4c) Clean → apply the (optional) category override, then flip the pending
-    //     row to published. Publication is only ever from 'pending' (mirrors
-    //     setStatus), so a non-pending row is never force-published.
-    const categorySlug = await resolveCategory(svc, opts?.categorySlug ?? row.expected_category_slug ?? null);
-    const publishPatch: Record<string, unknown> = {
-      status: "published",
-      published_at: new Date().toISOString(),
-    };
-    if (categorySlug) publishPatch.category_slug = categorySlug;
+    // Defensive fallback (older Edge Function without radar_publish): reconcile
+    // from the row the function should have written.
+    return await reconcileAfterInvoke(svc, id, "no_content_created");
+  } catch {
+    // The invoke itself threw. The Edge Function may still have written a
+    // terminal state; reconcile rather than blindly overwriting.
+    return await reconcileAfterInvoke(svc, id, "unexpected_error");
+  }
+}
 
-    const { data: published } = await svc
-      .from("content")
-      .update(publishPatch as unknown as never)
-      .eq("id", contentId)
-      .eq("status", "pending")
-      .is("deleted_at", null)
-      .select("id");
+/** Terminal outcome echoed by ingest-news (radar_publish). content_id matches
+ *  the created Content row; reason is an internal code (may be null). */
+type EdgeRadarPublish =
+  | { status: "published"; content_id: string }
+  | { status: "needs_review"; content_id: string; reason: string | null }
+  | { status: "failed"; reason: string | null };
 
-    if (!published || published.length === 0) {
-      // The content wasn't in a publishable 'pending' state (already published,
-      // rejected, or deleted). Link it and leave for human review rather than
-      // forcing a state change.
-      await svc
-        .from("radar_shadow_articles")
-        .update({
-          publish_status: "needs_review",
-          published_content_id: contentId,
-          publish_error: "content_not_pending",
-        } as unknown as never)
-        .eq("id", id);
-      revalidatePath("/admin/radar");
-      revalidatePath("/admin/content");
-      return { ok: true, status: "needs_review", contentId, reason: "content_not_pending" };
-    }
+/**
+ * Reconcile the UI result from the current DB row after an invoke that did not
+ * yield a usable radar_publish outcome (transport error, 500, or legacy
+ * function). The Edge Function owns the terminal write; here we only READ it. If
+ * the row is already terminal we surface that; if it is STILL 'processing' the
+ * write never landed, so we release it to retryable 'failed' with `fallbackReason`.
+ */
+async function reconcileAfterInvoke(
+  svc: SupabaseClient,
+  id: string,
+  fallbackReason: string,
+): Promise<PublishRadarResult> {
+  const { data } = await svc
+    .from("radar_shadow_articles")
+    .select("publish_status,published_content_id,publish_error")
+    .eq("id", id)
+    .maybeSingle();
+  const r = data as
+    | { publish_status: string | null; published_content_id: string | null; publish_error: string | null }
+    | null;
 
-    await svc
-      .from("radar_shadow_articles")
-      .update({
-        publish_status: "published",
-        published_content_id: contentId,
-        publish_error: null,
-      } as unknown as never)
-      .eq("id", id);
-
+  if (r?.publish_status === "published") {
     revalidatePath("/admin/radar");
     revalidatePath("/admin/content");
     revalidatePath("/");
-    return { ok: true, status: "published", contentId };
-  } catch {
-    await markPublishFailed(svc, id, "unexpected_error");
-    return { status: "failed", reason: "unexpected_error" };
+    return r.published_content_id
+      ? { ok: true, status: "published", contentId: r.published_content_id }
+      : { ok: true, status: "already_published", contentId: null };
   }
+  if (r?.publish_status === "needs_review" && r.published_content_id) {
+    revalidatePath("/admin/radar");
+    revalidatePath("/admin/content");
+    return { ok: true, status: "needs_review", contentId: r.published_content_id, reason: r.publish_error };
+  }
+  if (r?.publish_status === "failed") {
+    revalidatePath("/admin/radar");
+    return { status: "failed", reason: r.publish_error };
+  }
+
+  // Still processing (or unreadable) → the terminal write never landed. Release
+  // the latch to retryable 'failed' so the click never orphans in 'processing'.
+  await markPublishFailed(svc, id, fallbackReason);
+  return { status: "failed", reason: fallbackReason };
+}
+
+// Conservative stale-processing threshold. The Edge Function writes the terminal
+// state before returning 200, so a row older than this in 'processing' reflects
+// a genuinely abandoned run (crash / timeout), not one still in flight.
+const STALE_PROCESSING_MS = 5 * 60 * 1000;
+
+/**
+ * Release a genuinely stale 'processing' latch to retryable 'failed'. Returns
+ * true only when it actually released a row (authorized before the threshold and
+ * still 'processing'), so the caller may re-latch and retry. A fresh run is left
+ * untouched (returns false). Scoped to publish_status='processing' so it can
+ * never disturb a row that already reached a terminal state.
+ */
+async function recoverStaleProcessing(
+  svc: SupabaseClient,
+  id: string,
+  authorizedAt: string | null,
+): Promise<boolean> {
+  if (!authorizedAt) return false;
+  const ageMs = Date.now() - new Date(authorizedAt).getTime();
+  if (!Number.isFinite(ageMs) || ageMs < STALE_PROCESSING_MS) return false;
+  const { data } = await svc
+    .from("radar_shadow_articles")
+    .update({ publish_status: "failed", publish_error: "processing_timeout" } as unknown as never)
+    .eq("id", id)
+    .eq("publish_status", "processing")
+    .select("id");
+  return !!data && data.length > 0;
+}
+
+// --- getRadarPublishStates ---------------------------------------------------
+
+export type RadarPublishState = {
+  publish_status: string | null;
+  published_content_id: string | null;
+  publish_error: string | null;
+  // Slug of the linked content row (published/needs_review), for the UI link.
+  slug: string | null;
+};
+
+/**
+ * Lightweight status read for the Radar Inbox to poll while a publish is
+ * 'processing' — it does NOT run the heavy ingestion pipeline. It also self-
+ * heals: any polled row stuck in 'processing' past the stale threshold is
+ * released to retryable 'failed' ('processing_timeout') in one scoped bulk
+ * update (no cron). Returns a map keyed by radar id.
+ */
+export async function getRadarPublishStates(
+  ids: string[],
+): Promise<Record<string, RadarPublishState>> {
+  await requireAdmin();
+  const svc = createAdminClient() as unknown as SupabaseClient;
+
+  const unique = [...new Set((ids ?? []).map((x) => String(x ?? "").trim()).filter(Boolean))];
+  if (unique.length === 0) return {};
+
+  // Self-heal genuinely stale 'processing' rows among the polled ids.
+  const cutoff = new Date(Date.now() - STALE_PROCESSING_MS).toISOString();
+  await svc
+    .from("radar_shadow_articles")
+    .update({ publish_status: "failed", publish_error: "processing_timeout" } as unknown as never)
+    .in("id", unique)
+    .eq("publish_status", "processing")
+    .lt("publish_authorized_at", cutoff);
+
+  const { data } = await svc
+    .from("radar_shadow_articles")
+    .select("id,publish_status,published_content_id,publish_error")
+    .in("id", unique);
+  const rows = (data ?? []) as {
+    id: string;
+    publish_status: string | null;
+    published_content_id: string | null;
+    publish_error: string | null;
+  }[];
+
+  // Resolve slugs for the linked content rows so the card can link directly.
+  const contentIds = [...new Set(rows.map((r) => r.published_content_id).filter((x): x is string => !!x))];
+  const slugById: Record<string, string> = {};
+  if (contentIds.length > 0) {
+    const { data: cRows } = await svc.from("content").select("id,slug").in("id", contentIds);
+    for (const c of (cRows ?? []) as { id: string; slug: string }[]) slugById[c.id] = c.slug;
+  }
+
+  const out: Record<string, RadarPublishState> = {};
+  for (const r of rows) {
+    out[r.id] = {
+      publish_status: r.publish_status,
+      published_content_id: r.published_content_id,
+      publish_error: r.publish_error,
+      slug: r.published_content_id ? slugById[r.published_content_id] ?? null : null,
+    };
+  }
+  return out;
 }
 
 /**
@@ -265,14 +364,6 @@ async function markPublishFailed(svc: SupabaseClient, id: string, reason: string
     .update({ publish_status: "failed", publish_error: reason } as unknown as never)
     .eq("id", id);
   revalidatePath("/admin/radar");
-}
-
-/** Validate a category slug against the live categories table; null if unknown. */
-async function resolveCategory(svc: SupabaseClient, slug: string | null): Promise<string | null> {
-  const s = String(slug ?? "").trim();
-  if (!s) return null;
-  const { data } = await svc.from("categories").select("slug").eq("slug", s).maybeSingle();
-  return data ? s : null;
 }
 
 // --- translateRadarStory -----------------------------------------------------

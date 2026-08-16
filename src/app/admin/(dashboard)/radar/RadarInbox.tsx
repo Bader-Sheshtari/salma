@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import {
   type RadarArticle,
@@ -14,7 +14,9 @@ import {
 import {
   publishRadarStory,
   translateRadarStory,
+  getRadarPublishStates,
   type PublishRadarResult,
+  type RadarPublishState,
 } from "../../radar-actions";
 import type { RadarContentLink } from "@/lib/admin-queries";
 
@@ -42,6 +44,8 @@ function rejectionMessage(reason: string | null): string {
       return "تعذّر تجهيز المقال من المصدر — لم يجتز التحقق التحريري.";
     case "session_expired":
       return "انتهت الجلسة أثناء المعالجة. أعد المحاولة.";
+    case "processing_timeout":
+      return "تأخّرت المعالجة أكثر من المعتاد فتوقّفت. أعد المحاولة.";
     default:
       return "لم يتم النشر — لم تجتز المسودة التحقق التحريري.";
   }
@@ -117,6 +121,42 @@ export default function RadarInbox({
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [catOverride, setCatOverride] = useState<Record<string, string>>({});
   const [translation, setTranslation] = useState<Record<string, TranslationState>>({});
+
+  // Live publish-state overlay for rows persisted as 'processing'. A processing
+  // row can only reach its terminal state via the Edge Function's own write, so
+  // we lightweightly poll (never re-running the pipeline) until it resolves,
+  // then reflect the result without a manual page refresh.
+  const [liveState, setLiveState] = useState<Record<string, RadarPublishState>>({});
+
+  // Ids to poll: rows the server still reports as 'processing' whose latest poll
+  // (if any) has not yet returned a terminal state. Empty → polling is idle.
+  const pollIds = useMemo(
+    () =>
+      items
+        .filter((a) => {
+          if (a.publish_status !== "processing") return false;
+          const ls = liveState[a.id]?.publish_status;
+          return !ls || ls === "processing";
+        })
+        .map((a) => a.id),
+    [items, liveState],
+  );
+  const pollKey = pollIds.join(",");
+
+  useEffect(() => {
+    if (!pollKey) return;
+    const ids = pollKey.split(",");
+    let cancelled = false;
+    const tick = async () => {
+      const res = await getRadarPublishStates(ids);
+      if (!cancelled) setLiveState((m) => ({ ...m, ...res }));
+    };
+    const iv = setInterval(tick, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [pollKey]);
 
   // Open the actual public Salma article by content id, when its slug is known.
   const articleHref = (contentId: string | null): string | null => {
@@ -278,30 +318,39 @@ export default function RadarInbox({
               const isOpen = openId === a.id;
               const isBusy = busyId === a.id;
               const ui = pubUi[a.id];
-              // Effective state = persisted publish_status (after revalidation)
-              // overlaid with this session's one-click result. Published wins,
-              // then needs-review, then rejected, then the "already" note.
-              const hasContent = !!a.published_content_id;
-              const published = a.publish_status === "published" || ui?.kind === "published";
-              const processing = !published && (a.publish_status === "processing" || isBusy);
+              // Effective state = persisted publish_status (authoritative after
+              // revalidation), overlaid — ONLY while the server still says
+              // 'processing' — with the latest lightweight poll result, then with
+              // this session's one-click result. Once the server reports a
+              // terminal state we trust it and drop the poll overlay.
+              const live = a.publish_status === "processing" ? liveState[a.id] : undefined;
+              const effStatus = live?.publish_status ?? a.publish_status;
+              const effContentId = live?.published_content_id ?? a.published_content_id;
+              const effError = live?.publish_error ?? a.publish_error;
+              const effSlug = live?.slug ?? null;
+              const hasContent = !!effContentId;
+              const published = effStatus === "published" || ui?.kind === "published";
+              const processing = !published && (effStatus === "processing" || isBusy);
               // Case 1 — a Content row exists and awaits human review. This is the
               // ONLY case that shows the visible "needs review" state (+ its link).
               const needsReview = !published && hasContent &&
-                (a.publish_status === "needs_review" || ui?.kind === "needs_review");
+                (effStatus === "needs_review" || ui?.kind === "needs_review");
               const alreadyInSalma = a.duplicate_status === "already_in_salma" || ui?.kind === "already";
               // Case 2 — the pipeline stopped BEFORE any Content row: source
               // retrieval failed, or Writer/Editor/Fidelity/validation rejected the
               // draft. Includes legacy rows persisted as 'needs_review' before this
               // fix (needs_review + null published_content_id).
               const rejected = !published && !needsReview && (
-                a.publish_status === "failed" ||
+                effStatus === "failed" ||
                 ui?.kind === "rejected" ||
-                (a.publish_status === "needs_review" && !hasContent)
+                (effStatus === "needs_review" && !hasContent)
               );
-              const rejectionReason = ui?.kind === "rejected" ? ui.reason : a.publish_error;
+              const rejectionReason = ui?.kind === "rejected" ? ui.reason : effError;
               // Link targets: published → the public article; needs-review → the
-              // Content item; duplicate → the existing public article.
-              const publishedArticleHref = articleHref(a.published_content_id);
+              // Content item; duplicate → the existing public article. Prefer the
+              // page-load link map, falling back to the slug from the live poll.
+              const publishedArticleHref =
+                articleHref(effContentId) ?? (effSlug ? `/article/${effSlug}` : null);
               const existingArticleHref = articleHref(a.matched_content_id);
               const tr = translation[a.id];
               const selectedCat = catOverride[a.id] ?? a.expected_category_slug ?? "";
@@ -404,8 +453,8 @@ export default function RadarInbox({
                           <Link href={publishedArticleHref} target="_blank" className="text-[12.5px] font-semibold text-teal underline">
                             فتح المقال ↗
                           </Link>
-                        ) : a.published_content_id ? (
-                          <Link href={`/admin/content/${a.published_content_id}`} className="text-[12.5px] font-semibold text-teal underline">
+                        ) : effContentId ? (
+                          <Link href={`/admin/content/${effContentId}`} className="text-[12.5px] font-semibold text-teal underline">
                             فتح في المحتوى ↗
                           </Link>
                         ) : null}
@@ -440,8 +489,8 @@ export default function RadarInbox({
                             <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12.5px] font-bold text-amber-700">
                               ⚠️ يحتاج مراجعة
                             </span>
-                            {a.published_content_id && (
-                              <Link href={`/admin/content/${a.published_content_id}`} className="text-[12.5px] font-semibold text-teal underline">
+                            {effContentId && (
+                              <Link href={`/admin/content/${effContentId}`} className="text-[12.5px] font-semibold text-teal underline">
                                 فتح في المحتوى ↗
                               </Link>
                             )}
