@@ -1,5 +1,7 @@
 import "server-only";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
+import type { RadarArticle } from "@/lib/radar";
 import type {
   Category,
   Content,
@@ -71,6 +73,23 @@ export async function listContent(status?: string): Promise<Content[]> {
   if (status) q = q.eq("status", status);
   const { data } = await q;
   return (data as Content[]) ?? [];
+}
+
+/**
+ * Fast News Radar (SHADOW MODE): most-recently-observed shadow articles with
+ * their ranking/dedupe fields. Read-only. The radar_shadow_* tables are not in
+ * the generated Database types, so we query through an untyped client view and
+ * cast to the hand-written RadarArticle shape.
+ */
+export async function listRadarArticles(limit = 500): Promise<RadarArticle[]> {
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const { data } = await client
+    .from("radar_shadow_articles")
+    .select("*")
+    .order("first_seen_at", { ascending: false })
+    .limit(limit);
+  return (data ?? []) as RadarArticle[];
 }
 
 export async function getContentForEdit(

@@ -8,3 +8,9 @@
 # (in addition to setting it at deploy time).
 [functions.generate-image]
 verify_jwt = true
+
+# radar-rank spends real OpenRouter credit and is triggered only by the secure
+# pg_cron job (anon bearer) or an admin. Require a valid signed JWT at the
+# gateway so no unauthenticated request can run the ranker.
+[functions.radar-rank]
+verify_jwt = true
