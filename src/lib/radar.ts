@@ -88,3 +88,105 @@ export function langLabel(code: string | null): string {
   if (!code) return "—";
   return LANG_LABEL[code] ?? code;
 }
+
+// --- Country → Arabic name + flag -------------------------------------------
+// Event Registry stores the country as an English name (e.g. "United States").
+// Map it to an Arabic name and a flag emoji for the Radar card. Unknown values
+// are shown verbatim WITHOUT a flag (never invent a country/flag).
+type CountryDisplay = { ar: string; flag: string };
+const COUNTRY_LABEL: Record<string, CountryDisplay> = {
+  "United States": { ar: "الولايات المتحدة", flag: "🇺🇸" },
+  "United Kingdom": { ar: "المملكة المتحدة", flag: "🇬🇧" },
+  "Spain": { ar: "إسبانيا", flag: "🇪🇸" },
+  "India": { ar: "الهند", flag: "🇮🇳" },
+  "Germany": { ar: "ألمانيا", flag: "🇩🇪" },
+  "Egypt": { ar: "مصر", flag: "🇪🇬" },
+  "Indonesia": { ar: "إندونيسيا", flag: "🇮🇩" },
+  "Brazil": { ar: "البرازيل", flag: "🇧🇷" },
+  "Poland": { ar: "بولندا", flag: "🇵🇱" },
+  "Turkey": { ar: "تركيا", flag: "🇹🇷" },
+  "Türkiye": { ar: "تركيا", flag: "🇹🇷" },
+  "Argentina": { ar: "الأرجنتين", flag: "🇦🇷" },
+  "Greece": { ar: "اليونان", flag: "🇬🇷" },
+  "Russia": { ar: "روسيا", flag: "🇷🇺" },
+  "Italy": { ar: "إيطاليا", flag: "🇮🇹" },
+  "France": { ar: "فرنسا", flag: "🇫🇷" },
+  "Serbia": { ar: "صربيا", flag: "🇷🇸" },
+  "Pakistan": { ar: "باكستان", flag: "🇵🇰" },
+  "Taiwan": { ar: "تايوان", flag: "🇹🇼" },
+  "Ireland": { ar: "أيرلندا", flag: "🇮🇪" },
+  "Gabon": { ar: "الغابون", flag: "🇬🇦" },
+  "Portugal": { ar: "البرتغال", flag: "🇵🇹" },
+  "Yemen": { ar: "اليمن", flag: "🇾🇪" },
+  "Ukraine": { ar: "أوكرانيا", flag: "🇺🇦" },
+  "Cuba": { ar: "كوبا", flag: "🇨🇺" },
+  "Croatia": { ar: "كرواتيا", flag: "🇭🇷" },
+  "Morocco": { ar: "المغرب", flag: "🇲🇦" },
+  "Algeria": { ar: "الجزائر", flag: "🇩🇿" },
+  "Philippines": { ar: "الفلبين", flag: "🇵🇭" },
+  "Romania": { ar: "رومانيا", flag: "🇷🇴" },
+  "Slovenia": { ar: "سلوفينيا", flag: "🇸🇮" },
+  "Colombia": { ar: "كولومبيا", flag: "🇨🇴" },
+  "Venezuela": { ar: "فنزويلا", flag: "🇻🇪" },
+  "South Korea": { ar: "كوريا الجنوبية", flag: "🇰🇷" },
+  "North Korea": { ar: "كوريا الشمالية", flag: "🇰🇵" },
+  "Iran": { ar: "إيران", flag: "🇮🇷" },
+  "Belgium": { ar: "بلجيكا", flag: "🇧🇪" },
+  "Malawi": { ar: "مالاوي", flag: "🇲🇼" },
+  "Austria": { ar: "النمسا", flag: "🇦🇹" },
+  "Bosnia and Herzegovina": { ar: "البوسنة والهرسك", flag: "🇧🇦" },
+  "Norway": { ar: "النرويج", flag: "🇳🇴" },
+  "Vietnam": { ar: "فيتنام", flag: "🇻🇳" },
+  "Kuwait": { ar: "الكويت", flag: "🇰🇼" },
+  "Saudi Arabia": { ar: "السعودية", flag: "🇸🇦" },
+  "United Arab Emirates": { ar: "الإمارات", flag: "🇦🇪" },
+  "Qatar": { ar: "قطر", flag: "🇶🇦" },
+  "Bahrain": { ar: "البحرين", flag: "🇧🇭" },
+  "Oman": { ar: "عُمان", flag: "🇴🇲" },
+  "Jordan": { ar: "الأردن", flag: "🇯🇴" },
+  "Lebanon": { ar: "لبنان", flag: "🇱🇧" },
+  "Syria": { ar: "سوريا", flag: "🇸🇾" },
+  "Iraq": { ar: "العراق", flag: "🇮🇶" },
+  "Palestine": { ar: "فلسطين", flag: "🇵🇸" },
+  "Sudan": { ar: "السودان", flag: "🇸🇩" },
+  "Tunisia": { ar: "تونس", flag: "🇹🇳" },
+  "Libya": { ar: "ليبيا", flag: "🇱🇾" },
+  "China": { ar: "الصين", flag: "🇨🇳" },
+  "Japan": { ar: "اليابان", flag: "🇯🇵" },
+  "Canada": { ar: "كندا", flag: "🇨🇦" },
+  "Australia": { ar: "أستراليا", flag: "🇦🇺" },
+  "Netherlands": { ar: "هولندا", flag: "🇳🇱" },
+  "Switzerland": { ar: "سويسرا", flag: "🇨🇭" },
+  "Sweden": { ar: "السويد", flag: "🇸🇪" },
+  "Denmark": { ar: "الدنمارك", flag: "🇩🇰" },
+  "Finland": { ar: "فنلندا", flag: "🇫🇮" },
+  "Mexico": { ar: "المكسيك", flag: "🇲🇽" },
+  "Chile": { ar: "تشيلي", flag: "🇨🇱" },
+  "Israel": { ar: "إسرائيل", flag: "🇮🇱" },
+  "Nigeria": { ar: "نيجيريا", flag: "🇳🇬" },
+  "South Africa": { ar: "جنوب أفريقيا", flag: "🇿🇦" },
+  "Kenya": { ar: "كينيا", flag: "🇰🇪" },
+  "Ethiopia": { ar: "إثيوبيا", flag: "🇪🇹" },
+  "Thailand": { ar: "تايلاند", flag: "🇹🇭" },
+  "Malaysia": { ar: "ماليزيا", flag: "🇲🇾" },
+  "Singapore": { ar: "سنغافورة", flag: "🇸🇬" },
+  "Bangladesh": { ar: "بنغلاديش", flag: "🇧🇩" },
+  "Sri Lanka": { ar: "سريلانكا", flag: "🇱🇰" },
+  "New Zealand": { ar: "نيوزيلندا", flag: "🇳🇿" },
+  "Hungary": { ar: "المجر", flag: "🇭🇺" },
+  "Czechia": { ar: "التشيك", flag: "🇨🇿" },
+  "Czech Republic": { ar: "التشيك", flag: "🇨🇿" },
+  "Slovakia": { ar: "سلوفاكيا", flag: "🇸🇰" },
+  "Bulgaria": { ar: "بلغاريا", flag: "🇧🇬" },
+  "Belarus": { ar: "بيلاروسيا", flag: "🇧🇾" },
+};
+
+/** Country display for the Radar card: Arabic name + flag when known, else the
+ *  original value with no flag. Returns null when country is missing. */
+export function countryDisplay(country: string | null): { label: string; flag: string | null } | null {
+  const c = (country ?? "").trim();
+  if (!c) return null;
+  const known = COUNTRY_LABEL[c];
+  if (known) return { label: known.ar, flag: known.flag };
+  return { label: c, flag: null };
+}

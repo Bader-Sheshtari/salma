@@ -9,6 +9,7 @@ import {
   UNRANKED_LABEL,
   DUPLICATE_LABEL,
   langLabel,
+  countryDisplay,
 } from "@/lib/radar";
 import {
   publishRadarStory,
@@ -239,9 +240,15 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
               const needsReview = a.publish_status === "needs_review";
               const tr = translation[a.id];
               const selectedCat = catOverride[a.id] ?? a.expected_category_slug ?? "";
+              const country = countryDisplay(a.country);
+              const sourceName = a.source_title ?? a.source_domain ?? null;
               return (
                 <article key={a.id} className="rounded-xl border border-line bg-white p-3">
+                  {/* Top tag row: RADAR · priority · category · country · source · duplicate. */}
                   <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-md bg-ink px-1.5 py-0.5 font-sans text-[9px] font-bold tracking-wide text-white">
+                      RADAR
+                    </span>
                     <span className={`rounded-md border px-1.5 py-0.5 text-[11px] font-bold ${priorityClass(a.priority_level)}`}>
                       {a.priority_level ? PRIORITY_LABEL[a.priority_level] : UNRANKED_LABEL}
                       {a.priority_score !== null && <span className="opacity-60"> · {a.priority_score}</span>}
@@ -249,6 +256,20 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
                     <span className="rounded-md border border-line bg-cream px-1.5 py-0.5 text-[11px] font-semibold text-teal">
                       {catName(a.expected_category_slug)}
                     </span>
+                    {country && (
+                      <span className="rounded-md border border-line bg-white px-1.5 py-0.5 text-[11px] font-semibold text-ink">
+                        {country.flag && <span className="me-0.5">{country.flag}</span>}
+                        {country.label}
+                      </span>
+                    )}
+                    {sourceName && (
+                      <span
+                        title={sourceName}
+                        className="inline-block max-w-[150px] truncate rounded-md border border-line bg-white px-1.5 py-0.5 align-middle text-[11px] font-medium text-gray"
+                      >
+                        {sourceName}
+                      </span>
+                    )}
                     {a.duplicate_status && a.duplicate_status !== "new" ? (
                       a.matched_content_id ? (
                         <Link
@@ -277,27 +298,23 @@ export default function RadarInbox({ items, categories }: { items: RadarArticle[
                         يحتاج مراجعة
                       </span>
                     )}
-                    <span className="rounded-md bg-ink px-1.5 py-0.5 font-sans text-[9px] font-bold tracking-wide text-white">
-                      RADAR
-                    </span>
                   </div>
 
-                  {/* Arabic headline (primary) with original underneath. */}
+                  {/* Primary headline: Arabic title_ar. Secondary: original beneath. */}
                   <div className="mb-1" dir="rtl">
                     <span className="block text-[15.5px] font-bold leading-snug text-ink" dir="auto">
                       {a.title_ar ?? a.title ?? "—"}
                     </span>
-                    {a.title_ar && a.title && (
+                    {a.title_ar && a.title && a.title_ar !== a.title && (
                       <span className="mt-0.5 block text-[12px] leading-snug text-gray" dir="auto">
                         {a.title}
                       </span>
                     )}
                   </div>
 
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-sans text-[11.5px] text-gray">
-                    <span>{a.source_title ?? a.source_domain ?? "—"}</span>
-                    {a.country && <span>· {a.country}</span>}
-                    <span>· {langLabel(a.language)}</span>
+                  {/* Bottom metadata: language · published time · Radar detected time. */}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 font-sans text-[11px] text-gray">
+                    <span>{langLabel(a.language)}</span>
                     {a.published_at && <span>· نُشر {timeLabel(a.published_at)}</span>}
                     <span>· رُصد {timeLabel(a.first_seen_at)}</span>
                   </div>

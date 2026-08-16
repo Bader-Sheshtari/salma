@@ -40,6 +40,11 @@ const RETRY_BATCHES = [6, 3];
 // How many rows to rank per invocation (bounds cost/time; leftover rows stay
 // ranked_at IS NULL and are picked up next cycle).
 const MAX_PER_RUN = 240;
+// Translation-only retry budget per invocation. ANY row with title_ar IS NULL —
+// including fully ranked ones — is re-attempted here (headline reading aid only,
+// never a re-rank). Bounded so a large backlog is drained over successive cycles
+// instead of one slow/expensive run; leftovers stay NULL and retry next time.
+const TRANSLATE_RETRY_LIMIT = 240;
 
 const VALID_CATEGORIES = [
   "kuwait", "gulf", "world", "health-economy", "lifestyle", "investigations", "dawi-news",
@@ -429,10 +434,72 @@ Deno.serve(async (req) => {
     return null;
   }
 
+  // Translate ONE batch of non-Arabic titles in a single call, writing every
+  // resolved title into `out`. 3 attempts with exponential backoff on transient
+  // fetch/JSON failures; anything still unresolved simply stays out of `out`.
+  async function translateBatch(batch: RadarRow[], out: Map<string, string>): Promise<void> {
+    const lines = batch.map((a, j) => `${j}. ${a.title ?? ""}`).join("\n");
+    let parsed: { i: number; ar: string }[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await sleep(1000 * 2 ** (attempt - 1));
+      calls++;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 45000);
+      let json: {
+        choices?: { message?: { content?: string } }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number };
+        error?: { message?: string };
+      };
+      try {
+        const res = await fetch(OPENROUTER_URL, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${openrouterKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            temperature: 0,
+            messages: [
+              { role: "system", content: TRANSLATE_PROMPT },
+              { role: "user", content: `ترجم هذه العناوين:\n${lines}` },
+            ],
+          }),
+          signal: ctrl.signal,
+        });
+        json = await res.json();
+      } catch {
+        continue;
+      } finally {
+        clearTimeout(timer);
+      }
+      if (json.usage) {
+        usage.prompt += json.usage.prompt_tokens ?? 0;
+        usage.completion += json.usage.completion_tokens ?? 0;
+        usage.total += json.usage.total_tokens ?? 0;
+        usage.cost += json.usage.cost ?? 0;
+      }
+      const raw = json.choices?.[0]?.message?.content ?? "";
+      if (json.error || !raw) continue;
+      try {
+        const s = raw.indexOf("["); const e = raw.lastIndexOf("]");
+        parsed = JSON.parse(raw.slice(s, e + 1));
+        break;
+      } catch {
+        parsed = [];
+      }
+    }
+    for (const p of parsed) {
+      const a = batch[p.i];
+      const ar = String(p.ar ?? "").trim();
+      if (a && ar) out.set(a.id, ar);
+    }
+  }
+
   // Batched faithful Arabic-headline translation. Arabic-language originals are
-  // resolved locally (verbatim, no LLM). Non-Arabic titles are translated in one
-  // batched call per chunk. Returns id → title_ar for every row we could resolve;
-  // rows left unresolved simply keep title_ar NULL and are retried next cycle.
+  // resolved locally (verbatim, no LLM). Non-Arabic titles are translated in a
+  // primary batch of 20; any row still unresolved is retried in progressively
+  // smaller batches (5, then singletons) so one poison/oversized batch can never
+  // strand the whole group — this is what drives coverage toward ~100%. Returns
+  // id → title_ar for every row we could resolve; the rest keep title_ar NULL
+  // and are retried next cycle.
   async function translateTitles(items: RadarRow[]): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     const needModel: RadarRow[] = [];
@@ -442,63 +509,59 @@ Deno.serve(async (req) => {
       if (isArabicLang(a.language)) out.set(a.id, t); // Arabic original → verbatim
       else needModel.push(a);
     }
-    for (const batch of chunk(needModel, 20)) {
-      const lines = batch.map((a, j) => `${j}. ${a.title ?? ""}`).join("\n");
-      let parsed: { i: number; ar: string }[] = [];
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (attempt > 0) await sleep(1000 * 2 ** (attempt - 1));
-        calls++;
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 45000);
-        let json: {
-          choices?: { message?: { content?: string } }[];
-          usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number };
-          error?: { message?: string };
-        };
-        try {
-          const res = await fetch(OPENROUTER_URL, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${openrouterKey}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model,
-              temperature: 0,
-              messages: [
-                { role: "system", content: TRANSLATE_PROMPT },
-                { role: "user", content: `ترجم هذه العناوين:\n${lines}` },
-              ],
-            }),
-            signal: ctrl.signal,
-          });
-          json = await res.json();
-        } catch {
-          continue;
-        } finally {
-          clearTimeout(timer);
-        }
-        if (json.usage) {
-          usage.prompt += json.usage.prompt_tokens ?? 0;
-          usage.completion += json.usage.completion_tokens ?? 0;
-          usage.total += json.usage.total_tokens ?? 0;
-          usage.cost += json.usage.cost ?? 0;
-        }
-        const raw = json.choices?.[0]?.message?.content ?? "";
-        if (json.error || !raw) continue;
-        try {
-          const s = raw.indexOf("["); const e = raw.lastIndexOf("]");
-          parsed = JSON.parse(raw.slice(s, e + 1));
-          break;
-        } catch {
-          parsed = [];
-        }
+    for (const size of [20, 5, 1]) {
+      const unresolved = needModel.filter((a) => !out.has(a.id));
+      if (unresolved.length === 0) break;
+      for (const batch of chunk(unresolved, size)) {
+        await translateBatch(batch, out);
+        await sleep(200);
       }
-      for (const p of parsed) {
-        const a = batch[p.i];
-        const ar = String(p.ar ?? "").trim();
-        if (a && ar) out.set(a.id, ar);
-      }
-      await sleep(200);
     }
     return out;
+  }
+
+  // Translation-only retry backfill. Re-attempt title_ar for ANY row still
+  // missing it — including rows that were fully ranked in an earlier cycle —
+  // and write ONLY title_ar. This NEVER re-ranks: priority_score,
+  // priority_level, editorial_value, expected_category_slug, duplicate_status,
+  // matched_content_id, the VI verdict, and ranked_at are all left untouched,
+  // and each write is guarded with .is("title_ar", null) so an existing
+  // translation is never overwritten. Bounded by TRANSLATE_RETRY_LIMIT;
+  // unresolved rows stay NULL and retry next cycle. Rows in justProcessed were
+  // already attempted in this same run and are skipped. Best-effort: a failure
+  // here must never fail the rank run. Returns {attempted, resolved}.
+  async function runTranslateRetry(
+    justProcessed: Set<string>,
+  ): Promise<{ attempted: number; resolved: number }> {
+    let attempted = 0;
+    let resolved = 0;
+    try {
+      const { data: pendingData } = await supabase
+        .from("radar_shadow_articles")
+        .select("id,title,url,source_title,source_domain,language,country,published_at,first_seen_at")
+        .is("title_ar", null)
+        .not("title", "is", null)
+        .order("first_seen_at", { ascending: false })
+        .limit(TRANSLATE_RETRY_LIMIT);
+      const pending = ((pendingData ?? []) as RadarRow[]).filter((a) => !justProcessed.has(a.id));
+      attempted = pending.length;
+      if (pending.length > 0) {
+        const retryAr = await translateTitles(pending);
+        for (const a of pending) {
+          const ar = retryAr.get(a.id);
+          if (!ar) continue; // unresolved this cycle → stays NULL, retried later
+          const { error: upErr } = await supabase
+            .from("radar_shadow_articles")
+            .update({ title_ar: ar })
+            .eq("id", a.id)
+            .is("title_ar", null);
+          if (!upErr) resolved++;
+        }
+      }
+    } catch {
+      // Best-effort: a translation-retry failure must never fail the rank run.
+    }
+    return { attempted, resolved };
   }
 
   let attemptedCount = 0;
@@ -507,6 +570,9 @@ Deno.serve(async (req) => {
   let unrankedErrorCount = 0;
   let viDemotedCount = 0; // provisional very_important → important by the VI verifier
   const dupCounts = { new: 0, already: 0, possible: 0 };
+  // Translation-only retry (headline reading aid) over already-persisted rows.
+  let translateRetryAttempted = 0;
+  let translateRetryResolved = 0;
   let status = "success";
   let errorMsg: string | null = null;
 
@@ -524,13 +590,20 @@ Deno.serve(async (req) => {
     attemptedCount = radar.length;
 
     if (radar.length === 0) {
+      // No new rows to rank — but title_ar backfill must still run so that
+      // previously-ranked rows missing a translation stay eligible for retry.
+      const retry = await runTranslateRetry(new Set());
+      translateRetryAttempted = retry.attempted;
+      translateRetryResolved = retry.resolved;
       await supabase.from("radar_rank_runs").insert({
         trigger, status: "success", started_at: startedAt.toISOString(),
         finished_at: new Date().toISOString(), attempted_count: 0, ranked_count: 0,
         model, duration_ms: Date.now() - startedAt.getTime(),
       });
-      return new Response(JSON.stringify({ ok: true, mode: "rank", attempted: 0, ranked: 0 }, null, 2),
-        { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({
+        ok: true, mode: "rank", attempted: 0, ranked: 0,
+        translate_retry: { attempted: retry.attempted, resolved: retry.resolved },
+      }, null, 2), { headers: { "Content-Type": "application/json" } });
     }
 
     // 2) Deterministic duplicate detection vs Salma content (NO LLM).
@@ -679,6 +752,14 @@ Deno.serve(async (req) => {
         if (upErr) throw upErr;
       }
     }
+
+    // 4b) Translation-only retry backfill over ALL rows still missing title_ar
+    //     (including ones ranked in earlier cycles). Rows just persisted above
+    //     already had a translation attempt this run, so skip them. See
+    //     runTranslateRetry for the full no-re-rank guarantees.
+    const retry = await runTranslateRetry(new Set(radar.map((a) => a.id)));
+    translateRetryAttempted = retry.attempted;
+    translateRetryResolved = retry.resolved;
   } catch (e) {
     status = "failure";
     errorMsg = e instanceof Error ? e.message : String(e);
@@ -717,6 +798,7 @@ Deno.serve(async (req) => {
     retry_count: retryCount,
     vi_demoted: viDemotedCount,
     duplicates: dupCounts,
+    translate_retry: { attempted: translateRetryAttempted, resolved: translateRetryResolved },
     model,
     calls,
     cost: usage.cost,
