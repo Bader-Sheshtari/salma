@@ -87,7 +87,13 @@ export async function listRadarArticles(limit = 500): Promise<RadarArticle[]> {
   const { data } = await client
     .from("radar_shadow_articles")
     .select("*")
+    // Primary editorial order is detection time (newest first). A deterministic
+    // secondary key (row id) breaks ties so the MANY rows sharing an identical
+    // batch first_seen_at keep a stable order across revalidations — a workflow
+    // status change (which UPDATEs the row and can move its heap tuple) must
+    // never reorder the feed. publish_status never influences ordering.
     .order("first_seen_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(limit);
   return (data ?? []) as RadarArticle[];
 }

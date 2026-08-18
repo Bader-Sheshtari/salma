@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { Fragment, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -98,6 +98,42 @@ function dateGroupLabel(key: string): string {
 function timeLabel(iso: string | null): string {
   if (!iso) return "";
   return new Date(iso).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Bidi-safe headline. The base direction is fixed by `dir` (rtl for the Arabic
+// translation so a title STARTING with a Latin acronym does not flip the whole
+// sentence; auto for the original headline). Each embedded Latin-script run —
+// company/organization/drug names, acronyms, scientific terms, versioned tokens
+// like "IMSS Bienestar", "COVID-19", "gpt-5.4" — is isolated in <bdi> so it keeps
+// its natural LTR word order without disturbing the surrounding Arabic. Fully
+// generic (no hard-coded strings); the stored title text is never altered.
+function BidiHeadline({ text, dir, className }: { text: string; dir: "rtl" | "auto"; className?: string }) {
+  const parts = useMemo(() => {
+    // A Latin word: starts with a Latin letter (incl. accented Latin for names
+    // like "Bienestar"), then letters/digits and intra-run punctuation. A run is
+    // one or more Latin words joined by spaces ("IMSS Bienestar"); an interior
+    // number joins the run ONLY when another Latin word follows it, so
+    // "type 2 diabetes" stays one LTR run while a trailing Arabic-context number
+    // (e.g. "Aspirin 2 حبة") is NOT swallowed.
+    const word = "[A-Za-z\\u00C0-\\u024F][A-Za-z0-9\\u00C0-\\u024F.&/'’\\-]*";
+    const num = "[0-9][0-9.,]*";
+    const re = new RegExp(`${word}(?:\\s+(?:${num}\\s+)*${word})*`, "g");
+    const out: { s: string; ltr: boolean }[] = [];
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) out.push({ s: text.slice(last, m.index), ltr: false });
+      out.push({ s: m[0], ltr: true });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) out.push({ s: text.slice(last), ltr: false });
+    return out;
+  }, [text]);
+  return (
+    <span className={className} dir={dir}>
+      {parts.map((p, i) => (p.ltr ? <bdi key={i}>{p.s}</bdi> : <Fragment key={i}>{p.s}</Fragment>))}
+    </span>
+  );
 }
 
 // Per-article local UI state for translation-on-demand (never persisted).
@@ -215,12 +251,22 @@ export default function RadarInbox({
     });
   }, [items, importance, dupe, cat]);
 
-  // Group filtered rows by detection date, newest date first, newest within.
+  // Group filtered rows by detection date, newest date first. Within a group the
+  // order is a STABLE, status-independent key: detection time (newest first) with
+  // the row id as a deterministic tiebreaker. This mirrors the server order and
+  // guarantees a card never moves merely because its workflow status changed
+  // (untouched→processing→draft/failed/published all update the SAME card in place).
   const groups = useMemo(() => {
     const map = new Map<string, RadarArticle[]>();
     for (const a of filtered) {
       const k = dateKey(a.first_seen_at);
       (map.get(k) ?? map.set(k, []).get(k)!).push(a);
+    }
+    for (const rows of map.values()) {
+      rows.sort((x, y) => {
+        if (x.first_seen_at !== y.first_seen_at) return x.first_seen_at < y.first_seen_at ? 1 : -1;
+        return x.id < y.id ? 1 : x.id > y.id ? -1 : 0;
+      });
     }
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [filtered]);
@@ -464,15 +510,21 @@ export default function RadarInbox({
                     )}
                   </div>
 
-                  {/* Primary headline: Arabic title_ar. Secondary: original beneath. */}
+                  {/* Primary headline: Arabic title_ar (RTL base, Latin runs
+                      isolated). Secondary: original headline in its own natural
+                      direction. Stored text is never modified. */}
                   <div className="mb-1" dir="rtl">
-                    <span className="block text-[15.5px] font-bold leading-snug text-ink" dir="auto">
-                      {a.title_ar ?? a.title ?? "—"}
-                    </span>
+                    <BidiHeadline
+                      text={a.title_ar ?? a.title ?? "—"}
+                      dir={a.title_ar ? "rtl" : "auto"}
+                      className="block text-[15.5px] font-bold leading-snug text-ink"
+                    />
                     {a.title_ar && a.title && a.title_ar !== a.title && (
-                      <span className="mt-0.5 block text-[12px] leading-snug text-gray" dir="auto">
-                        {a.title}
-                      </span>
+                      <BidiHeadline
+                        text={a.title}
+                        dir="auto"
+                        className="mt-0.5 block text-[12px] leading-snug text-gray"
+                      />
                     )}
                   </div>
 
