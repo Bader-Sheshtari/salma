@@ -30,7 +30,11 @@ export function SectionTitle({
         </div>
       </div>
       {action && href ? (
-        <Link href={href} className="text-xs font-semibold text-green hover:opacity-80">
+        // 16px text link → ~44px hit area (fills the mb-3.5 gap below, never the rail)
+        <Link
+          href={href}
+          className="relative text-xs font-semibold text-green before:absolute before:-inset-x-2 before:-inset-y-3.5 hover:opacity-80"
+        >
           {action}
         </Link>
       ) : null}
@@ -52,7 +56,11 @@ export function Rail({
   itemWidth?: string;
 }) {
   return (
-    <div className={`salma-scroll flex gap-3 overflow-x-auto pb-1 sm:grid sm:overflow-visible ${cols}`}>
+    // -m/p (4px): the scroll container's padding box grows so the first card's
+    // focus ring isn't clipped at the top/start edge; layout is unchanged.
+    <div
+      className={`salma-scroll -mx-1 -mt-1 flex gap-3 overflow-x-auto px-1 pt-1 pb-1 sm:grid sm:overflow-visible ${cols}`}
+    >
       {items.map((item, i) => (
         <div key={i} className={`${itemWidth} shrink-0 sm:w-auto`}>
           {item}

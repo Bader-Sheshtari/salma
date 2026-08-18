@@ -11,16 +11,21 @@ export function Footer({ categories }: { categories: Category[] }) {
           </span>
           <span className="text-lg font-bold">سلمى</span>
         </div>
+        {/* py/-my: taller tap boxes that exactly fill the 14px row gap, no layout shift */}
         <div className="mb-5 flex flex-wrap gap-x-6 gap-y-3.5 text-[13px] text-white/75">
           {categories.map((c) => (
-            <Link key={c.slug} href={`/category/${c.slug}`} className="hover:text-white">
+            <Link
+              key={c.slug}
+              href={`/category/${c.slug}`}
+              className="-my-[7px] py-[7px] hover:text-white"
+            >
               {c.name_ar}
             </Link>
           ))}
-          <Link href="/about" className="hover:text-white">
+          <Link href="/about" className="-my-[7px] py-[7px] hover:text-white">
             من نحن
           </Link>
-          <Link href="/contact" className="hover:text-white">
+          <Link href="/contact" className="-my-[7px] py-[7px] hover:text-white">
             اتصل بنا
           </Link>
         </div>

@@ -19,18 +19,30 @@ export function hrefFor(c: Pick<Content, "type" | "slug">): string {
   return c.type === "video" ? `/video/${c.slug}` : `/article/${c.slug}`;
 }
 
-/** Cover image with a diagonal-hatch placeholder fallback. */
+/**
+ * Subtle hover zoom for card images: only on hover-capable pointers (Tailwind
+ * gates `group-hover:` behind `@media (hover: hover)`, so no sticky hover on
+ * touch) and only when the reader hasn't asked for reduced motion.
+ */
+const ZOOM = "transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]";
+
+/** Cover image with a diagonal-hatch placeholder fallback.
+ * `zoom` opts the *image* into the card hover zoom — the caller's Link must
+ * carry `group` and clip with `overflow-hidden`. The hatch placeholder never
+ * zooms (scaling a pattern reads as a glitch, not a photo). */
 export function Cover({
   src,
   alt,
   className,
   dark,
+  zoom = false,
   sizes = "(max-width: 768px) 100vw, 768px",
 }: {
   src: string | null;
   alt: string;
   className?: string;
   dark?: boolean;
+  zoom?: boolean;
   sizes?: string;
 }) {
   // next/image `fill` needs a positioned ancestor; the wrapper provides it
@@ -38,19 +50,20 @@ export function Cover({
   const wrap = className?.includes("absolute")
     ? className
     : `relative h-full w-full ${className ?? ""}`;
+  const img = zoom ? ` ${ZOOM}` : "";
 
   if (src) {
     if (isStorageImage(src)) {
       return (
         <div className={wrap}>
-          <Image src={src} alt={alt} fill sizes={sizes} className="object-cover" />
+          <Image src={src} alt={alt} fill sizes={sizes} className={`object-cover${img}`} />
         </div>
       );
     }
     return (
       <div className={wrap}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} className="h-full w-full object-cover" />
+        <img src={src} alt={alt} className={`h-full w-full object-cover${img}`} />
       </div>
     );
   }
@@ -68,9 +81,9 @@ export function Cover({
 /** Large lead/hero card. */
 export function HeroCard({ c }: { c: Content }) {
   return (
-    <Link href={hrefFor(c)} className="group block overflow-hidden rounded-2xl border border-line">
+    <Link href={hrefFor(c)} className="group isolate block overflow-hidden rounded-2xl border border-line">
       <div className="relative flex aspect-[16/10] items-end">
-        <Cover src={coverFor(c)} alt="صورة رئيسية" className="absolute inset-0" />
+        <Cover src={coverFor(c)} alt="صورة رئيسية" className="absolute inset-0" zoom />
         <span className="absolute right-3 top-3 rounded-md bg-teal px-2.5 py-1 text-[11px] font-semibold text-white">
           عاجل
         </span>
@@ -96,12 +109,14 @@ export function ListRow({
   meta?: string;
 }) {
   return (
-    <Link href={hrefFor(c)} className="flex items-center gap-3 py-3">
-      <div className="h-14 w-20 shrink-0 overflow-hidden rounded-lg sm:h-16 sm:w-24">
-        <Cover src={coverFor(c)} alt="صورة" />
+    <Link href={hrefFor(c)} className="group flex items-center gap-3 py-3">
+      <div className="isolate h-14 w-20 shrink-0 overflow-hidden rounded-lg sm:h-16 sm:w-24">
+        <Cover src={coverFor(c)} alt="صورة" zoom />
       </div>
       <div className="min-w-0">
-        <div className="text-sm font-semibold leading-relaxed sm:text-[15px]">{c.title}</div>
+        <div className="text-sm font-semibold leading-relaxed transition-colors group-hover:text-teal sm:text-[15px]">
+          {c.title}
+        </div>
         <div className="mt-1.5 text-[11px]" style={{ color: accent }}>
           {meta ?? timeAgoAr(c.published_at)}
         </div>
@@ -113,12 +128,14 @@ export function ListRow({
 /** Vertical card with image on top — used in scroll rails and grids. */
 export function ContentCard({ c }: { c: Content }) {
   return (
-    <Link href={hrefFor(c)} className="block overflow-hidden rounded-2xl bg-white">
+    <Link href={hrefFor(c)} className="group isolate block overflow-hidden rounded-2xl bg-white">
       <div className="aspect-[16/10] w-full overflow-hidden">
-        <Cover src={coverFor(c)} alt="صورة" />
+        <Cover src={coverFor(c)} alt="صورة" zoom />
       </div>
       <div className="px-3 py-3">
-        <div className="text-[13.5px] font-semibold leading-relaxed sm:text-sm">{c.title}</div>
+        <div className="text-[13.5px] font-semibold leading-relaxed transition-colors group-hover:text-teal sm:text-sm">
+          {c.title}
+        </div>
         {c.read_minutes ? (
           <div className="mt-1.5 text-[11px] text-green">{c.read_minutes} دقائق قراءة</div>
         ) : null}
@@ -131,9 +148,9 @@ export function ContentCard({ c }: { c: Content }) {
 export function SearchResultRow({ r }: { r: SearchResult }) {
   const date = formatDateTimeAr(r.publishedAt);
   return (
-    <Link href={r.href} className="flex gap-3 py-4 sm:gap-4">
-      <div className="h-20 w-28 shrink-0 overflow-hidden rounded-xl sm:h-24 sm:w-36">
-        <Cover src={r.image} alt={r.title} />
+    <Link href={r.href} className="group flex gap-3 py-4 sm:gap-4">
+      <div className="isolate h-20 w-28 shrink-0 overflow-hidden rounded-xl sm:h-24 sm:w-36">
+        <Cover src={r.image} alt={r.title} zoom />
       </div>
       <div className="min-w-0 flex-1">
         <div className="mb-1 flex flex-wrap items-center gap-2">
@@ -144,7 +161,9 @@ export function SearchResultRow({ r }: { r: SearchResult }) {
             <span className="text-[11.5px] font-semibold text-green">{r.categoryName}</span>
           ) : null}
         </div>
-        <div className="text-[15px] font-bold leading-snug text-ink">{r.title}</div>
+        <div className="text-[15px] font-bold leading-snug text-ink transition-colors group-hover:text-teal">
+          {r.title}
+        </div>
         {r.summary ? (
           <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-gray">{r.summary}</p>
         ) : null}
@@ -161,9 +180,9 @@ export function SearchResultRow({ r }: { r: SearchResult }) {
 /** Video card with play badge + duration. */
 export function VideoCard({ c }: { c: Content }) {
   return (
-    <Link href={hrefFor(c)} className="block">
-      <div className="relative flex aspect-video items-center justify-center overflow-hidden rounded-xl">
-        <Cover src={coverFor(c)} alt="فيديو" dark className="absolute inset-0" />
+    <Link href={hrefFor(c)} className="group block">
+      <div className="relative isolate flex aspect-video items-center justify-center overflow-hidden rounded-xl">
+        <Cover src={coverFor(c)} alt="فيديو" dark className="absolute inset-0" zoom />
         <span className="relative flex h-11 w-11 items-center justify-center rounded-full bg-white/90 pr-0.5 text-teal">
           ▶
         </span>
@@ -173,7 +192,9 @@ export function VideoCard({ c }: { c: Content }) {
           </span>
         ) : null}
       </div>
-      <div className="mt-2 text-sm font-semibold leading-relaxed">{c.title}</div>
+      <div className="mt-2 text-sm font-semibold leading-relaxed transition-colors group-hover:text-teal">
+        {c.title}
+      </div>
     </Link>
   );
 }

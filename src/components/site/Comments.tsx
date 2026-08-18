@@ -54,7 +54,7 @@ export function Comments({
             <button
               type="submit"
               disabled={pending}
-              className="rounded-lg bg-teal px-5 py-2.5 text-[13px] font-bold text-white disabled:opacity-60"
+              className="relative rounded-lg bg-teal px-5 py-2.5 text-[13px] font-bold text-white before:absolute before:-inset-1 disabled:opacity-60"
             >
               {pending ? "جارٍ الإرسال…" : "أرسل التعليق"}
             </button>

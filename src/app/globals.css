@@ -46,6 +46,128 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ---------------------------------------------------------------------------
+   Browser defaults — owned here instead of left to the UA (apple-design).
+   Tailwind preflight already handles tap-highlight + text-size-adjust.
+
+   These live in `@layer base` ON PURPOSE: Tailwind v4 utilities sit in
+   `@layer utilities`, which beats `base`, so a component can still opt out
+   with a utility (e.g. the dnd-kit drag handle's `touch-none`, `cursor-grab`,
+   `select-text`, `scroll-mt-*`, `text-pretty`). Unlayered rules would silently
+   override those and break touch dragging in the admin.
+--------------------------------------------------------------------------- */
+@layer base {
+  html {
+    color-scheme: light; /* light-only UI: keep form controls/scrollbars in sync */
+    scroll-behavior: smooth; /* in-page anchors (#newsletter) glide; router opts out via data-scroll-behavior */
+    scrollbar-gutter: stable; /* no recentering jump between short and long pages */
+    font-synthesis: none; /* never fake bold/italic — faux slanting breaks Arabic */
+  }
+
+  body {
+    overflow-wrap: break-word; /* long URLs/tokens (source links) never overflow */
+  }
+
+  /* Kill the double-tap-zoom delay on everything interactive (response §1). */
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+
+  /* Buttons read as pressable; labels can't be text-selected on double-tap. */
+  button:not(:disabled),
+  [role="button"] {
+    cursor: pointer;
+  }
+  button,
+  [role="button"],
+  summary {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Press feedback on pointer-down, not on release (apple-design §1).
+     The transition sits on the rest state so release eases back too (a
+     `transition-*` utility on a button replaces it — `transition` still
+     covers transform; narrower lists just snap, which is acceptable). */
+  a:active {
+    opacity: 0.8;
+  }
+  button {
+    transition: transform 100ms ease-out;
+  }
+  button:not(:disabled):active {
+    transform: scale(0.97);
+  }
+
+  /* Anchor targets stop clear of the sticky header. */
+  [id] {
+    scroll-margin-top: 96px;
+  }
+
+  /* Selection in brand teal, not UA blue. */
+  ::selection {
+    background: color-mix(in srgb, var(--salma-teal) 24%, transparent);
+  }
+
+  /* Headlines wrap evenly (progressive enhancement). */
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Platform guarantees — deliberately UNLAYERED so they win over utilities.
+--------------------------------------------------------------------------- */
+
+/* Keyboard focus is always visible. Form fields across the app carry
+   `outline-none` + `focus:border-teal`; this restores a ring on top of that
+   border rather than relying on a 1px colour change alone. */
+:focus-visible {
+  outline: 2px solid var(--salma-teal);
+  outline-offset: 2px;
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--salma-teal) 40%, transparent);
+  outline-offset: 1px;
+}
+/* For focusable surfaces clipped by an `overflow-hidden` ancestor (hero
+   slides, ticker headlines), draw the ring inside the edge so it stays
+   visible. */
+.salma-focus-inset:focus-visible {
+  outline-offset: -3px;
+}
+/* Over photos the single teal line can vanish; add a soft white halo on both
+   sides of it (an overlay pseudo, since an inset box-shadow would paint
+   underneath the image). The host must already be positioned. */
+.salma-focus-halo:focus-visible::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 5px rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+}
+
+/* iOS Safari zooms the page when focusing fields under 16px — never on touch.
+   Must beat `text-sm` etc. on the fields themselves. */
+@media (hover: none) and (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 @keyframes salmaMarquee {
   from {
     transform: translateX(0);
@@ -72,4 +194,39 @@ body {
 }
 .salma-scroll {
   scrollbar-width: none;
+  overscroll-behavior-x: contain; /* rail hitting its end must not trigger back-swipe */
+}
+
+.salma-marquee {
+  animation: salmaMarquee 30s linear infinite;
+}
+.salma-pulse {
+  animation: salmaPulse 1.1s infinite;
+}
+/* Let readers catch a headline: the ticker pauses under the pointer (only on
+   hover-capable devices — a raw :hover would stick after a tap on touch) and
+   while a headline has keyboard focus. */
+@media (hover: hover) {
+  .salma-ticker:hover .salma-marquee {
+    animation-play-state: paused;
+  }
+}
+.salma-ticker:focus-within .salma-marquee {
+  animation-play-state: paused;
+}
+
+/* Reduced motion: the ticker holds still (§14) and anchors jump instantly.
+   A still marquee would hide every headline past the first, so the rail
+   becomes a plain horizontal scroller instead. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .salma-marquee,
+  .salma-pulse {
+    animation: none;
+  }
+  .salma-ticker-rail {
+    overflow-x: auto;
+  }
 }

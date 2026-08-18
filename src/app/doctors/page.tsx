@@ -30,10 +30,12 @@ export default async function DoctorsPage({ searchParams }: Props) {
           <h1 className="text-2xl font-bold sm:text-3xl">الأطباء</h1>
         </div>
 
-        <div className="salma-scroll mb-5 flex gap-2 overflow-x-auto">
+        {/* Chips are ~32px; ::before lifts each to ~44px. The rail's py/-my keeps
+            that reach inside its own padding box (overflow-x-auto clips there). */}
+        <div className="salma-scroll -mx-1 -mt-1.5 mb-3.5 flex gap-2 overflow-x-auto px-1 py-1.5">
           <Link
             href="/doctors"
-            className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] font-semibold ${
+            className={`relative whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] font-semibold before:absolute before:inset-x-0 before:-inset-y-1.5 ${
               !activeDept ? "bg-teal text-white" : "border border-line bg-white text-gray"
             }`}
           >
@@ -43,7 +45,7 @@ export default async function DoctorsPage({ searchParams }: Props) {
             <Link
               key={d.id}
               href={`/doctors?dept=${d.slug}`}
-              className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] font-semibold ${
+              className={`relative whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] font-semibold before:absolute before:inset-x-0 before:-inset-y-1.5 ${
                 activeDept?.id === d.id ? "bg-teal text-white" : "border border-line bg-white text-gray"
               }`}
             >
@@ -60,7 +62,7 @@ export default async function DoctorsPage({ searchParams }: Props) {
               <Link
                 key={d.id}
                 href={`/doctors/${d.slug}`}
-                className="flex items-center gap-3.5 rounded-2xl border border-line bg-white p-4 hover:bg-cream"
+                className="flex items-center gap-3.5 rounded-2xl border border-line bg-white p-4 transition-colors hover:bg-cream"
               >
                 <div className="h-16 w-16 shrink-0 overflow-hidden rounded-full border border-line bg-cream">
                   {d.photo_url ? (

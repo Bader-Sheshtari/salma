@@ -62,12 +62,17 @@ export function HomeSection({ data }: { data: HomeSectionItems }) {
       <section className="px-4 py-5 sm:px-6">
         {title}
         <div className="grid gap-5 lg:grid-cols-2">
-          <Link href={hrefFor(lead)} className="block overflow-hidden rounded-2xl border border-line">
+          <Link
+            href={hrefFor(lead)}
+            className="group isolate block overflow-hidden rounded-2xl border border-line"
+          >
             <div className="aspect-[16/9] w-full overflow-hidden">
-              <Cover src={lead.cover_image_url} alt="صورة" />
+              <Cover src={lead.cover_image_url} alt="صورة" zoom />
             </div>
             <div className="p-4 sm:p-5">
-              <h2 className="m-0 text-lg font-bold leading-snug">{lead.title}</h2>
+              <h2 className="m-0 text-lg font-bold leading-snug transition-colors group-hover:text-teal">
+                {lead.title}
+              </h2>
               {lead.excerpt ? (
                 <p className="mt-2 text-[13px] leading-relaxed text-gray">{lead.excerpt}</p>
               ) : null}

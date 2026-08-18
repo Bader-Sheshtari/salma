@@ -35,7 +35,7 @@ export default async function ContactPage() {
             <a
               href={`mailto:${CONTACT_EMAIL}`}
               dir="ltr"
-              className="font-sans text-[15px] font-semibold text-teal hover:underline"
+              className="-my-[11px] inline-block py-[11px] font-sans text-[15px] font-semibold text-teal hover:underline"
             >
               {CONTACT_EMAIL}
             </a>

@@ -42,8 +42,10 @@ export function ShareBar({ title }: { title: string }) {
     }
   };
 
+  // 37px tall visually; ::before lifts the hit area to ~45px (rows are gap-2
+  // apart, so the ±4px reach never overlaps a wrapped neighbour).
   const btn =
-    "flex items-center gap-1.5 rounded-lg border border-line px-3 py-2 text-[13px] font-semibold transition hover:bg-cream";
+    "relative flex items-center gap-1.5 rounded-lg border border-line px-3 py-2 text-[13px] font-semibold transition before:absolute before:inset-x-0 before:-inset-y-1 hover:bg-cream";
 
   return (
     <div className="flex flex-wrap items-center gap-2">

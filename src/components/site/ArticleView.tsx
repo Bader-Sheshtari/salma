@@ -21,11 +21,12 @@ function Credit({
   return (
     <p className="mt-1 text-[11px] leading-relaxed text-gray/70">
       {url ? (
+        // py-3 on an inline <a> grows the tap box (~42px) without touching the line box
         <a
           href={url}
           target="_blank"
           rel="noopener noreferrer nofollow"
-          className="underline underline-offset-2 hover:text-gray"
+          className="py-3 underline underline-offset-2 hover:text-gray"
         >
           {text}
         </a>
@@ -60,7 +61,7 @@ export function ArticleView({
       {category ? (
         <Link
           href={`/category/${category.slug}`}
-          className="inline-block rounded-md px-2.5 py-1 text-[11px] font-semibold text-white"
+          className="relative inline-block rounded-md px-2.5 py-1 text-[11px] font-semibold text-white before:absolute before:-inset-x-2 before:-inset-y-2.5"
           style={{ background: category.accent }}
         >
           {category.name_ar}
@@ -182,7 +183,9 @@ export function ArticleView({
             <span className="h-4 w-1 rounded-sm bg-teal" />
             المصادر والمراجع
           </h2>
-          <ul className="flex flex-col gap-2">
+          {/* Each source is a 36px row (py-2 links replace the old 8px gap) so
+              references are comfortably tappable without turning into a menu. */}
+          <ul className="flex flex-col">
             {sources.map((s) => (
               <li key={s.id} className="text-[13.5px]">
                 {s.url ? (
@@ -190,12 +193,12 @@ export function ArticleView({
                     href={s.url}
                     target="_blank"
                     rel="noopener noreferrer nofollow"
-                    className="font-semibold text-teal underline underline-offset-2 hover:opacity-80"
+                    className="inline-block py-2 font-semibold text-teal underline underline-offset-2 hover:opacity-80"
                   >
                     {s.label}
                   </a>
                 ) : (
-                  <span className="font-semibold text-ink">{s.label}</span>
+                  <span className="inline-block py-2 font-semibold text-ink">{s.label}</span>
                 )}
               </li>
             ))}

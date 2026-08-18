@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans_Arabic, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import { SITE_URL, SITE_NAME } from "@/lib/site";
 import "./globals.css";
@@ -23,6 +23,11 @@ const plexMono = IBM_Plex_Mono({
 
 const DESCRIPTION =
   "منصة إخبارية صحية مستقلة من الكويت إلى الخليج — أخبار وتحقيقات وفيديو بمصادر موثوقة.";
+
+// Mobile browser chrome matches the white sticky header.
+export const viewport: Viewport = {
+  themeColor: "#ffffff",
+};
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -56,6 +61,9 @@ export default function RootLayout({
     <html
       lang="ar"
       dir="rtl"
+      // CSS smooth-scrolls in-page anchors; this tells the Next 16 router to
+      // still jump instantly on route transitions.
+      data-scroll-behavior="smooth"
       className={`${plexArabic.variable} ${plexSans.variable} ${plexMono.variable} antialiased`}
     >
       <body>{children}</body>
