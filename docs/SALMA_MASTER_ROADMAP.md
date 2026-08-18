@@ -4,7 +4,7 @@
 
 This is the permanent, canonical roadmap for the entire Salma project. It supersedes ad‑hoc notes. When a fact cannot be established from the repository or a confirmed decision, it is marked **NEEDS CONFIRMATION** rather than guessed.
 
-- **Last updated:** 2026-08-10
+- **Last updated:** 2026-08-19
 - **Product:** Salma — Arabic‑first (RTL) health & treatment news platform for Kuwait/GCC public + healthcare professionals.
 - **Stack (from `package.json`):** Next.js 16.2.9 (App Router), React 19.2.4, Supabase (`@supabase/ssr`, `@supabase/supabase-js`), TailwindCSS v4, `@dnd-kit` for admin ordering. AI ingestion runs inside the Supabase Edge Function `ingest-news` (Deno). AI via OpenRouter.
 - **Production Supabase project ref:** `ukraltlejlfkqbcifgcq`.
@@ -30,7 +30,7 @@ Priority tags: **before launch** / **after launch** / **optional**.
 |---|---|
 | Edge Function `ingest-news` | **v27, ACTIVE** |
 | Deployed commit | `8b60487ee6bd547b3d1e2c002c4dfa1465459433` (fix(ingestion): enforce full fidelity repair schema) |
-| Production web (Vercel) commit | `556965bfe40bf496f426bb4f9f76319ee2b79810` (feat(admin): add AI editorial review workflow) — **deployment Ready on `main`** |
+| Production web (Vercel) commit | `67c3c7e415128627129c3d2b0ff5bb977a529333` (feat(design): Apple‑design browser defaults, ≥44px hit targets, subtle card feedback) — **Vercel Production deployment `success` on `main`, 2026‑08‑19** (supersedes `556965b`; intervening Radar commits up to `31f8f3a` were already deployed) |
 | Editorial AI pipeline | trusted‑source → writer → Editorial Director → fidelity validation → constrained repair (≤1 LLM call) → final validation → **pending** |
 | BBC end‑to‑end production pilot | **Completed successfully** on v27 — accepted article ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8` |
 | `verify_jwt` | **false** (function does its own auth) |
@@ -238,10 +238,16 @@ Priority tags: **before launch** / **after launch** / **optional**.
 ### 20. Branding and design system
 - **Status:** IN PROGRESS — **before launch**
 - **Completed:** Tailwind v4 design tokens; coral accent; form‑control background polish; RTL Arabic‑first layout.
+- **Completed — Apple Design / browser‑platform polish phase: DONE (2026‑08‑19, commit `67c3c7e`, Vercel Production `success`).** Audited against the `apple-design` skill (Emil Kowalski) and shipped, frontend‑only:
+  - Browser defaults owned in `globals.css` — overridable defaults in `@layer base` (touch‑action manipulation, pointer cursor / no text‑selection on buttons, press feedback on `a`/`button`, `color-scheme: light`, smooth in‑page anchor scroll + `data-scroll-behavior` for the Next 16 router, `scrollbar-gutter: stable`, `font-synthesis: none`, anchor `scroll-margin-top`, brand `::selection`, `text-wrap: balance` on h1–h3, `overflow-wrap`); deliberately unlayered platform guarantees (`:focus-visible` ring that beats `outline-none`, 16px form controls on coarse pointers to stop iOS focus zoom, `.salma-focus-inset`/`.salma-focus-halo`); `prefers-reduced-motion` handling (ticker/pulse stop, ticker rail becomes scrollable, anchors jump); ticker pause on hover (hover‑capable only) and `:focus-within`; `theme-color` viewport export.
+  - Hit targets ≈44px with visual size and layout unchanged: header search/subscribe/logo/nav links, hero dots, SectionTitle action, ShareBar, comment submit, article category chip/credit/sources, contact mailto, doctors filter chips, breaking‑ticker headlines, footer links.
+  - Subtle card feedback (hover‑capable + motion‑safe only): 3% image zoom via `Cover zoom` prop (image branches only), title colour → teal, `group`/`isolate` on ContentCard/ListRow/SearchResultRow/VideoCard/HeroCard/HomeSection lead/RotatingHero; hero cross‑fade moved to a wrapper so slides get instant press feedback.
+  - Verified: desktop/tablet/mobile geometry identical to the previous HEAD (only the intended 16px‑input growth on touch), RTL/mixed‑script intact, focus rings visible incl. inside clipped surfaces, no console errors; `tsc`, `eslint` (changed files), `next build` clean.
+- **Deliberately deferred (design recommendations, not started):** translucent/blurred header material; hero swipe/gesture navigation (Embla); RatingForm star hit targets (doctor ratings postponed, WS 24); replacing the BreakingTicker marquee with a rotating/cross‑fade headline (current ticker concept stays).
 - **Remaining:** Consolidate design tokens/components; confirm exact homepage match to the reference design (`Salma Mobile Homepage.dc.html`). **NEEDS CONFIRMATION** whether the reference design was exported into the repo.
 - **Next action:** Obtain/confirm the canonical design reference; reconcile.
 - **Dependencies:** Design source from owner.
-- **Refs:** commit `91b86ed`; memory `project_salma.md`.
+- **Refs:** commits `91b86ed`, `67c3c7e`; memory `project_salma.md`; skill `~/.claude/skills/apple-design/SKILL.md`.
 
 ### 21. Domain and production launch
 - **Status:** NEEDS CONFIRMATION — **before launch**
@@ -362,6 +368,7 @@ Priority tags: **before launch** / **after launch** / **optional**.
 | 2026-08-10 | 9. Editorial audit persistence | NEXT | LATER BACKLOG | Full Editorial Director/fidelity audit persistence deferred; not required for the current basic human‑review workflow. |
 | 2026-08-10 | 10. Cron integration | IN PROGRESS (gated) | IN PROGRESS (design approved) | Approved **SALMA NEWS PRIORITY SCORE v1** (design only, not implemented): `0.60·IMPACT + 0.15·AUTHORITY + 0.15·RELEVANCE + 0.10·SAME‑RUN BREADTH` minus a thresholded Institutional‑PR penalty (0 at PR≤40, rising to −15 at PR=100); NEWS VALUE FIRST, geography a boost not a hierarchy; null‑Impact = UNRANKABLE (if all unrankable, select none); recency tie‑break only; breadth 0/50/75/100 for 1/2/3/4+ distinct registered credible domains; source‑fetch failure must not consume the single Writer slot (continue through extraction failures; slot consumed at Writer start; no second story after Writer/Editor/fidelity rejection; one Writer attempt/run); Heat/Coverage‑Velocity explicitly v2 replacing only the 10% breadth term; all AI content stays pending, explicit human publication required. |
 | 2026-08-10 | 5. News sources and ingestion | (expansion) | NEXT DESIGN TASK | Set **SALMA SOURCE UNIVERSE / SOURCE STRATEGY** as the next immediate design task: classify the source network into Discovery / Primary‑authoritative / Final‑source‑allowed media. Design only — no sources added or modified yet. |
+| 2026-08-19 | 20. Branding and design system (Apple Design / browser‑platform polish sub‑phase) | (local, uncommitted) | DONE — phase CLOSED | Apple‑design audit + fixes shipped in commit `67c3c7e` (Vercel Production `success`): browser defaults in `@layer base` + unlayered focus/iOS‑zoom guarantees, reduced‑motion support, ≥44px hit targets with zero layout shift, subtle motion‑safe card feedback. Radar/editorial/admin logic, schema, SEO, comments, transfers, auth untouched. Deferred: translucent header, hero swipe/Embla, rating‑star targets, ticker replacement. Categories work not started. |
 
 ---
 
