@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { useActionState, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { saveContent, setStatus, softDeleteContent, type ContentSaveResult } from "../../actions";
 import { generateCoverImage } from "../../image-actions";
@@ -69,6 +69,17 @@ export function ContentForm({
     setPrevState(state);
     if (state && "ok" in state) setDismissed(false);
   }
+
+  // Publication-readiness mirrors: kept in sync with the uncontrolled fields via
+  // onChange so the readiness banner + the no-cover publish guard react live.
+  const [titleVal, setTitleVal] = useState(content?.title ?? "");
+  const [categoryVal, setCategoryVal] = useState(content?.category_slug ?? "");
+  const [bodyVal, setBodyVal] = useState(content?.body ?? "");
+  const [statusVal, setStatusVal] = useState(content?.status ?? "draft");
+  const [noCoverConfirm, setNoCoverConfirm] = useState(false);
+  // When the admin explicitly confirms publishing without a cover, let the next
+  // submit through without re-prompting.
+  const bypassNoCover = useRef(false);
 
   // Cover
   const formRef = useRef<HTMLFormElement>(null);
@@ -155,14 +166,83 @@ export function ContentForm({
     }
   }
 
+  // Publication-readiness warnings (non-blocking): surfaced so a normal article
+  // is not published looking incomplete. A missing cover is highlighted because
+  // the editorial default is that a Salma article HAS a cover image.
+  const readiness = useMemo(() => {
+    const w: string[] = [];
+    if (!coverUrl) w.push("لا توجد صورة غلاف");
+    if (titleVal.trim().length < 4) w.push("عنوان فارغ");
+    if (bodyVal.trim().length < 40) w.push("محتوى غير مكتمل");
+    if (!categoryVal.trim()) w.push("لم يتم اختيار القسم");
+    return w;
+  }, [coverUrl, titleVal, bodyVal, categoryVal]);
+
+  // Guard: never SILENTLY publish an image-less article (the main editor form OR
+  // the quick «نشر الآن» shortcut). If a publish is requested with no cover, prompt
+  // once; the admin may deliberately continue. Remembers which form to resubmit.
+  const pendingForm = useRef<HTMLFormElement | null>(null);
+  function guardSubmit(e: React.FormEvent<HTMLFormElement>, isPublishing: boolean) {
+    if (bypassNoCover.current) { bypassNoCover.current = false; return; }
+    if (isPublishing && !coverUrl) {
+      e.preventDefault();
+      pendingForm.current = e.currentTarget;
+      setNoCoverConfirm(true);
+    }
+  }
+  function confirmPublishNoCover() {
+    setNoCoverConfirm(false);
+    bypassNoCover.current = true;
+    pendingForm.current?.requestSubmit();
+  }
+
   return (
     <>
-    <form ref={formRef} action={formAction} className="flex max-w-2xl flex-col gap-4">
+    {noCoverConfirm && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+        <div className="w-full max-w-md rounded-xl border border-line bg-white p-4 shadow-lg">
+          <div className="text-[14px] font-bold text-ink">نشر بدون صورة غلاف؟</div>
+          <p className="mt-1.5 text-[12.5px] leading-relaxed text-gray">
+            لا توجد صورة غلاف لهذا المقال. المقال الاعتيادي في سلمى يُنشر عادةً بصورة غلاف.
+            يمكنك إضافة صورة الآن، أو المتابعة والنشر بدون صورة بشكل صريح.
+          </p>
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setNoCoverConfirm(false)}
+              className="rounded-md border border-line px-3 py-1.5 text-[12.5px] font-semibold text-ink hover:bg-cream"
+            >
+              إضافة صورة أولًا
+            </button>
+            <button
+              type="button"
+              onClick={confirmPublishNoCover}
+              className="rounded-md bg-amber-600 px-3 py-1.5 text-[12.5px] font-bold text-white"
+            >
+              انشر بدون صورة
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    <form ref={formRef} action={formAction} onSubmit={(e) => guardSubmit(e, statusVal === "published")} className="flex max-w-2xl flex-col gap-4">
       {savedId ? <input type="hidden" name="id" value={savedId} /> : null}
+
+      {readiness.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900">
+          <span className="font-bold">تنبيهات الجاهزية للنشر:</span>{" "}
+          {readiness.join(" · ")}
+          {!coverUrl && (
+            <span className="mt-1 block text-[11.5px] text-amber-800">
+              المقال الاعتيادي في سلمى يجب أن يحتوي صورة غلاف. أضِف صورة قبل النشر، أو تابع النشر بدون صورة بشكل صريح.
+            </span>
+          )}
+        </div>
+      )}
 
       <label className={label}>
         العنوان
-        <input name="title" defaultValue={content?.title ?? ""} required className={field} />
+        <input name="title" defaultValue={content?.title ?? ""} onChange={(e) => setTitleVal(e.target.value)} required className={field} />
       </label>
 
       <div className="grid grid-cols-2 gap-3">
@@ -180,7 +260,7 @@ export function ContentForm({
         </label>
         <label className={label}>
           الحالة
-          <select name="status" defaultValue={content?.status ?? "draft"} className={field}>
+          <select name="status" defaultValue={content?.status ?? "draft"} onChange={(e) => setStatusVal(e.target.value)} className={field}>
             {STATUSES.map((s) => (
               <option key={s.v} value={s.v}>{s.l}</option>
             ))}
@@ -191,7 +271,7 @@ export function ContentForm({
       <div className="grid grid-cols-2 gap-3">
         <label className={label}>
           القسم
-          <select name="category_slug" defaultValue={content?.category_slug ?? ""} className={field}>
+          <select name="category_slug" defaultValue={content?.category_slug ?? ""} onChange={(e) => setCategoryVal(e.target.value)} className={field}>
             <option value="">— بدون —</option>
             {categories.map((c) => (
               <option key={c.slug} value={c.slug}>{c.name_ar}</option>
@@ -222,7 +302,7 @@ export function ContentForm({
 
       <label className={label}>
         النص
-        <textarea name="body" defaultValue={content?.body ?? ""} rows={8} className={field} />
+        <textarea name="body" defaultValue={content?.body ?? ""} onChange={(e) => setBodyVal(e.target.value)} rows={8} className={field} />
       </label>
 
       {/* COVER IMAGE (uploaded) + credit */}
@@ -610,7 +690,7 @@ export function ContentForm({
             العودة إلى قائمة المحتوى
           </Link>
           {saved.status !== "published" ? (
-            <form action={setStatus}>
+            <form action={setStatus} onSubmit={(e) => guardSubmit(e, true)}>
               <input type="hidden" name="id" value={saved.id} />
               <input type="hidden" name="status" value="published" />
               <button className="rounded-lg bg-teal px-4 py-2 text-[13px] font-bold text-white hover:opacity-90">

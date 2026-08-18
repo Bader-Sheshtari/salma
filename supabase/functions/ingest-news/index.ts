@@ -2031,18 +2031,41 @@ async function authorize(
 // the invoke returned 200, orphaning the row in 'processing'. The server action
 // now only latches 'processing' and reads back the terminal state we write.
 //
-// Terminal outcomes (mirror the previously server-action-owned semantics):
-//   (a) published      — content created AND clean → flip pending→published.
-//   (b) needs_review   — a real Content row exists but is not clean, OR a clean
-//                        row that was no longer 'pending' at publish time.
-//   (c) failed         — the pipeline stopped BEFORE any Content row (source
+// Two modes, selected by radar_publish_mode:
+//   "publish" (default) — the direct one-click path (نشر مباشر).
+//   "prepare"           — the editorial preparation path (تحرير في سلمى): create
+//                         the Content as `pending`, DON'T publish, leave the Radar
+//                         row 'draft' linked to it so a human edits then publishes.
+//
+// Terminal outcomes:
+//   (a) published      — publish mode, content clean AND has a cover image →
+//                        flip pending→published.
+//   (b) draft          — prepare mode (any content), OR publish mode when the
+//                        clean article has NO cover image (graceful fallback to
+//                        editorial review — NOT a failure). needs_cover marks the
+//                        missing-cover case for the UI.
+//   (c) needs_review   — publish mode, a real Content row exists but is not clean
+//                        (or was no longer 'pending' at publish time).
+//   (d) failed         — the pipeline stopped BEFORE any Content row (source
 //                        retrieval / Writer / Editor / Fidelity / validation).
 // A duplicate/existing-content match never reaches here: the server action
 // blocks it before invoking, so no run is started and no Content is created.
 type RadarPublishOutcome =
   | { status: "published"; content_id: string }
+  | { status: "draft"; content_id: string; needs_cover: boolean }
   | { status: "needs_review"; content_id: string; reason: string | null }
   | { status: "failed"; reason: string | null };
+
+/** True when the created Content row already carries a non-empty cover image. */
+async function contentHasCover(admin: SupabaseClient, contentId: string): Promise<boolean> {
+  const { data } = await admin
+    .from("content")
+    .select("cover_image_url")
+    .eq("id", contentId)
+    .maybeSingle();
+  const url = (data as { cover_image_url?: string | null } | null)?.cover_image_url ?? null;
+  return !!(url && String(url).trim());
+}
 
 // Write a terminal radar state, but ONLY for the row still owned by this
 // authorized run (publish_status = 'processing'). Scoping to 'processing'
@@ -2080,10 +2103,11 @@ async function finalizeRadarPublish(
   radarId: string,
   pilot: PilotReport | null,
   categorySlugInput: string | null,
+  mode: "publish" | "prepare",
 ): Promise<RadarPublishOutcome> {
   const contentId = pilot?.created_content_id ?? null;
 
-  // (c) No Content row → the pipeline stopped before creation. Retryable failed.
+  // (d) No Content row → the pipeline stopped before creation. Retryable failed.
   if (!contentId) {
     const reason = pilot?.rejection_reason ?? "no_content_created";
     await setRadarTerminal(admin, radarId, {
@@ -2094,8 +2118,21 @@ async function finalizeRadarPublish(
     return { status: "failed", reason };
   }
 
-  // (b) Content exists but not clean → leave it pending for human review, and
-  //     record needs_review WITH the content id (the card links to Content).
+  // (b-prepare) Editorial preparation: the pipeline produced a real Content row.
+  //     Leave it `pending` and mark the Radar row 'draft' linked to it — never
+  //     publish here. `needs_cover` marks a missing cover image for the UI.
+  if (mode === "prepare") {
+    const needsCover = !(await contentHasCover(admin, contentId));
+    await setRadarTerminal(admin, radarId, {
+      publish_status: "draft",
+      published_content_id: contentId,
+      publish_error: needsCover ? "needs_cover" : null,
+    });
+    return { status: "draft", content_id: contentId, needs_cover: needsCover };
+  }
+
+  // (c) Direct publish, content exists but not clean → leave it pending for human
+  //     review, and record needs_review WITH the content id (card links to Content).
   const clean = pilot?.needs_human_review === false && pilot?.fidelity?.decision === "clean";
   if (!clean) {
     const reason = pilot?.rejection_reason ?? "needs_human_review";
@@ -2107,9 +2144,22 @@ async function finalizeRadarPublish(
     return { status: "needs_review", content_id: contentId, reason };
   }
 
-  // (a) Clean → apply the optional category, then flip pending→published. Only a
-  //     'pending' row is ever published (mirrors setStatus); a non-pending row
-  //     is linked and left for review rather than force-published.
+  // (b-cover) Direct publish of a clean article WITHOUT a cover image → do NOT
+  //     publish an image-less article. Fall back to editorial review: keep the
+  //     Content `pending`, mark the Radar row 'draft' + needs_cover. This is a
+  //     graceful fallback, never a failure — the human adds a cover then publishes.
+  if (!(await contentHasCover(admin, contentId))) {
+    await setRadarTerminal(admin, radarId, {
+      publish_status: "draft",
+      published_content_id: contentId,
+      publish_error: "needs_cover",
+    });
+    return { status: "draft", content_id: contentId, needs_cover: true };
+  }
+
+  // (a) Clean AND has a cover → apply the optional category, then flip
+  //     pending→published. Only a 'pending' row is ever published (mirrors
+  //     setStatus); a non-pending row is linked and left for review.
   const categorySlug = await resolveRadarCategory(admin, categorySlugInput);
   const publishPatch: Record<string, unknown> = {
     status: "published",
@@ -2217,6 +2267,11 @@ Deno.serve(async (req: Request) => {
   const radarSourceLang = radarAuthorizedUrl
     ? asTrimmed((body as { radar_source_lang?: unknown })?.radar_source_lang)
     : null;
+  // Radar publish mode: "prepare" (تحرير في سلمى — create a draft for editing,
+  // never publish here) vs "publish" (نشر مباشر — the direct one-click path).
+  // Defaults to "publish" so existing callers are unchanged.
+  const radarPublishMode: "publish" | "prepare" =
+    (body as { radar_publish_mode?: unknown })?.radar_publish_mode === "prepare" ? "prepare" : "publish";
 
   // Radar row to finalize (terminal-state ownership). Present ONLY for an
   // authorized Radar one-click publish; a generic/cron/pilot request leaves it
@@ -2251,7 +2306,7 @@ Deno.serve(async (req: Request) => {
     // outcome is echoed back for the server action to map to its UI result.
     let radarPublish: RadarPublishOutcome | null = null;
     if (radarArticleId) {
-      radarPublish = await finalizeRadarPublish(admin, radarArticleId, pilot, radarCategorySlug);
+      radarPublish = await finalizeRadarPublish(admin, radarArticleId, pilot, radarCategorySlug, radarPublishMode);
     }
 
     return Response.json({ ok: true, writer_mode: writerMode, radar_publish: radarPublish, ...result });

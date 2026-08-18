@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   type RadarArticle,
   type RadarPriorityLevel,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/radar";
 import {
   publishRadarStory,
+  prepareRadarStory,
   translateRadarStory,
   getRadarPublishStates,
   type PublishRadarResult,
@@ -26,6 +28,7 @@ type Cat = { slug: string; name_ar: string };
 // unmistakable state without leaving the page or exposing raw internal codes.
 type PublishUi =
   | { kind: "published" } // ✅ تم النشر في سلمى — open the article
+  | { kind: "draft"; needsCover: boolean } // جاهز للتحرير — a draft Content exists, open it
   | { kind: "needs_review" } // ⚠️ يحتاج مراجعة — a Content row exists, open it
   | { kind: "already" } // موجود في سلمى — open the existing article
   | { kind: "rejected"; reason: string | null } // ⛔ pipeline stopped before Content — retry
@@ -113,12 +116,18 @@ export default function RadarInbox({
   const [dupe, setDupe] = useState<DupeMode>("opportunities");
   const [cat, setCat] = useState<string>("");
 
+  const router = useRouter();
+
   // Interaction state (details drawer, publish result, translation, category).
   const [openId, setOpenId] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  // The row + action currently running, so the card shows the right progress
+  // label (تجهيز المسودة vs النشر) and disables only that row's buttons.
+  const [busy, setBusy] = useState<{ id: string; mode: "prepare" | "publish" } | null>(null);
   const [, startTransition] = useTransition();
   const [pubUi, setPubUi] = useState<Record<string, PublishUi>>({});
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  // Possible-duplicate confirmation, remembering which action asked (so "continue
+  // anyway" re-runs the same primary/secondary action).
+  const [confirm, setConfirm] = useState<{ id: string; mode: "prepare" | "publish" } | null>(null);
   const [catOverride, setCatOverride] = useState<Record<string, string>>({});
   const [translation, setTranslation] = useState<Record<string, TranslationState>>({});
 
@@ -218,33 +227,56 @@ export default function RadarInbox({
 
   // Map the server result to a single clear card state. Raw internal reasons
   // (e.g. source_fetch_failed) are NEVER surfaced here — they stay in the logs.
-  function applyPublishResult(a: RadarArticle, res: PublishRadarResult) {
+  function applyPublishResult(a: RadarArticle, res: PublishRadarResult, mode: "prepare" | "publish") {
     const set = (ui: PublishUi) => setPubUi((m) => ({ ...m, [a.id]: ui }));
     if ("error" in res) { set({ kind: "info", msg: res.error }); return; }
     if ("ok" in res && res.ok) {
       if (res.status === "published" || res.status === "already_published") set({ kind: "published" });
+      else if (res.status === "draft") set({ kind: "draft", needsCover: res.needsCover });
       else if (res.status === "needs_review") set({ kind: "needs_review" });
       return;
     }
     if ("status" in res) {
-      if (res.status === "already_processing") set({ kind: "info", msg: "جارٍ النشر بالفعل…" });
+      if (res.status === "already_processing") set({ kind: "info", msg: "جارٍ التجهيز بالفعل…" });
       else if (res.status === "already_in_salma") set({ kind: "already" });
-      else if (res.status === "needs_confirmation") setConfirmId(a.id);
+      else if (res.status === "needs_confirmation") setConfirm({ id: a.id, mode });
       else if (res.status === "failed") set({ kind: "rejected", reason: res.reason });
     }
   }
 
+  // PRIMARY action: prepare a draft, then open the existing Content editor on it.
+  // Idempotent (an existing draft/published item is opened, never re-created).
+  function doPrepare(a: RadarArticle, confirmPossibleDuplicate = false) {
+    setBusy({ id: a.id, mode: "prepare" });
+    setPubUi((m) => { const n = { ...m }; delete n[a.id]; return n; });
+    startTransition(async () => {
+      const res = await prepareRadarStory(a.id, {
+        categorySlug: catOverride[a.id] ?? a.expected_category_slug ?? null,
+        confirmPossibleDuplicate,
+      });
+      applyPublishResult(a, res, "prepare");
+      setBusy(null);
+      setConfirm((c) => (c?.id === a.id ? null : c));
+      // On a prepared/existing draft, go straight to the editor to review/publish.
+      if ("ok" in res && res.ok && (res.status === "draft" || res.status === "needs_review")) {
+        router.push(`/admin/content/${res.contentId}`);
+      }
+    });
+  }
+
+  // SECONDARY action: direct publish. A clean article with no cover falls back to
+  // 'draft' (never an image-less publish) — shown on the card, not auto-opened.
   function doPublish(a: RadarArticle, confirmPossibleDuplicate = false) {
-    setBusyId(a.id);
+    setBusy({ id: a.id, mode: "publish" });
     setPubUi((m) => { const n = { ...m }; delete n[a.id]; return n; });
     startTransition(async () => {
       const res = await publishRadarStory(a.id, {
         categorySlug: catOverride[a.id] ?? a.expected_category_slug ?? null,
         confirmPossibleDuplicate,
       });
-      applyPublishResult(a, res);
-      setBusyId(null);
-      setConfirmId((c) => (c === a.id ? null : c));
+      applyPublishResult(a, res, "publish");
+      setBusy(null);
+      setConfirm((c) => (c?.id === a.id ? null : c));
     });
   }
 
@@ -316,7 +348,8 @@ export default function RadarInbox({
           <div className="space-y-2">
             {rows.map((a) => {
               const isOpen = openId === a.id;
-              const isBusy = busyId === a.id;
+              const isBusy = busy?.id === a.id;
+              const busyMode = isBusy ? busy!.mode : null;
               const ui = pubUi[a.id];
               // Effective state = persisted publish_status (authoritative after
               // revalidation), overlaid — ONLY while the server still says
@@ -329,28 +362,40 @@ export default function RadarInbox({
               const effError = live?.publish_error ?? a.publish_error;
               const effSlug = live?.slug ?? null;
               const hasContent = !!effContentId;
-              const published = effStatus === "published" || ui?.kind === "published";
+              // Publication is derived from the LINKED Content's status (the single
+              // source of truth): a 'draft' row whose Content was published in the
+              // editor shows as published without any content→radar write-back.
+              const linkedStatus = effContentId
+                ? (live?.content_status ?? contentLinks[effContentId]?.status ?? null)
+                : null;
+              const published = effStatus === "published" || linkedStatus === "published" || ui?.kind === "published";
               const processing = !published && (effStatus === "processing" || isBusy);
-              // Case 1 — a Content row exists and awaits human review. This is the
-              // ONLY case that shows the visible "needs review" state (+ its link).
-              const needsReview = !published && hasContent &&
+              // Prepared draft: a real Content item exists, kept `pending`, ready to
+              // edit. needsCover flags a missing cover image (publish_error marker).
+              const isDraft = !published && !processing && hasContent &&
+                (effStatus === "draft" || ui?.kind === "draft");
+              const needsCover = isDraft &&
+                (ui?.kind === "draft" ? ui.needsCover : effError === "needs_cover");
+              // Case 1 — a Content row exists and awaits human review (only via a
+              // direct publish of an unclean article). Distinct from a draft.
+              const needsReview = !published && !isDraft && hasContent &&
                 (effStatus === "needs_review" || ui?.kind === "needs_review");
               const alreadyInSalma = a.duplicate_status === "already_in_salma" || ui?.kind === "already";
               // Case 2 — the pipeline stopped BEFORE any Content row: source
               // retrieval failed, or Writer/Editor/Fidelity/validation rejected the
               // draft. Includes legacy rows persisted as 'needs_review' before this
               // fix (needs_review + null published_content_id).
-              const rejected = !published && !needsReview && (
+              const rejected = !published && !needsReview && !isDraft && (
                 effStatus === "failed" ||
                 ui?.kind === "rejected" ||
                 (effStatus === "needs_review" && !hasContent)
               );
               const rejectionReason = ui?.kind === "rejected" ? ui.reason : effError;
-              // Link targets: published → the public article; needs-review → the
-              // Content item; duplicate → the existing public article. Prefer the
-              // page-load link map, falling back to the slug from the live poll.
+              // Link targets: published → the public article; draft/needs-review →
+              // the Content editor; duplicate → the existing public article.
               const publishedArticleHref =
                 articleHref(effContentId) ?? (effSlug ? `/article/${effSlug}` : null);
+              const editorHref = effContentId ? `/admin/content/${effContentId}` : null;
               const existingArticleHref = articleHref(a.matched_content_id);
               const tr = translation[a.id];
               const selectedCat = catOverride[a.id] ?? a.expected_category_slug ?? "";
@@ -407,6 +452,11 @@ export default function RadarInbox({
                         منشور
                       </span>
                     )}
+                    {isDraft && (
+                      <span className="rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[11px] font-bold text-sky-700">
+                        مسودة
+                      </span>
+                    )}
                     {needsReview && (
                       <span className="rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold text-amber-700">
                         يحتاج مراجعة
@@ -453,11 +503,37 @@ export default function RadarInbox({
                           <Link href={publishedArticleHref} target="_blank" className="text-[12.5px] font-semibold text-teal underline">
                             فتح المقال ↗
                           </Link>
-                        ) : effContentId ? (
-                          <Link href={`/admin/content/${effContentId}`} className="text-[12.5px] font-semibold text-teal underline">
+                        ) : editorHref ? (
+                          <Link href={editorHref} className="text-[12.5px] font-semibold text-teal underline">
                             فتح في المحتوى ↗
                           </Link>
                         ) : null}
+                      </>
+                    ) : processing ? (
+                      <span className="rounded-lg border border-line bg-cream px-3 py-1.5 text-[12.5px] font-bold text-gray">
+                        {busyMode === "publish" ? "جاري النشر…" : "جاري تجهيز المسودة…"}
+                      </span>
+                    ) : isDraft ? (
+                      <>
+                        <span className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-[12.5px] font-bold text-sky-700">
+                          جاهز للتحرير{needsCover ? " — يحتاج صورة غلاف" : ""}
+                        </span>
+                        {editorHref && (
+                          <Link href={editorHref} className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-bold text-white">
+                            فتح المسودة
+                          </Link>
+                        )}
+                      </>
+                    ) : needsReview ? (
+                      <>
+                        <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12.5px] font-bold text-amber-700">
+                          ⚠️ يحتاج مراجعة
+                        </span>
+                        {editorHref && (
+                          <Link href={editorHref} className="text-[12.5px] font-semibold text-teal underline">
+                            فتح في المحتوى ↗
+                          </Link>
+                        )}
                       </>
                     ) : alreadyInSalma ? (
                       <>
@@ -474,45 +550,50 @@ export default function RadarInbox({
                           </Link>
                         ) : null}
                       </>
-                    ) : (
+                    ) : rejected ? (
                       <>
                         <button
                           type="button"
-                          disabled={isBusy || processing}
-                          onClick={() => doPublish(a)}
+                          disabled={isBusy}
+                          onClick={() => doPrepare(a)}
                           className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-50"
                         >
-                          {processing ? "جاري النشر…" : rejected ? "إعادة المحاولة" : "نشر في سلمى"}
+                          إعادة المحاولة
                         </button>
-                        {needsReview && (
-                          <>
-                            <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12.5px] font-bold text-amber-700">
-                              ⚠️ يحتاج مراجعة
-                            </span>
-                            {effContentId && (
-                              <Link href={`/admin/content/${effContentId}`} className="text-[12.5px] font-semibold text-teal underline">
-                                فتح في المحتوى ↗
-                              </Link>
-                            )}
-                          </>
-                        )}
-                        {rejected && (
-                          <>
-                            <span className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[12.5px] font-bold text-red-700">
-                              ⛔ لم يتم النشر — لم يجتز التحقق التحريري
-                            </span>
-                            <span className="text-[12px] text-gray">{rejectionMessage(rejectionReason)}</span>
-                            <a href={a.url ?? "#"} target="_blank" rel="noopener noreferrer" className="text-[12.5px] font-semibold text-teal underline">
-                              فتح المصدر الأصلي ↗
-                            </a>
-                          </>
-                        )}
+                        <span className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[12.5px] font-bold text-red-700">
+                          ⛔ لم يتم تجهيز المقال
+                        </span>
+                        <span className="text-[12px] text-gray">{rejectionMessage(rejectionReason)}</span>
+                        <a href={a.url ?? "#"} target="_blank" rel="noopener noreferrer" className="text-[12.5px] font-semibold text-teal underline">
+                          فتح المصدر الأصلي ↗
+                        </a>
+                      </>
+                    ) : (
+                      <>
+                        {/* PRIMARY: prepare a draft in the Content editor. */}
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => doPrepare(a)}
+                          className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-50"
+                        >
+                          تحرير في سلمى
+                        </button>
+                        {/* SECONDARY: direct publish (validated one-click pipeline). */}
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => doPublish(a)}
+                          className="rounded-lg border border-line bg-white px-3 py-1.5 text-[12px] font-semibold text-gray hover:bg-cream disabled:opacity-50"
+                        >
+                          نشر مباشر
+                        </button>
                       </>
                     )}
                   </div>
 
                   {/* Possible-duplicate confirmation. */}
-                  {confirmId === a.id && (
+                  {confirm?.id === a.id && (
                     <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[12.5px] text-amber-900">
                       قد يكون هذا الخبر مكررًا لخبر موجود في سلمى.
                       {a.matched_content_id && (
@@ -524,14 +605,14 @@ export default function RadarInbox({
                         <button
                           type="button"
                           disabled={isBusy}
-                          onClick={() => doPublish(a, true)}
+                          onClick={() => (confirm?.mode === "publish" ? doPublish(a, true) : doPrepare(a, true))}
                           className="rounded-md bg-amber-600 px-2.5 py-1 text-[12px] font-bold text-white disabled:opacity-50"
                         >
-                          انشر على أي حال
+                          {confirm?.mode === "publish" ? "انشر على أي حال" : "تابع التحرير على أي حال"}
                         </button>
                         <button
                           type="button"
-                          onClick={() => setConfirmId(null)}
+                          onClick={() => setConfirm(null)}
                           className="rounded-md border border-amber-300 px-2.5 py-1 text-[12px] font-semibold text-amber-800"
                         >
                           إلغاء

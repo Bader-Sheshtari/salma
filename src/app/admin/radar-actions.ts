@@ -19,6 +19,11 @@ import { requireAdmin } from "@/lib/auth";
 export type PublishRadarResult =
   // Terminal success: content created AND auto-published (all checks clean).
   | { ok: true; status: "published"; contentId: string }
+  // A Salma Content item was prepared (kept `pending`) and linked, ready for
+  // human editing in the Content editor. Produced by تحرير في سلمى, and by a
+  // direct publish whose clean article had NO cover image (graceful fallback).
+  // needsCover marks the missing-cover case so the UI can flag it.
+  | { ok: true; status: "draft"; contentId: string; needsCover: boolean }
   // Content created but stopped safely at pending (needs human review); it is in
   // the normal Content Inbox. Not published.
   | { ok: true; status: "needs_review"; contentId: string; reason: string | null }
@@ -42,6 +47,7 @@ type RadarPublishRow = {
   expected_category_slug: string | null;
   publish_status: string | null;
   published_content_id: string | null;
+  publish_error: string | null;
   publish_authorized_at: string | null;
   // Event Registry identifiers (trusted, from the stored radar row) used ONLY to
   // recover the EXACT SAME article's body when direct extraction fails, and to
@@ -56,23 +62,49 @@ type RadarPublishRow = {
 };
 
 /**
- * Publish exactly ONE Radar story to Salma with a single authenticated click.
- *
- * Flow (all reused from the existing pipeline, nothing bypassed editorially):
- *   1. Load the radar row; enforce duplicate safety (already_in_salma blocks;
- *      possible_duplicate requires confirmPossibleDuplicate).
- *   2. Idempotency latch: compare-and-swap publish_status → 'processing' ONLY
- *      from a retryable state (NULL/'needs_review'/'failed'). A losing racer /
- *      already-processing / already-published row does NOT start a second job.
- *   3. Run the ingest-news targeted pilot for this exact URL with a URL-scoped,
- *      admin-authorized source bypass (Writer v27 → Editorial Director →
- *      Fidelity, grounded on the ORIGINAL source, never on title_ar).
- *   4. Auto-publish ONLY when the pilot created content AND it is clean (no
- *      needs_human_review, fidelity decision 'clean'). Otherwise leave it at
- *      pending (needs review) in the normal Content Inbox — never force-publish.
+ * Prepare ONE Radar story for editing (تحرير في سلمى — the PRIMARY action).
+ * Runs the exact same source → Writer → Editorial Director → Fidelity pipeline as
+ * direct publish, but creates the Salma Content as `pending` and leaves the Radar
+ * row 'draft' linked to it, so the admin edits/publishes in the Content editor.
+ * Idempotent: an existing draft/published item is opened, never re-created.
+ */
+export async function prepareRadarStory(
+  radarId: string,
+  opts?: { categorySlug?: string | null; confirmPossibleDuplicate?: boolean },
+): Promise<PublishRadarResult> {
+  return runRadarPipeline(radarId, "prepare", opts);
+}
+
+/**
+ * Directly publish ONE Radar story (نشر مباشر — the SECONDARY fast action). Same
+ * pipeline; auto-publishes ONLY when the article is clean AND already has a cover
+ * image. A clean article with no cover falls back to 'draft' (never an image-less
+ * publish); an unclean article becomes 'needs_review'; a pre-Content rejection
+ * becomes 'failed'. Nothing editorial is bypassed.
  */
 export async function publishRadarStory(
   radarId: string,
+  opts?: { categorySlug?: string | null; confirmPossibleDuplicate?: boolean },
+): Promise<PublishRadarResult> {
+  return runRadarPipeline(radarId, "publish", opts);
+}
+
+/**
+ * Shared core for both Radar → Salma actions.
+ *
+ * Flow (all reused from the existing pipeline, nothing bypassed editorially):
+ *   1. Load the radar row; short-circuit terminal states (published/draft) so one
+ *      Radar story maps to exactly one Content item; enforce duplicate safety.
+ *   2. Idempotency latch: compare-and-swap publish_status → 'processing' ONLY
+ *      from a retryable state (NULL/'failed'/legacy needs_review+null). A losing
+ *      racer / already-processing / draft / published row does NOT start a job.
+ *   3. Run the ingest-news targeted pilot for this exact URL with a URL-scoped,
+ *      admin-authorized source bypass, passing radar_publish_mode.
+ *   4. ingest-news owns the terminal write; we map the returned outcome.
+ */
+async function runRadarPipeline(
+  radarId: string,
+  mode: "publish" | "prepare",
   opts?: { categorySlug?: string | null; confirmPossibleDuplicate?: boolean },
 ): Promise<PublishRadarResult> {
   const admin = await requireAdmin();
@@ -85,7 +117,7 @@ export async function publishRadarStory(
   // 1) Load the radar row + enforce duplicate safety.
   const { data: rowData, error: rowErr } = await svc
     .from("radar_shadow_articles")
-    .select("id,url,duplicate_status,matched_content_id,expected_category_slug,publish_status,published_content_id,publish_authorized_at,provider,provider_uri,source_title,language")
+    .select("id,url,duplicate_status,matched_content_id,expected_category_slug,publish_status,published_content_id,publish_error,publish_authorized_at,provider,provider_uri,source_title,language")
     .eq("id", id)
     .maybeSingle();
   if (rowErr) return { error: "تعذّر قراءة الخبر." };
@@ -94,6 +126,20 @@ export async function publishRadarStory(
 
   if (row.publish_status === "published") {
     return { ok: true, status: "already_published", contentId: row.published_content_id };
+  }
+  // A prepared draft already exists → open it; never create a second Content item
+  // or re-run the pipeline (double-click / refresh / repeat call all land here).
+  if (row.publish_status === "draft" && row.published_content_id) {
+    return {
+      ok: true,
+      status: "draft",
+      contentId: row.published_content_id,
+      needsCover: row.publish_error === "needs_cover",
+    };
+  }
+  // A real needs_review item (Content exists) is also terminal — open it.
+  if (row.publish_status === "needs_review" && row.published_content_id) {
+    return { ok: true, status: "needs_review", contentId: row.published_content_id, reason: row.publish_error };
   }
   if (row.publish_status === "processing") {
     // Self-recovery: a row can only remain 'processing' if a run was genuinely
@@ -160,6 +206,9 @@ export async function publishRadarStory(
         pilot_source_url: row.url,
         radar_authorized_source: true,
         radar_article_id: id,
+        // "prepare" (تحرير في سلمى) creates a draft; "publish" (نشر مباشر) is the
+        // direct path. ingest-news owns the terminal write for both.
+        radar_publish_mode: mode,
         radar_category_slug: opts?.categorySlug ?? row.expected_category_slug ?? null,
         // Exact-article source fallback + original-publisher preservation. These
         // are read from the trusted radar row above (never client input) and are
@@ -192,6 +241,9 @@ export async function publishRadarStory(
         revalidatePath("/");
         return { ok: true, status: "published", contentId: rp.content_id };
       }
+      if (rp.status === "draft") {
+        return { ok: true, status: "draft", contentId: rp.content_id, needsCover: rp.needs_cover };
+      }
       if (rp.status === "needs_review") {
         return { ok: true, status: "needs_review", contentId: rp.content_id, reason: rp.reason };
       }
@@ -212,6 +264,7 @@ export async function publishRadarStory(
  *  the created Content row; reason is an internal code (may be null). */
 type EdgeRadarPublish =
   | { status: "published"; content_id: string }
+  | { status: "draft"; content_id: string; needs_cover: boolean }
   | { status: "needs_review"; content_id: string; reason: string | null }
   | { status: "failed"; reason: string | null };
 
@@ -243,6 +296,11 @@ async function reconcileAfterInvoke(
     return r.published_content_id
       ? { ok: true, status: "published", contentId: r.published_content_id }
       : { ok: true, status: "already_published", contentId: null };
+  }
+  if (r?.publish_status === "draft" && r.published_content_id) {
+    revalidatePath("/admin/radar");
+    revalidatePath("/admin/content");
+    return { ok: true, status: "draft", contentId: r.published_content_id, needsCover: r.publish_error === "needs_cover" };
   }
   if (r?.publish_status === "needs_review" && r.published_content_id) {
     revalidatePath("/admin/radar");
@@ -295,8 +353,12 @@ export type RadarPublishState = {
   publish_status: string | null;
   published_content_id: string | null;
   publish_error: string | null;
-  // Slug of the linked content row (published/needs_review), for the UI link.
+  // Slug of the linked content row (draft/needs_review/published), for the UI link.
   slug: string | null;
+  // Status of the linked content row. The Radar UI derives "published" from this
+  // (single source of truth for publication) so a 'draft' row whose Content was
+  // published in the editor shows ✅ + فتح المقال without a content→radar write.
+  content_status: string | null;
 };
 
 /**
@@ -335,21 +397,26 @@ export async function getRadarPublishStates(
     publish_error: string | null;
   }[];
 
-  // Resolve slugs for the linked content rows so the card can link directly.
+  // Resolve slug + status for the linked content rows (link target + published
+  // derivation for a draft row whose Content was published in the editor).
   const contentIds = [...new Set(rows.map((r) => r.published_content_id).filter((x): x is string => !!x))];
-  const slugById: Record<string, string> = {};
+  const contentById: Record<string, { slug: string; status: string }> = {};
   if (contentIds.length > 0) {
-    const { data: cRows } = await svc.from("content").select("id,slug").in("id", contentIds);
-    for (const c of (cRows ?? []) as { id: string; slug: string }[]) slugById[c.id] = c.slug;
+    const { data: cRows } = await svc.from("content").select("id,slug,status").in("id", contentIds);
+    for (const c of (cRows ?? []) as { id: string; slug: string; status: string }[]) {
+      contentById[c.id] = { slug: c.slug, status: c.status };
+    }
   }
 
   const out: Record<string, RadarPublishState> = {};
   for (const r of rows) {
+    const linked = r.published_content_id ? contentById[r.published_content_id] ?? null : null;
     out[r.id] = {
       publish_status: r.publish_status,
       published_content_id: r.published_content_id,
       publish_error: r.publish_error,
-      slug: r.published_content_id ? slugById[r.published_content_id] ?? null : null,
+      slug: linked?.slug ?? null,
+      content_status: linked?.status ?? null,
     };
   }
   return out;
