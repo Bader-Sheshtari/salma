@@ -293,6 +293,188 @@ export function normalizeNumberToken(token: string): string {
   return stripped === "" ? "0" : stripped;
 }
 
+// --- Locale- and scale-aware numeric grounding -----------------------------
+//
+// A figure is "supported" when its NUMERIC VALUE appears in the source, even if
+// the two sides write it with different formatting conventions. This corrects a
+// class of false positives where a faithful Arabic draft renders a grouped
+// source figure with a scale word ("330,000" → "330 ألف") or where a European
+// source uses period-thousands / comma-decimals ("15.000" = 15000, "1,5" = 1.5).
+// It never loosens the safeguard: a value genuinely absent from the source (in
+// ANY convention) still yields `unsupported_number`, and any token that cannot
+// be interpreted unambiguously fails CLOSED (treated as unsupported), never as a
+// permissive match. The validator remains the authority.
+
+/** Separator convention for interpreting a SOURCE figure. `en` = comma
+ *  thousands + period decimal (English/Arabic digital text and the safe default
+ *  when the language is unknown); `eu` = period thousands + comma decimal
+ *  (Spanish/German/Italian/… ). Draft (always Arabic) is parsed as `en`. */
+export type NumberLocale = "en" | "eu";
+
+// ISO-639 (2/3-letter) languages that use the European convention (comma decimal,
+// period/space thousands). Best-effort and deliberately conservative: an unknown
+// or unmapped language falls back to `en`, which reproduces the previous
+// comma-as-thousands behaviour and never corrupts a token (ambiguous groupings
+// fail closed rather than being coerced).
+const EU_NUMBER_LANGS = new Set([
+  "es", "spa", "pt", "por", "de", "deu", "ger", "it", "ita", "fr", "fra", "fre",
+  "nl", "nld", "dut", "ro", "ron", "rum", "ru", "rus", "el", "ell", "gre",
+  "ca", "cat", "gl", "glg", "pl", "pol", "cs", "ces", "cze", "sk", "slk", "slo",
+  "sl", "slv", "hr", "hrv", "sr", "srp", "bg", "bul", "uk", "ukr", "hu", "hun",
+  "tr", "tur", "da", "dan", "sv", "swe", "nb", "no", "nor", "fi", "fin", "is", "isl",
+]);
+
+/** Map a source language code to its numeric separator convention. */
+export function numberLocaleForLang(lang?: string | null): NumberLocale {
+  const l = (lang ?? "").trim().toLowerCase();
+  return EU_NUMBER_LANGS.has(l) ? "eu" : "en";
+}
+
+// Adjacent scale words that multiply the immediately preceding figure. Arabic
+// (ألف/مليون/مليار + common plurals and the hamza-less spelling) and English
+// (thousand/million/billion, optionally plural). No other multipliers, no
+// rounding, no inferred arithmetic.
+const SCALE_WORDS: { re: RegExp; exp: number }[] = [
+  { re: /^(?:ألف|آلاف|الف|آلآف)$/u, exp: 3 },
+  { re: /^(?:مليون|ملايين)$/u, exp: 6 },
+  { re: /^(?:مليار|مليارات|بليون)$/u, exp: 9 },
+  { re: /^thousands?$/i, exp: 3 },
+  { re: /^millions?$/i, exp: 6 },
+  { re: /^billions?$/i, exp: 9 },
+];
+
+function scaleExponent(word: string | undefined): number {
+  if (!word) return 0;
+  for (const s of SCALE_WORDS) if (s.re.test(word)) return s.exp;
+  return 0;
+}
+
+/** Canonical decimal string: strip insignificant leading/trailing zeros so
+ *  "0330"→"330", "2.50"→"2.5", "15.0"→"15". Keeps a literal zero. */
+function canonicalDecimal(intDigits: string, frac: string): string {
+  let i = intDigits.replace(/^0+(?=\d)/, "");
+  if (i === "") i = "0";
+  const f = frac.replace(/0+$/, "");
+  return f ? `${i}.${f}` : i;
+}
+
+/** Shift a canonical decimal right by `exp` places (×10^exp) using string
+ *  arithmetic so no floating-point error is introduced. */
+function applyScale(canon: string, exp: number): string {
+  if (exp === 0) return canon;
+  const [ipRaw, fpRaw = ""] = canon.split(".");
+  let ip = ipRaw;
+  let fp = fpRaw;
+  if (fp.length <= exp) {
+    ip = ip + fp + "0".repeat(exp - fp.length);
+    fp = "";
+  } else {
+    ip = ip + fp.slice(0, exp);
+    fp = fp.slice(exp);
+  }
+  return canonicalDecimal(ip, fp);
+}
+
+/**
+ * Parse one numeric token (digits + separators, already digit-folded) into its
+ * canonical numeric value under `locale`, or null when the representation is
+ * ambiguous / malformed for that locale (fail closed). Thousands groups must be
+ * exactly three digits; at most one decimal separator is allowed.
+ */
+export function parseNumberToken(token: string, locale: NumberLocale): string | null {
+  if (!/^[0-9]+(?:[.,][0-9]+)*$/.test(token)) return null;
+  const thou = locale === "eu" ? "." : ",";
+  const dec = locale === "eu" ? "," : ".";
+  const decCount = (token.match(dec === "." ? /\./g : /,/g) ?? []).length;
+  if (decCount > 1) return null; // more than one decimal separator → invalid
+
+  let intPart = token;
+  let fracPart = "";
+  if (decCount === 1) {
+    const idx = token.lastIndexOf(dec);
+    intPart = token.slice(0, idx);
+    fracPart = token.slice(idx + 1);
+    if (!/^[0-9]+$/.test(fracPart)) return null; // decimal digits only (no thousands after a decimal)
+  }
+
+  const thouRe = thou === "." ? /\./g : /,/g;
+  const thouCount = (intPart.match(thouRe) ?? []).length;
+  if (thouCount > 0) {
+    const groups = intPart.split(thou === "." ? "." : ",");
+    if (groups.length < 2) return null;
+    if (!/^[0-9]{1,3}$/.test(groups[0])) return null;
+    for (let i = 1; i < groups.length; i++) {
+      if (!/^[0-9]{3}$/.test(groups[i])) return null; // invalid grouping → fail closed
+    }
+    intPart = groups.join("");
+  } else if (!/^[0-9]+$/.test(intPart)) {
+    return null;
+  }
+  return canonicalDecimal(intPart, fracPart);
+}
+
+/**
+ * Scan `text` for numeric figures (each with an optional adjacent scale word)
+ * and return, per figure, the raw numeric token as written and its canonical
+ * value (null when unparseable/ambiguous). Arabic-Indic digits and the Arabic
+ * thousands/decimal separators (٬ ٫) are folded first so both sides compare
+ * equal. Used to require every generated figure's VALUE to exist in the source.
+ */
+export function extractNumberEntries(
+  text: string,
+  locale: NumberLocale,
+): { raw: string; value: string | null }[] {
+  const folded = foldDigits(text ?? "")
+    .replace(/٬/g, ",") // Arabic thousands separator
+    .replace(/٫/g, "."); // Arabic decimal separator
+  const re =
+    /(\d[\d.,]*)\s*(ألف|آلاف|الف|آلآف|مليون|ملايين|مليار|مليارات|بليون|thousands?|millions?|billions?)?/giu;
+  const out: { raw: string; value: string | null }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(folded)) !== null) {
+    if (!m[1]) {
+      if (m.index === re.lastIndex) re.lastIndex++;
+      continue;
+    }
+    const raw = m[1].replace(/[.,]+$/, ""); // drop a trailing sentence separator
+    let value = parseNumberToken(raw, locale);
+    const exp = scaleExponent(m[2]);
+    if (value !== null && exp > 0) value = applyScale(value, exp);
+    out.push({ raw, value });
+  }
+  return out;
+}
+
+/** PII-free diagnostic for one unsupported figure — logged (Deno runtime only,
+ *  silent under `node --test`) so a real rejection can be proven, not inferred.
+ *  Records ONLY numeric tokens/values, the source language, and normalization
+ *  state — never article text, drafts, or quotes. */
+function logNumberDiagnostic(d: {
+  token: string;
+  tokenValue: string | null;
+  sourceValues: string[];
+  sourceLang: string | null;
+  locale: NumberLocale;
+}): void {
+  if (typeof Deno === "undefined") return; // no-op in unit tests
+  try {
+    console.warn(
+      "[num-fidelity] " +
+        JSON.stringify({
+          code: "unsupported_number",
+          token: d.token,
+          token_value: d.tokenValue,
+          normalization_attempted: true,
+          source_lang: d.sourceLang,
+          number_locale: d.locale,
+          source_values: d.sourceValues.slice(0, 40),
+        }),
+    );
+  } catch {
+    // diagnostics must never affect validation
+  }
+}
+
 /** Extract quoted spans (Arabic «…», ASCII "…", curly “…”). */
 export function extractQuotes(text: string): string[] {
   const out: string[] = [];
@@ -818,22 +1000,39 @@ export function foreignEssentialNameStatus(input: {
  */
 export function checkFactGrounding(
   article: { title: string; excerpt: string; body: string },
-  source: { sourceText: string; mustPreserve?: string[] },
+  source: { sourceText: string; mustPreserve?: string[]; sourceLang?: string | null },
   profile: WritingProfile,
 ): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
   const generated = `${article.title}\n${article.excerpt}\n${article.body}`;
   const srcNorm = normalizeForCompare(source.sourceText);
-  const srcNumbers = new Set(extractNumbers(source.sourceText).map(normalizeNumberToken));
 
-  // 1) Every generated number/date must exist in the verified source material.
-  //    Compared with leading zeros normalized so an ISO date component
-  //    (e.g. `01`/`09` in `2026-09-01`) matches the same day/month written
-  //    without padding in the Arabic body ("1 سبتمبر 2026").
-  for (const n of extractNumbers(generated)) {
-    if (!srcNumbers.has(normalizeNumberToken(n))) {
-      errors.push(`unsupported_number:${n}`);
+  // 1) Every generated figure's VALUE must exist in the verified source, compared
+  //    across formatting conventions: the source is read with its own locale's
+  //    separators (Spanish "15.000" = 15000, "1,5" = 1.5), the draft (Arabic) with
+  //    the English convention, and an adjacent Arabic/English scale word is folded
+  //    in ("330 ألف" = 330000) so a faithful rendering of a grouped source figure
+  //    matches. Leading zeros are still normalized so an ISO date component
+  //    (`01`/`09` in `2026-09-01`) matches "1 سبتمبر 2026". A value genuinely
+  //    absent in ANY convention, or a token that cannot be parsed unambiguously,
+  //    still yields `unsupported_number` (fail closed) — the safeguard is intact.
+  const sourceLocale = numberLocaleForLang(source.sourceLang);
+  const srcNumbers = new Set(
+    extractNumberEntries(source.sourceText, sourceLocale)
+      .map((e) => e.value)
+      .filter((v): v is string => v !== null),
+  );
+  for (const entry of extractNumberEntries(generated, "en")) {
+    if (entry.value === null || !srcNumbers.has(entry.value)) {
+      errors.push(`unsupported_number:${entry.raw}`);
+      logNumberDiagnostic({
+        token: entry.raw,
+        tokenValue: entry.value,
+        sourceValues: [...srcNumbers],
+        sourceLang: source.sourceLang ?? null,
+        locale: sourceLocale,
+      });
     }
   }
 
@@ -1301,7 +1500,15 @@ const MIN_BODY_WORDS = 25; // shorter than this is not a real article for any pr
  */
 export function validateArticle(input: {
   article: { title: string; excerpt: string; body: string; profile?: WritingProfile };
-  source: { sourceText: string; originalTitle?: string | null; brand?: string | null; mustPreserve?: string[] };
+  source: {
+    sourceText: string;
+    originalTitle?: string | null;
+    brand?: string | null;
+    mustPreserve?: string[];
+    // Source language (ISO code) for locale-aware numeric grounding. Optional;
+    // absent → English convention (safe default). See numberLocaleForLang.
+    sourceLang?: string | null;
+  };
 }): ArticleValidation {
   const { article, source } = input;
   const profile = selectProfile({ explicit: article.profile ?? null, sourceText: source.sourceText });

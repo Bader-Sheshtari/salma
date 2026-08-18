@@ -19,6 +19,9 @@ import {
   extractNumbers,
   extractQuotes,
   checkFactGrounding,
+  numberLocaleForLang,
+  parseNumberToken,
+  extractNumberEntries,
   extractOfficialActions,
   officialActionsByAudience,
   hasUnaffectedBatchStatement,
@@ -319,6 +322,96 @@ test("validateArticle accepts a worded Arabic date grounded in an ISO source", (
   });
   assert.equal(v.ok, true, v.errors.join(","));
   assert.ok(!v.errors.some((e) => e.startsWith("unsupported_number")), v.errors.join(","));
+});
+
+// --- locale- and scale-aware numeric grounding -----------------------------
+//
+// A figure is supported when its VALUE appears in the source across formatting
+// conventions (thousands/decimal separators + Arabic/English scale words). A
+// genuinely absent value, or an ambiguous token, still rejects (fail closed).
+// `fg(draft, source, lang?)` returns the unsupported_number codes only.
+function numErrors(bodyDraft: string, sourceText: string, sourceLang?: string | null): string[] {
+  const { errors } = checkFactGrounding(
+    { title: "عنوان اختباري مناسب الطول", excerpt: "", body: bodyDraft },
+    { sourceText, sourceLang: sourceLang ?? null },
+    "standard_news",
+  );
+  return errors.filter((e) => e.startsWith("unsupported_number"));
+}
+
+// ---- Should MATCH (no unsupported_number) ----
+test("num: EN 330,000 source ↔ Arabic draft 330 ألف", () => {
+  assert.deepEqual(numErrors("خصّت الدراسة نحو 330 ألف حالة.", "The study covered around 330,000 cases.", "eng"), []);
+});
+test("num: ES 15.000 (period-thousands) ↔ Arabic draft 15 ألف", () => {
+  assert.deepEqual(numErrors("شخّصت نحو 15 ألف حالة.", "diagnosticó unas 15.000 enfermedades.", "spa"), []);
+});
+test("num: EN 1,000,000 ↔ Arabic draft 1 مليون", () => {
+  assert.deepEqual(numErrors("أُصيب نحو 1 مليون شخص.", "About 1,000,000 people were affected.", "eng"), []);
+});
+test("num: EN 2,500,000 ↔ Arabic draft 2.5 مليون", () => {
+  assert.deepEqual(numErrors("بلغ العدد 2.5 مليون.", "The figure reached 2,500,000.", "eng"), []);
+});
+test("num: EN decimal 1.5 ↔ draft 1.5", () => {
+  assert.deepEqual(numErrors("ارتفاع بنسبة 1.5 نقطة.", "a rise of 1.5 points.", "eng"), []);
+});
+test("num: ES decimal 1,5 ↔ draft 1.5 (no 1,5→15 corruption)", () => {
+  assert.deepEqual(numErrors("بنسبة 1.5 بالمئة.", "en un 1,5 por ciento.", "spa"), []);
+});
+test("num: Arabic-Indic digits in draft match Western source", () => {
+  assert.deepEqual(numErrors("سجّلت ١٥٠٠ إصابة.", "recorded 1500 infections.", "eng"), []);
+});
+test("num: exactly-supported percentage passes", () => {
+  assert.deepEqual(numErrors("شُخّص 23% من الحالات.", "23% of the studied cases were diagnosed.", "eng"), []);
+});
+test("num: billion scale word — 3 billion ↔ 3 مليار", () => {
+  assert.deepEqual(numErrors("نحو 3 مليار نسمة.", "around 3 billion people.", "eng"), []);
+});
+
+// ---- Should FAIL (unsupported_number) ----
+test("num: draft 330 ألف with no 330,000-equivalent in source rejects", () => {
+  assert.ok(numErrors("نحو 330 ألف حالة.", "The study covered many thousands of cases.", "eng").length > 0);
+});
+test("num: source 330,000 but draft 350 ألف rejects", () => {
+  const e = numErrors("نحو 350 ألف حالة.", "around 330,000 cases.", "eng");
+  assert.ok(e.includes("unsupported_number:350"), e.join(","));
+});
+test("num: source 15,000 but draft 15 مليون rejects (wrong scale)", () => {
+  const e = numErrors("نحو 15 مليون حالة.", "around 15,000 cases.", "eng");
+  assert.ok(e.includes("unsupported_number:15"), e.join(","));
+});
+test("num: genuinely invented decimal rejects", () => {
+  assert.ok(numErrors("ارتفاع بنسبة 7.3 نقطة.", "a modest rise was reported.", "eng").length > 0);
+});
+test("num: ambiguous token that cannot be safely interpreted fails closed", () => {
+  // EN convention: "1,50" is neither a valid thousands group nor an EN decimal → null → rejected.
+  const e = numErrors("قيمة 1,50 وحدة.", "the value was exactly 1.5 units.", "eng");
+  assert.ok(e.length > 0, e.join(","));
+});
+
+// ---- Locale/scale unit helpers ----
+test("num: numberLocaleForLang maps languages then defaults to en", () => {
+  assert.equal(numberLocaleForLang("spa"), "eu");
+  assert.equal(numberLocaleForLang("deu"), "eu");
+  assert.equal(numberLocaleForLang("eng"), "en");
+  assert.equal(numberLocaleForLang("ara"), "en");
+  assert.equal(numberLocaleForLang(null), "en");
+  assert.equal(numberLocaleForLang("xx"), "en");
+});
+test("num: parseNumberToken respects locale and fails closed on ambiguity", () => {
+  assert.equal(parseNumberToken("330,000", "en"), "330000");
+  assert.equal(parseNumberToken("330,000", "eu"), "330"); // 330.0 in EU
+  assert.equal(parseNumberToken("15.000", "eu"), "15000");
+  assert.equal(parseNumberToken("15.000", "en"), "15"); // 15.000 == 15 in EN
+  assert.equal(parseNumberToken("1,5", "eu"), "1.5");
+  assert.equal(parseNumberToken("1,5", "en"), null); // invalid grouping → fail closed
+  assert.equal(parseNumberToken("2.500.000,50", "eu"), "2500000.5");
+});
+test("num: extractNumberEntries folds an adjacent scale word into the value", () => {
+  const e = extractNumberEntries("نحو 2.5 مليون شخص و330 ألف حالة", "en");
+  const values = e.map((x) => x.value);
+  assert.ok(values.includes("2500000"), JSON.stringify(e));
+  assert.ok(values.includes("330000"), JSON.stringify(e));
 });
 
 // --- strict structured-output parsing (Step 10) ----------------------------

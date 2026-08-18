@@ -688,6 +688,10 @@ async function writeArticle(input: {
   registeredDomain: string | null;
   // Verified: the titles the web plugin actually returned as url_citations.
   citationTitles: string[];
+  // Source language (ISO code) for locale-aware numeric grounding — supplied for
+  // the Radar path (from the trusted radar row); null for generic Discovery,
+  // where the numeric validator falls back to the English convention.
+  sourceLang?: string | null;
 }): Promise<WriterOutcome> {
   const originalTitle = input.discovery.originalTitle ?? "";
 
@@ -756,6 +760,9 @@ async function writeArticle(input: {
         originalTitle,
         brand: input.sourceName ?? null,
         mustPreserve,
+        // Locale-aware numeric grounding: interpret the source's separators with
+        // its own language (null → English convention). Draft is always Arabic.
+        sourceLang: input.sourceLang ?? null,
       },
     });
     return { ok: v.ok, errors: v.errors, cleanTitle: v.cleanTitle, readMinutes: v.readMinutes };
@@ -1151,6 +1158,11 @@ async function runIngestion(
     radarErProvider?: string | null;
     radarErProviderUri?: string | null;
     radarSourceTitle?: string | null;
+    // Source language (ISO code) from the TRUSTED radar row, honored ONLY with a
+    // valid radarAuthorizedUrl. Feeds locale-aware numeric grounding so a European
+    // source's period-thousands / comma-decimals are read correctly. Cron/legacy
+    // never set it → the validator uses the English-convention default.
+    radarSourceLang?: string | null;
   } = {},
 ): Promise<RunStats & { pilot?: PilotReport }> {
   const trigger = opts.trigger ?? "manual";
@@ -1676,6 +1688,10 @@ async function runIngestion(
           sourceName: chosen.source?.name ?? item.citation.title ?? null,
           registeredDomain,
           citationTitles: [item.citation.title].filter((t): t is string => !!t),
+          // Locale-aware numeric grounding: the trusted radar-row language, used
+          // ONLY for the exact admin-authorized URL (same scope as the ER
+          // fallback). Every other candidate passes null → English convention.
+          sourceLang: chosen.url === radarAuthorizedUrl ? (opts.radarSourceLang ?? null) : null,
         }),
     });
     if (!grounded.ok) {
@@ -2196,6 +2212,11 @@ Deno.serve(async (req: Request) => {
   const radarSourceTitle = radarAuthorizedUrl
     ? asTrimmed((body as { radar_source_title?: unknown })?.radar_source_title)
     : null;
+  // Source language (ISO code) from the trusted radar row, for locale-aware
+  // numeric grounding. Honored ONLY alongside a valid URL-scoped authorization.
+  const radarSourceLang = radarAuthorizedUrl
+    ? asTrimmed((body as { radar_source_lang?: unknown })?.radar_source_lang)
+    : null;
 
   // Radar row to finalize (terminal-state ownership). Present ONLY for an
   // authorized Radar one-click publish; a generic/cron/pilot request leaves it
@@ -2218,6 +2239,7 @@ Deno.serve(async (req: Request) => {
       radarErProvider,
       radarErProviderUri,
       radarSourceTitle,
+      radarSourceLang,
     });
     // The pilot report (if any) is present only because runIngestion returned
     // normally, i.e. AFTER the mandatory audit persisted. It carries operational

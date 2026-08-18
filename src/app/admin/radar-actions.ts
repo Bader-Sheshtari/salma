@@ -50,6 +50,9 @@ type RadarPublishRow = {
   provider: string | null;
   provider_uri: string | null;
   source_title: string | null;
+  // Original source language (ISO code), forwarded so ingest-news reads the
+  // source's numbers with the correct locale (locale-aware numeric grounding).
+  language: string | null;
 };
 
 /**
@@ -82,7 +85,7 @@ export async function publishRadarStory(
   // 1) Load the radar row + enforce duplicate safety.
   const { data: rowData, error: rowErr } = await svc
     .from("radar_shadow_articles")
-    .select("id,url,duplicate_status,matched_content_id,expected_category_slug,publish_status,published_content_id,publish_authorized_at,provider,provider_uri,source_title")
+    .select("id,url,duplicate_status,matched_content_id,expected_category_slug,publish_status,published_content_id,publish_authorized_at,provider,provider_uri,source_title,language")
     .eq("id", id)
     .maybeSingle();
   if (rowErr) return { error: "تعذّر قراءة الخبر." };
@@ -164,6 +167,8 @@ export async function publishRadarStory(
         radar_provider: row.provider,
         radar_provider_uri: row.provider_uri,
         radar_source_title: row.source_title,
+        // Source language → locale-aware numeric grounding in the validator.
+        radar_source_lang: row.language,
       },
       headers: { Authorization: `Bearer ${token}` },
     });
