@@ -69,6 +69,10 @@ type Brief = {
   category?: string;
   sourceName?: string;
   country?: string;
+  // Whether the article already has a preserved ORIGINAL source image (a real
+  // publisher photo). Lets the planner recommend using it when it is the
+  // strongest, most credible editorial cover for a real-world-anchored story.
+  hasSourceImage?: boolean;
 };
 
 // One planned editorial cover concept, grounded in what actually happened in the
@@ -86,6 +90,12 @@ type Concept = {
   must_avoid: string[];
   proposed_visual_direction: string;
   concept_summary: string;
+  // Source-aware recommendation: true when the article has a strong real-world
+  // anchor (a specific named person/company/hospital/product, or a powerful human
+  // moment) whose ORIGINAL source image would be a stronger, more credible cover
+  // than a generated concept. Only meaningful when a source image exists.
+  prefer_source_image: boolean;
+  source_image_reason: string;
 };
 
 // Text models for the editorial-visual planning step (NOT image models). Fast
@@ -180,17 +190,22 @@ function truncate(s: string | undefined, n: number): string {
 function plannerSystem(quality: Quality): string {
   return [
     "You are the editorial visual director for «سلمى», an independent Arabic health-news publication.",
-    "Your job: read a news article and design distinct COVER-IMAGE CONCEPTS that truthfully represent the SPECIFIC development in the article.",
-    "Think first: WHAT ACTUALLY HAPPENED in this story? Then: what is the strongest TRUTHFUL editorial visual for that development?",
-    "The concept must come from the real subject of the article — e.g. the specific cells/biological mechanism, disease, organ, drug, diagnostic, medical imaging, device, procedure capability, laboratory or scientific idea, healthcare infrastructure/service, or public-health environment discussed — NOT a generic 'healthcare-looking' scene.",
-    "People are NOT the default. Decide people_needed honestly: use people only when a human scene genuinely communicates THIS story; otherwise depict the real subject with no people.",
-    "Never propose: office meetings, conference rooms, handshakes, executives around a table, people at laptops, staged doctors, a doctor holding a tablet, meaningless hospital corridors, generic healthcare stock, generic blue futuristic holograms or AI-brain imagery, or a company name/logo as the main subject — UNLESS the article is specifically about that.",
+    "Your job: choose THE SINGLE STRONGEST editorial COVER for a SPECIFIC article — the way a top photo editor picks a magazine cover — not merely 'a nice image about the topic'.",
+    "Think first: WHAT ACTUALLY HAPPENED in this story, and what is the human or real-world stake? Then: what one image would make a reader instantly feel this belongs to THIS article and want to read it?",
+    "Ground the concept in the real subject of THIS story — the specific people affected, the real place, the actual development, the specific cells/mechanism/organ/drug/device/diagnostic/service/institution discussed.",
+    "IMPORTANT — do not default to safe symbolic abstractions. Do NOT make the MAIN subject a floating vaccine vial or bottle, a map, a giant mosquito, syringes on a plain background, an abstract infographic/chart scene, or a generic 'science' motif UNLESS that object is genuinely the strongest possible cover for this exact story. Such elements may appear as SUPPORTING detail, not as the lazy default hero.",
+    "When the strongest story is HUMAN — e.g. a vaccine that protects real children, a community affected by a disease, patients who benefit — a strong, dignified, real-world human moment is often the best cover; prefer it over a symbolic object when it tells the story better. (Represent people respectfully and generically; never a specific identifiable real individual.)",
+    "People are still a DECISION, not a reflex: use people when the human stake is the story; use the real object/mechanism/place when THAT is the story. Either way, pick the most evocative, specific, truthful image.",
+    "Never propose as the hero: office meetings, conference rooms, handshakes, executives around a table, people at laptops, staged doctors, a doctor holding a tablet, meaningless hospital corridors, generic healthcare stock, generic blue futuristic holograms or AI-brain imagery, or a company name/logo as the main subject — UNLESS the article is specifically about that.",
     "Do not add Gulf/Kuwaiti clothing or region-specific people as decoration; regional context matters only when the story is actually about a place/people.",
-    "Editorial honesty: concepts are illustrative/conceptual, never fake documentary evidence — no real named people, no staged fake events, no fabricated clinical results.",
+    "Editorial honesty: concepts are illustrative/conceptual, never fake documentary evidence — no specific real named person, no staged fake events, no fabricated clinical results.",
+    // Source-aware: when a real-world anchor + an original source image exist,
+    // recommend using that real image instead of forcing a generated concept.
+    "SOURCE-AWARENESS: if the article is anchored to a concrete real-world entity — a named company, a named person, a specific hospital/institution, a specific product, or a powerful documented human situation — AND an original source (publisher) image is available, a real photograph is usually MORE credible and editorially stronger than an invented illustration. In that case set prefer_source_image=true with a one-line source_image_reason. If no source image is available, or the story is best served by a conceptual/scientific illustration, set prefer_source_image=false. You still design a full concept regardless (it is a fallback/alternative).",
     quality === "premium"
-      ? "This is a PREMIUM cover: be more ambitious and original — sophisticated composition, conceptual visualization, scientific/subject detail, editorial metaphor and visual hierarchy — while staying truthful to the article."
-      : "This is a FAST cover: one strong, relevant, concrete visual direction grounded in the article; efficient but never generic.",
-    "Return STRICT JSON only, matching exactly: {\"concepts\":[{\"story_type\":string,\"what_happened\":string,\"core_visual_fact\":string,\"key_entities\":string[],\"real_world_subject\":string,\"geographic_relevance\":string,\"people_needed\":boolean,\"must_show\":string[],\"must_avoid\":string[],\"proposed_visual_direction\":string,\"concept_summary\":string}]}.",
+      ? "This is a PREMIUM cover: be more ambitious and original — sophisticated composition, real-world specificity, conceptual visualization, editorial metaphor and clear visual hierarchy — striking but always truthful to the article."
+      : "This is a FAST cover: one strong, specific, story-true visual direction; efficient but never generic.",
+    "Return STRICT JSON only, matching exactly: {\"concepts\":[{\"story_type\":string,\"what_happened\":string,\"core_visual_fact\":string,\"key_entities\":string[],\"real_world_subject\":string,\"geographic_relevance\":string,\"people_needed\":boolean,\"must_show\":string[],\"must_avoid\":string[],\"proposed_visual_direction\":string,\"concept_summary\":string,\"prefer_source_image\":boolean,\"source_image_reason\":string}]}.",
     "concept_summary is a short (<=12 words) label of the visual idea. proposed_visual_direction is 1-2 vivid sentences an image model can render.",
   ].join(" ");
 }
@@ -205,6 +220,9 @@ function plannerUser(brief: Brief, count: number, avoid: string[]): string {
     brief.category ? `Category: ${brief.category}` : "",
     brief.sourceName ? `Original source/publisher: ${brief.sourceName}` : "",
     brief.country ? `Geographic context from the story: ${brief.country}` : "",
+    brief.hasSourceImage
+      ? "An ORIGINAL source (publisher) image IS available for this article — consider recommending it (prefer_source_image=true) if it is the strongest, most credible cover."
+      : "No original source image is available — do not recommend one (prefer_source_image=false).",
   ].filter(Boolean);
   const avoidLine = avoid.length
     ? `\n\nAlready-used concepts to AVOID (choose materially different visual directions — different subject, composition and storytelling, not a rearrangement): ${avoid.map((a) => `“${a}”`).join(", ")}.`
@@ -246,6 +264,8 @@ function parseConcepts(text: string): Concept[] {
       must_avoid: strArr(c.must_avoid),
       proposed_visual_direction: String(c.proposed_visual_direction ?? "").slice(0, 500),
       concept_summary: String(c.concept_summary ?? "").slice(0, 120),
+      prefer_source_image: c.prefer_source_image === true,
+      source_image_reason: String(c.source_image_reason ?? "").slice(0, 200),
     };
   });
 }
@@ -272,6 +292,8 @@ function fallbackConcepts(brief: Brief, count: number): Concept[] {
     must_avoid: [],
     proposed_visual_direction: dirs[i % dirs.length],
     concept_summary: (brief.title ?? base).slice(0, 80),
+    prefer_source_image: false,
+    source_image_reason: "",
   }));
 }
 
@@ -559,6 +581,7 @@ Deno.serve(async (req: Request) => {
   const category = field(body, "category");
   const sourceName = field(body, "source_name");
   const country = field(body, "country");
+  const hasSourceImage = (body as { has_source_image?: unknown })?.has_source_image === true;
 
   // Regeneration diversity: concise concept summaries already generated in this
   // editor session; the planner is told to explore materially different ideas.
@@ -616,6 +639,7 @@ Deno.serve(async (req: Request) => {
     category,
     sourceName,
     country,
+    hasSourceImage,
   };
   const model = modelFor(quality);
 
@@ -656,7 +680,16 @@ Deno.serve(async (req: Request) => {
   // Meter only the images we actually produced.
   await completeReservation(admin, reservation.id, auth.userId, "succeeded", candidates.length, null);
   const urls = candidates.map((c) => c.url);
+
+  // Source-aware recommendation: if any planned concept judged the ORIGINAL
+  // source image the stronger cover (only possible when one exists), surface that
+  // as a non-binding hint so the editor can prefer «الصورة الأصلية».
+  const rec = concepts.find((c) => c.prefer_source_image && hasSourceImage);
+  const recommendation = rec
+    ? { prefer_source_image: true, reason: rec.source_image_reason }
+    : { prefer_source_image: false, reason: "" };
+
   // `candidates` carries per-image concept metadata; `urls`/`url` stay for
   // backward-compatible callers.
-  return Response.json({ ok: true, candidates, urls, url: urls[0] });
+  return Response.json({ ok: true, candidates, urls, url: urls[0], recommendation });
 });

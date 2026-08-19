@@ -7,8 +7,12 @@ import { createClient } from "@/lib/supabase/server";
  *  (used for the editor's session gallery and regeneration avoid-history). */
 export type ImageCandidate = { url: string; conceptSummary: string; mode: "fast" | "premium" };
 
+/** Non-binding editorial hint: the planner judged the ORIGINAL source image the
+ *  stronger cover for this real-world-anchored story (only when one exists). */
+export type SourceImageRecommendation = { preferSourceImage: boolean; reason: string };
+
 export type GenerateImageResult =
-  | { ok: true; urls: string[]; candidates: ImageCandidate[] }
+  | { ok: true; urls: string[]; candidates: ImageCandidate[]; recommendation: SourceImageRecommendation }
   | { error: string };
 
 /**
@@ -36,6 +40,9 @@ export async function generateCoverImage(input: {
   // Concept summaries already generated this editor session — the planner steers
   // each new request toward a materially different visual direction.
   avoidConcepts?: string[];
+  // Whether the article has a preserved ORIGINAL source image, so the planner may
+  // recommend using it when it is the stronger, more credible cover.
+  hasSourceImage?: boolean;
 }): Promise<GenerateImageResult> {
   await requireAdmin();
 
@@ -71,6 +78,7 @@ export async function generateCoverImage(input: {
       avoid_concepts: Array.isArray(input.avoidConcepts)
         ? input.avoidConcepts.map((s) => String(s ?? "").trim().slice(0, 120)).filter(Boolean).slice(0, 12)
         : [],
+      has_source_image: input.hasSourceImage === true,
     },
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -126,5 +134,11 @@ export async function generateCoverImage(input: {
     ? candidates
     : urls.map((url) => ({ url, conceptSummary: "", mode: quality }));
 
-  return { ok: true, urls, candidates: finalCandidates };
+  const rawRec = (data.recommendation ?? {}) as Record<string, unknown>;
+  const recommendation: SourceImageRecommendation = {
+    preferSourceImage: rawRec.prefer_source_image === true,
+    reason: typeof rawRec.reason === "string" ? rawRec.reason : "",
+  };
+
+  return { ok: true, urls, candidates: finalCandidates, recommendation };
 }
