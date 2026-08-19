@@ -65,9 +65,12 @@ import {
 import {
   fetchSourceText,
   groundedWrite,
+  isBlockedHostname,
+  NEUTRAL_USER_AGENT,
   type RawResponse,
   type SourceFetchResult,
   type SourceText,
+  validateResolvedAddresses,
 } from "./fetchSourceText.ts";
 import { type ErPost, fetchErArticleSource } from "./erSourceFallback.ts";
 import {
@@ -964,6 +967,126 @@ function dedupeKeyFromUrl(url: string): string | null {
 
 // Fetches the real article page and extracts its OpenGraph/Twitter cover
 // image. Returns null on any failure so ingestion never blocks on images.
+// ---- Official-asset retrieval (bounded, SSRF-safe) ----------------------
+//
+// For the Content editor's «صورة من المصدر الرسمي» path: given URLs ALREADY
+// linked to an article (its source_url / content_sources — never open-web
+// discovery), inspect each authoritative page and surface its author-declared
+// hero/brand image (og:image / twitter:image / og:logo) as a selectable cover
+// candidate. Reuses the SAME SSRF hardening as source extraction (blocked-host
+// list + DNS resolution check) — no duplicated security logic, no crawling.
+
+type OfficialAsset = {
+  imageUrl: string;
+  sourceUrl: string;
+  sourceName: string;
+  assetType: "official_source" | "official_logo";
+  attribution: string;
+};
+
+/** Conservative reject of obviously-unsuitable images (favicons, sprites,
+ *  tracking pixels, tiny icons, vector icons, data URIs). We only ever read
+ *  author-declared meta images to begin with, so this is a belt-and-suspenders. */
+function isUsableAssetImage(u: string): boolean {
+  const low = u.toLowerCase();
+  if (low.startsWith("data:")) return false;
+  if (/\.svg(\?|#|$)/.test(low)) return false;
+  if (/\.ico(\?|#|$)/.test(low)) return false;
+  if (/favicon|sprite|spacer|tracking|beacon|1x1|pixel\.|\/pixel/.test(low)) return false;
+  if (/(^|[^0-9])(16x16|24x24|32x32|48x48)([^0-9]|$)/.test(low)) return false;
+  return true;
+}
+
+/** Fetch ONE already-known authoritative page and return its declared official
+ *  image(s). SSRF-safe: http(s) only, blocked-host check, and a DNS-resolution
+ *  classification that must be "safe" before any fetch. Best-effort — any
+ *  failure (blocked, unreachable, no image) yields []. */
+async function fetchOfficialAssetsFrom(
+  url: string,
+  label: string,
+  resolveDns: (h: string) => Promise<string[]>,
+): Promise<OfficialAsset[]> {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return [];
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return [];
+  if (isBlockedHostname(u.hostname)) return [];
+  const cls = await validateResolvedAddresses(u.hostname, resolveDns).catch(() => "unsafe" as const);
+  if (cls !== "safe") return [];
+
+  let html: string;
+  try {
+    const res = await fetch(u.href, {
+      headers: { "User-Agent": NEUTRAL_USER_AGENT },
+      signal: AbortSignal.timeout(8000),
+      redirect: "follow",
+    });
+    if (!res.ok) return [];
+    if (!/text\/html|application\/xhtml/i.test(res.headers.get("content-type") ?? "")) return [];
+    html = (await res.text()).slice(0, 200000);
+  } catch {
+    return [];
+  }
+
+  const name = label || u.hostname.replace(/^www\./, "");
+  const grab = (re: RegExp): string | undefined => html.match(re)?.[1];
+  const out: OfficialAsset[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string | undefined, assetType: OfficialAsset["assetType"]) => {
+    if (!raw) return;
+    let abs: string;
+    try {
+      abs = new URL(raw.trim(), u.href).href;
+    } catch {
+      return;
+    }
+    if (seen.has(abs) || !isUsableAssetImage(abs)) return;
+    seen.add(abs);
+    out.push({ imageUrl: abs, sourceUrl: u.href, sourceName: name, assetType, attribution: name });
+  };
+
+  // Hero image (page-author declared) — preferred.
+  push(
+    grab(/<meta[^>]+property=["']og:image:secure_url["'][^>]+content=["']([^"']+)["']/i) ??
+      grab(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ??
+      grab(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i),
+    "official_source",
+  );
+  push(grab(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i), "official_source");
+  // Logo — supporting fallback only (never preferred over a hero image).
+  push(grab(/<meta[^>]+property=["']og:logo["'][^>]+content=["']([^"']+)["']/i), "official_logo");
+  return out;
+}
+
+/** Extract official assets from a bounded set of already-known authoritative
+ *  URLs. Deduped by image URL; capped. Never throws into the request path. */
+async function extractOfficialAssets(
+  items: { url: string; label: string }[],
+  resolveDns: (h: string) => Promise<string[]>,
+): Promise<OfficialAsset[]> {
+  const seenUrls = new Set<string>();
+  const targets = items
+    .filter((it) => it.url && !seenUrls.has(it.url) && seenUrls.add(it.url))
+    .slice(0, 8);
+  const results = await Promise.all(
+    targets.map((t) => fetchOfficialAssetsFrom(t.url, t.label, resolveDns).catch(() => [])),
+  );
+  const out: OfficialAsset[] = [];
+  const seenImg = new Set<string>();
+  for (const arr of results) {
+    for (const a of arr) {
+      if (seenImg.has(a.imageUrl)) continue;
+      seenImg.add(a.imageUrl);
+      out.push(a);
+      if (out.length >= 8) return out;
+    }
+  }
+  return out;
+}
+
 async function fetchCoverImage(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, {
@@ -2218,6 +2341,28 @@ Deno.serve(async (req: Request) => {
   // unauthorized request already returned 401 above and can never reach here.
   // This does NOT read or change OPENROUTER_MODEL or any writer-model secret.
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
+
+  // Bounded official-asset retrieval op (Content editor «صورة من المصدر الرسمي»).
+  // Admin-only (never cron), read-only, and scoped to URLs the caller already has
+  // for the article (its source/content_sources). Reuses the SSRF-safe fetch and
+  // returns declared official images; never runs the ingestion pipeline. Any
+  // failure yields an empty list — it must never break the editor.
+  if ((body as { op?: unknown })?.op === "source_assets") {
+    if (trigger !== "manual") {
+      return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
+    const rawUrls = Array.isArray((body as { urls?: unknown }).urls) ? (body as { urls: unknown[] }).urls : [];
+    const items = rawUrls
+      .map((x) => {
+        const o = (x ?? {}) as Record<string, unknown>;
+        return { url: String(o.url ?? "").trim().slice(0, 2000), label: String(o.label ?? "").trim().slice(0, 160) };
+      })
+      .filter((it) => it.url)
+      .slice(0, 8);
+    const assets = await extractOfficialAssets(items, denoResolveDns).catch(() => []);
+    return Response.json({ ok: true, assets });
+  }
+
   const gate = resolvePilotGate({
     authorized: true,
     requestedMode: (body as { writer_mode?: unknown })?.writer_mode,

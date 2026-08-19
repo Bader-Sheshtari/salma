@@ -3,7 +3,12 @@
 import { useActionState, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { saveContent, setStatus, softDeleteContent, type ContentSaveResult } from "../../actions";
-import { generateCoverImage, type ImageCandidate } from "../../image-actions";
+import {
+  generateCoverImage,
+  fetchOfficialAssets,
+  type ImageCandidate,
+  type OfficialAsset,
+} from "../../image-actions";
 import { uploadToMedia } from "@/lib/upload";
 import type { Content, ContentSource, ContentMedia, Category } from "@/lib/queries";
 
@@ -105,6 +110,12 @@ export function ContentForm({
   // The ORIGINAL source image (publisher), persisted separately from the cover.
   // Always available as a selectable candidate; never overwritten by AI/upload.
   const originalImageUrl = content?.source_image_url ?? "";
+  // Official images pulled from authoritative pages ALREADY linked to the article
+  // (retrieval ≠ selection — they only appear as candidates until clicked).
+  const [officialAssets, setOfficialAssets] = useState<OfficialAsset[]>([]);
+  const [officialBusy, setOfficialBusy] = useState(false);
+  const [officialError, setOfficialError] = useState("");
+  const [officialFetched, setOfficialFetched] = useState(false);
 
   // Media gallery
   const [items, setItems] = useState<MediaItem[]>(
@@ -191,6 +202,40 @@ export function ContentForm({
       setAiError("تعذّر توليد الصور، حاول مرة أخرى.");
     } finally {
       setAiBusy(false);
+    }
+  }
+
+  // Already-known authoritative URLs for this article (its source links). NEVER
+  // open-web discovery — only URLs already associated with the content.
+  const knownSourceUrls = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { url: string; label: string }[] = [];
+    const add = (url?: string | null, label?: string | null) => {
+      const u = String(url ?? "").trim();
+      if (/^https?:\/\//i.test(u) && !seen.has(u)) { seen.add(u); out.push({ url: u, label: String(label ?? "").trim() }); }
+    };
+    for (const r of rows) add(r.url, r.label);
+    add(content?.source_url, content?.source_name);
+    add(content?.original_url, content?.source_name);
+    return out;
+  }, [rows, content?.source_url, content?.original_url, content?.source_name]);
+
+  async function handleFetchOfficial() {
+    setOfficialError("");
+    setOfficialBusy(true);
+    try {
+      const r = await fetchOfficialAssets({ urls: knownSourceUrls });
+      if ("ok" in r) {
+        // Dedupe against the original image so it isn't listed twice.
+        setOfficialAssets(r.assets.filter((a) => a.imageUrl !== originalImageUrl));
+        setOfficialFetched(true);
+      } else {
+        setOfficialError(r.error);
+      }
+    } catch {
+      setOfficialError("تعذّر جلب الصور الرسمية.");
+    } finally {
+      setOfficialBusy(false);
     }
   }
 
@@ -383,6 +428,17 @@ export function ContentForm({
                 ? "توليد صورة أخرى ✨"
                 : "توليد صورة بالذكاء الاصطناعي ✨"}
           </button>
+          {knownSourceUrls.length > 0 ? (
+            <button
+              type="button"
+              onClick={handleFetchOfficial}
+              disabled={officialBusy || aiBusy || coverBusy}
+              title="يفحص صفحات المصادر الرسمية المرتبطة بالخبر ويعرض صورها الرسمية — دون بحث عام على الويب"
+              className="rounded-lg border border-line px-4 py-2 text-[13px] font-semibold text-ink hover:bg-cream disabled:opacity-60"
+            >
+              {officialBusy ? "جارٍ الجلب…" : "جلب صور من المصادر الرسمية"}
+            </button>
+          ) : null}
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] font-semibold text-gray">الوضع:</span>
             <div className="inline-flex overflow-hidden rounded-lg border border-line text-[12px] font-semibold">
@@ -456,7 +512,11 @@ export function ContentForm({
             )}
           </div>
         ) : null}
-        {(originalImageUrl || aiCandidates.length > 0) ? (
+        {officialError ? <div className="mt-2 text-[12px] text-coral">{officialError}</div> : null}
+        {officialFetched && officialAssets.length === 0 && !officialBusy ? (
+          <div className="mt-2 text-[11px] text-gray">لم تُعثر على صورة رسمية قابلة للاستخدام في صفحات المصادر المرتبطة.</div>
+        ) : null}
+        {(originalImageUrl || officialAssets.length > 0 || aiCandidates.length > 0) ? (
           <div className="mt-3">
             <div className="mb-2 text-[11px] font-semibold text-gray">اختر صورة الغلاف:</div>
             <div className="grid grid-cols-3 gap-2">
@@ -482,6 +542,34 @@ export function ContentForm({
                   ) : null}
                 </button>
               ) : null}
+              {/* Official images from authoritative source pages ALREADY linked to
+                  the article. Retrieval ≠ selection: selectable, never auto-set. */}
+              {officialAssets.map((a) => {
+                const selected = a.imageUrl === coverUrl;
+                return (
+                  <button
+                    key={a.imageUrl}
+                    type="button"
+                    onClick={() => setCoverUrl(a.imageUrl)}
+                    aria-pressed={selected}
+                    title={`${a.assetType === "official_logo" ? "شعار رسمي" : "صورة رسمية"} — ${a.attribution || a.sourceName}`}
+                    className={`relative overflow-hidden rounded-lg border-2 transition ${
+                      selected ? "border-teal ring-2 ring-teal/30" : "border-emerald-300 hover:border-emerald-400"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={a.imageUrl} alt={a.attribution || "صورة رسمية"} className="aspect-[16/9] w-full object-cover" />
+                    <span className="absolute top-1 right-1 max-w-[95%] truncate rounded bg-emerald-700/90 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                      {a.assetType === "official_logo" ? "شعار رسمي" : "المصدر الرسمي"}{a.sourceName ? ` · ${a.sourceName}` : ""}
+                    </span>
+                    {selected ? (
+                      <span className="absolute bottom-1 left-1 rounded bg-teal px-1.5 py-0.5 text-[10px] font-bold text-white">
+                        الغلاف ✓
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
               {/* Session AI candidates — NEWEST FIRST; the latest generation is
                   badged «جديدة». Clicking a candidate is what sets the cover. */}
               {aiCandidates.map((c, i) => {

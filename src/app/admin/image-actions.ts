@@ -148,3 +148,68 @@ export async function generateCoverImage(input: {
 
   return { ok: true, urls, candidates: finalCandidates, recommendation };
 }
+
+// --- Official-asset retrieval from already-known authoritative article URLs ---
+
+/** One official image found on an authoritative page ALREADY linked to the
+ *  article. Retrieval ≠ selection: these are surfaced as candidates only. */
+export type OfficialAsset = {
+  imageUrl: string;
+  sourceUrl: string;
+  sourceName: string;
+  assetType: "official_source" | "official_logo";
+  attribution: string;
+};
+
+export type OfficialAssetsResult = { ok: true; assets: OfficialAsset[] } | { error: string };
+
+/**
+ * Inspect the authoritative pages ALREADY linked to this article (its source
+ * URLs / content_sources — passed in by the trusted editor, never open-web
+ * discovery) and return their declared official images as selectable cover
+ * candidates. The SSRF-safe fetch + extraction runs inside the ingest-news Edge
+ * Function (reusing its hardening). Best-effort: on any failure it returns an
+ * empty list so the editor never breaks.
+ */
+export async function fetchOfficialAssets(input: {
+  urls: { url: string; label?: string }[];
+}): Promise<OfficialAssetsResult> {
+  await requireAdmin();
+
+  const seen = new Set<string>();
+  const urls = (Array.isArray(input.urls) ? input.urls : [])
+    .map((u) => ({ url: String(u?.url ?? "").trim(), label: String(u?.label ?? "").trim() }))
+    .filter((u) => /^https?:\/\//i.test(u.url) && !seen.has(u.url) && seen.add(u.url))
+    .slice(0, 8);
+  if (urls.length === 0) return { ok: true, assets: [] };
+
+  const supabase = await createClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) return { error: "انتهت الجلسة. سجّل الدخول مرة أخرى." };
+
+  const { data, error } = await supabase.functions.invoke("ingest-news", {
+    body: { op: "source_assets", urls },
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (error || !data || data.ok === false) return { error: "تعذّر جلب الصور الرسمية من المصادر." };
+
+  const raw: unknown[] = Array.isArray(data.assets) ? data.assets : [];
+  const assets: OfficialAsset[] = raw
+    .map((a): OfficialAsset | null => {
+      const o = (a ?? {}) as Record<string, unknown>;
+      const imageUrl = typeof o.imageUrl === "string" ? o.imageUrl : "";
+      if (!imageUrl) return null;
+      return {
+        imageUrl,
+        sourceUrl: typeof o.sourceUrl === "string" ? o.sourceUrl : "",
+        sourceName: typeof o.sourceName === "string" ? o.sourceName : "",
+        assetType: o.assetType === "official_logo" ? "official_logo" : "official_source",
+        attribution: typeof o.attribution === "string" ? o.attribution : "",
+      };
+    })
+    .filter((a): a is OfficialAsset => a !== null);
+  return { ok: true, assets };
+}
