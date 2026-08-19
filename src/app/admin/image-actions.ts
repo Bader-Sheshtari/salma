@@ -151,13 +151,14 @@ export async function generateCoverImage(input: {
 
 // --- Official-asset retrieval from already-known authoritative article URLs ---
 
-/** One official image found on an authoritative page ALREADY linked to the
- *  article. Retrieval ≠ selection: these are surfaced as candidates only. */
+/** One image found on a page ALREADY linked to the article (its source_url /
+ *  content_sources). This is a SOURCE-page image — NOT necessarily the entity's
+ *  official website — so it is typed/labeled neutrally. Retrieval ≠ selection. */
 export type OfficialAsset = {
   imageUrl: string;
   sourceUrl: string;
   sourceName: string;
-  assetType: "official_source" | "official_logo";
+  assetType: "source_image" | "source_logo";
   attribution: string;
 };
 
@@ -206,7 +207,7 @@ export async function fetchOfficialAssets(input: {
         imageUrl,
         sourceUrl: typeof o.sourceUrl === "string" ? o.sourceUrl : "",
         sourceName: typeof o.sourceName === "string" ? o.sourceName : "",
-        assetType: o.assetType === "official_logo" ? "official_logo" : "official_source",
+        assetType: o.assetType === "source_logo" ? "source_logo" : "source_image",
         attribution: typeof o.attribution === "string" ? o.attribution : "",
       };
     })

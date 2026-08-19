@@ -976,11 +976,16 @@ function dedupeKeyFromUrl(url: string): string | null {
 // candidate. Reuses the SAME SSRF hardening as source extraction (blocked-host
 // list + DNS resolution check) — no duplicated security logic, no crawling.
 
+// NOTE: a URL linked to an article (content_sources / source_url) is a
+// SOURCE page (often a news outlet like CNN/Reuters), NOT necessarily the
+// entity's official website. We therefore do NOT claim officialness: assets are
+// typed neutrally as a source-page image or a source-page logo, and attribution
+// names the source page they came from.
 type OfficialAsset = {
   imageUrl: string;
   sourceUrl: string;
   sourceName: string;
-  assetType: "official_source" | "official_logo";
+  assetType: "source_image" | "source_logo";
   attribution: string;
 };
 
@@ -1053,11 +1058,11 @@ async function fetchOfficialAssetsFrom(
     grab(/<meta[^>]+property=["']og:image:secure_url["'][^>]+content=["']([^"']+)["']/i) ??
       grab(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ??
       grab(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i),
-    "official_source",
+    "source_image",
   );
-  push(grab(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i), "official_source");
-  // Logo — supporting fallback only (never preferred over a hero image).
-  push(grab(/<meta[^>]+property=["']og:logo["'][^>]+content=["']([^"']+)["']/i), "official_logo");
+  push(grab(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i), "source_image");
+  // A declared logo on the source page — supporting fallback only.
+  push(grab(/<meta[^>]+property=["']og:logo["'][^>]+content=["']([^"']+)["']/i), "source_logo");
   return out;
 }
 

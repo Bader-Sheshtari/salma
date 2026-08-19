@@ -117,6 +117,23 @@ export function ContentForm({
   const [officialError, setOfficialError] = useState("");
   const [officialFetched, setOfficialFetched] = useState(false);
 
+  // Cover attribution is CONTROLLED so it always travels with the selected image.
+  const [coverCreditName, setCoverCreditName] = useState(content?.cover_credit_name ?? "");
+  const [coverCreditUrl, setCoverCreditUrl] = useState(content?.cover_credit_url ?? "");
+  // Durable attribution for the ORIGINAL source image (from ingest metadata, not
+  // the drift-prone current cover credit), restored when the editor returns to it.
+  const originalCredit = {
+    name: content?.source_name ?? content?.cover_credit_name ?? "",
+    url: content?.source_url ?? content?.original_url ?? content?.cover_credit_url ?? "",
+  };
+  // Selection is the ONLY thing that sets the cover — and it moves the correct
+  // attribution with the image (or clears it for images with no external source).
+  const selectCover = (url: string, credit: { name: string; url: string }) => {
+    setCoverUrl(url);
+    setCoverCreditName(credit.name);
+    setCoverCreditUrl(credit.url);
+  };
+
   // Media gallery
   const [items, setItems] = useState<MediaItem[]>(
     (media ?? []).map((m) => ({
@@ -140,8 +157,10 @@ export function ContentForm({
     try {
       const up = await uploadToMedia(file);
       // An upload becomes the current cover but does NOT destroy the original
-      // image option or the session's AI candidates (they stay selectable).
-      setCoverUrl(up.url);
+      // image option or the session's AI candidates (they stay selectable). An
+      // uploaded image has no inherent external source, so any prior external
+      // attribution is cleared (the editor may type one) — never falsely retained.
+      selectCover(up.url, { name: "", url: "" });
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : "تعذّر رفع الصورة.");
     } finally {
@@ -433,10 +452,10 @@ export function ContentForm({
               type="button"
               onClick={handleFetchOfficial}
               disabled={officialBusy || aiBusy || coverBusy}
-              title="يفحص صفحات المصادر الرسمية المرتبطة بالخبر ويعرض صورها الرسمية — دون بحث عام على الويب"
+              title="يفحص صفحات مصادر الخبر المرتبطة به ويعرض صورها — دون بحث عام على الويب. المصدر قد يكون منفذاً إخبارياً وليس بالضرورة الموقع الرسمي للجهة"
               className="rounded-lg border border-line px-4 py-2 text-[13px] font-semibold text-ink hover:bg-cream disabled:opacity-60"
             >
-              {officialBusy ? "جارٍ الجلب…" : "جلب صور من المصادر الرسمية"}
+              {officialBusy ? "جارٍ الجلب…" : "جلب صور من مصادر الخبر"}
             </button>
           ) : null}
           <div className="flex items-center gap-1.5">
@@ -465,7 +484,7 @@ export function ContentForm({
           {coverUrl ? (
             <button
               type="button"
-              onClick={() => setCoverUrl("")}
+              onClick={() => selectCover("", { name: "", url: "" })}
               className="text-[13px] font-semibold text-coral"
             >
               إزالة
@@ -487,13 +506,13 @@ export function ContentForm({
         ) : assetRec.decision === "official_asset" ? (
           <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
             <div className="font-semibold">
-              توصية تحريرية: صورة رسمية من مصدر موثوق قد تكون الأقوى والأصدق لهذا الخبر.
+              توصية تحريرية: صورة حقيقية من مصدر مرتبط بالخبر قد تكون الأقوى والأصدق. تحقّق من أن المصدر
+              يخصّ الجهة المعنية قبل الاعتماد عليه — فليس كل مصدر مرتبط موقعاً رسمياً للجهة.
               {assetRec.reason ? <span className="font-normal"> — {assetRec.reason}</span> : null}
             </div>
             {rows.some((r) => /^https?:\/\//i.test(r.url.trim())) ? (
               <div className="mt-1 text-[11px]">
-                افتح المصدر الرسمي، واحفظ الصورة الرسمية (شعار/مبنى/منتج/صورة شخصية رسمية) ثم ارفعها عبر «رفع صورة الغلاف»
-                مع الحفاظ على نسبة المصدر:
+                افتح المصدر، واحفظ الصورة المناسبة ثم ارفعها عبر «رفع صورة الغلاف» مع الحفاظ على نسبة المصدر:
                 <span className="ms-1 inline-flex flex-wrap gap-x-2">
                   {rows
                     .filter((r) => /^https?:\/\//i.test(r.url.trim()))
@@ -507,14 +526,14 @@ export function ContentForm({
               </div>
             ) : (
               <div className="mt-1 text-[11px] text-amber-800">
-                لا توجد روابط مصادر رسمية مرتبطة بهذا المقال بعد — أضِف مصدراً رسمياً في قسم «المصادر» أدناه، أو استخدم الصورة الأصلية / التوليد.
+                لا توجد روابط مصادر مرتبطة بهذا المقال بعد — أضِف مصدراً في قسم «المصادر» أدناه، أو استخدم الصورة الأصلية / التوليد.
               </div>
             )}
           </div>
         ) : null}
         {officialError ? <div className="mt-2 text-[12px] text-coral">{officialError}</div> : null}
         {officialFetched && officialAssets.length === 0 && !officialBusy ? (
-          <div className="mt-2 text-[11px] text-gray">لم تُعثر على صورة رسمية قابلة للاستخدام في صفحات المصادر المرتبطة.</div>
+          <div className="mt-2 text-[11px] text-gray">لم تُعثر على صورة قابلة للاستخدام في صفحات مصادر الخبر المرتبطة.</div>
         ) : null}
         {(originalImageUrl || officialAssets.length > 0 || aiCandidates.length > 0) ? (
           <div className="mt-3">
@@ -524,7 +543,7 @@ export function ContentForm({
               {originalImageUrl ? (
                 <button
                   type="button"
-                  onClick={() => setCoverUrl(originalImageUrl)}
+                  onClick={() => selectCover(originalImageUrl, originalCredit)}
                   aria-pressed={originalImageUrl === coverUrl}
                   className={`relative overflow-hidden rounded-lg border-2 transition ${
                     originalImageUrl === coverUrl ? "border-teal ring-2 ring-teal/30" : "border-line hover:border-teal/50"
@@ -550,17 +569,17 @@ export function ContentForm({
                   <button
                     key={a.imageUrl}
                     type="button"
-                    onClick={() => setCoverUrl(a.imageUrl)}
+                    onClick={() => selectCover(a.imageUrl, { name: a.attribution || a.sourceName, url: a.sourceUrl })}
                     aria-pressed={selected}
-                    title={`${a.assetType === "official_logo" ? "شعار رسمي" : "صورة رسمية"} — ${a.attribution || a.sourceName}`}
+                    title={`${a.assetType === "source_logo" ? "شعار من المصدر" : "صورة من المصدر"} — ${a.attribution || a.sourceName}`}
                     className={`relative overflow-hidden rounded-lg border-2 transition ${
                       selected ? "border-teal ring-2 ring-teal/30" : "border-emerald-300 hover:border-emerald-400"
                     }`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={a.imageUrl} alt={a.attribution || "صورة رسمية"} className="aspect-[16/9] w-full object-cover" />
+                    <img src={a.imageUrl} alt={a.attribution || "صورة من المصدر"} className="aspect-[16/9] w-full object-cover" />
                     <span className="absolute top-1 right-1 max-w-[95%] truncate rounded bg-emerald-700/90 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                      {a.assetType === "official_logo" ? "شعار رسمي" : "المصدر الرسمي"}{a.sourceName ? ` · ${a.sourceName}` : ""}
+                      {a.assetType === "source_logo" ? "شعار من المصدر" : "صورة من المصدر"}{a.sourceName ? ` · ${a.sourceName}` : ""}
                     </span>
                     {selected ? (
                       <span className="absolute bottom-1 left-1 rounded bg-teal px-1.5 py-0.5 text-[10px] font-bold text-white">
@@ -579,7 +598,7 @@ export function ContentForm({
                   <button
                     key={c.url}
                     type="button"
-                    onClick={() => setCoverUrl(c.url)}
+                    onClick={() => selectCover(c.url, { name: "", url: "" })}
                     aria-pressed={selected}
                     title={c.conceptSummary || undefined}
                     className={`relative overflow-hidden rounded-lg border-2 transition ${
@@ -612,13 +631,15 @@ export function ContentForm({
         <div className="mt-3 grid grid-cols-2 gap-3">
           <input
             name="cover_credit_name"
-            defaultValue={content?.cover_credit_name ?? ""}
+            value={coverCreditName}
+            onChange={(e) => setCoverCreditName(e.target.value)}
             placeholder="مصدر الصورة (مثال: Getty Images)"
             className={subField}
           />
           <input
             name="cover_credit_url"
-            defaultValue={content?.cover_credit_url ?? ""}
+            value={coverCreditUrl}
+            onChange={(e) => setCoverCreditUrl(e.target.value)}
             placeholder="رابط المصدر (اختياري)"
             dir="ltr"
             className={subField}
