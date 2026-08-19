@@ -3,7 +3,7 @@
 import { useActionState, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { saveContent, setStatus, softDeleteContent, type ContentSaveResult } from "../../actions";
-import { generateCoverImage } from "../../image-actions";
+import { generateCoverImage, type ImageCandidate } from "../../image-actions";
 import { uploadToMedia } from "@/lib/upload";
 import type { Content, ContentSource, ContentMedia, Category } from "@/lib/queries";
 
@@ -87,9 +87,15 @@ export function ContentForm({
   const [coverBusy, setCoverBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [aiOptions, setAiOptions] = useState<string[]>([]);
+  // AI candidates ACCUMULATED across this editor session (deduped by url), so
+  // earlier generations stay comparable and selectable — a new generation adds
+  // candidates, never destroys prior ones.
+  const [aiCandidates, setAiCandidates] = useState<ImageCandidate[]>([]);
   const [aiQuality, setAiQuality] = useState<"fast" | "premium">("fast");
   const [aiCount, setAiCount] = useState(1);
+  // The ORIGINAL source image (publisher), persisted separately from the cover.
+  // Always available as a selectable candidate; never overwritten by AI/upload.
+  const originalImageUrl = content?.source_image_url ?? "";
 
   // Media gallery
   const [items, setItems] = useState<MediaItem[]>(
@@ -113,9 +119,9 @@ export function ContentForm({
     setCoverBusy(true);
     try {
       const up = await uploadToMedia(file);
+      // An upload becomes the current cover but does NOT destroy the original
+      // image option or the session's AI candidates (they stay selectable).
       setCoverUrl(up.url);
-      // A manual upload overrides AI images: drop the generated option set.
-      setAiOptions([]);
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : "تعذّر رفع الصورة.");
     } finally {
@@ -130,7 +136,9 @@ export function ContentForm({
     const title = String(fd.get("title") ?? "").trim();
     const excerpt = String(fd.get("excerpt") ?? "").trim();
     const summary = String(fd.get("ai_summary") ?? "").trim();
+    const bodyContent = String(fd.get("body") ?? "").trim();
     const category = String(fd.get("category_slug") ?? "").trim();
+    const sourceName = String(fd.get("source_name") ?? "").trim();
     if (title.length < 4) {
       setAiError("أدخل عنوان الخبر أولاً لتُبنى الصورة عليه.");
       return;
@@ -138,11 +146,32 @@ export function ContentForm({
     setAiError("");
     setAiBusy(true);
     try {
-      const r = await generateCoverImage({ title, excerpt, summary, category, quality: aiQuality, count: aiCount });
+      // Steer the planner AWAY from concepts already generated this session so a
+      // new request explores a genuinely different visual direction.
+      const avoidConcepts = aiCandidates.map((c) => c.conceptSummary).filter(Boolean);
+      const r = await generateCoverImage({
+        title,
+        originalTitle: content?.original_title ?? "",
+        excerpt,
+        summary,
+        body: bodyContent,
+        category,
+        sourceName,
+        quality: aiQuality,
+        count: aiCount,
+        avoidConcepts,
+      });
       if ("ok" in r) {
-        setAiOptions(r.urls);
-        // Preselect the first option as the cover; the admin can pick another.
-        if (r.urls[0]) setCoverUrl(r.urls[0]);
+        // ACCUMULATE new candidates (dedupe by url); keep prior ones.
+        setAiCandidates((prev) => {
+          const seen = new Set(prev.map((c) => c.url));
+          const merged = [...prev];
+          for (const c of r.candidates) if (!seen.has(c.url)) { seen.add(c.url); merged.push(c); }
+          return merged;
+        });
+        // Auto-select a new candidate as cover ONLY when no cover is set yet —
+        // never silently overwrite a cover the editor already chose.
+        if (!coverUrl && r.urls[0]) setCoverUrl(r.urls[0]);
       } else {
         setAiError(r.error);
       }
@@ -338,8 +367,8 @@ export function ContentForm({
           >
             {aiBusy
               ? `جارٍ التوليد${aiCount > 1 ? ` (${aiCount})` : ""}…`
-              : aiOptions.length > 0
-                ? "توليد صور أخرى ✨"
+              : aiCandidates.length > 0
+                ? "توليد فكرة أخرى ✨"
                 : `توليد ${aiCount > 1 ? `${aiCount} صور` : "صورة"} بالذكاء الاصطناعي ✨`}
           </button>
           <div className="flex items-center gap-1.5">
@@ -393,30 +422,59 @@ export function ContentForm({
           ) : null}
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-gray">
-          تُبنى الصور على عنوان الخبر ومقتطفه و«باختصار» والقسم. اختر وضعاً واحداً فقط: «توليد سريع»
-          أسرع وأقل تكلفة، أو «جودة عالية» أبطأ وأعلى تكلفة وجودة — لا يعملان معاً. عدد الصور الافتراضي
-          واحدة، ويمكنك اختيار حتى 3. إن ولّدت أكثر من صورة، اختر واحدة لتصبح الغلاف. رفع صورة يدوياً يلغي
-          صور الذكاء الاصطناعي.
+          يفهم النظام محتوى المقال أولاً ثم يبني مفهوماً بصرياً خاصاً بالخبر. «توليد سريع» أسرع وأقل
+          تكلفة، و«جودة عالية» يمنح إخراجاً تحريرياً أعمق — اختر وضعاً واحداً. العدد الافتراضي صورة
+          واحدة (حتى 3، وكلٌّ بمفهوم مختلف). كل «توليد فكرة أخرى» يستكشف اتجاهاً بصرياً جديداً. تبقى
+          «الصورة الأصلية» والصور المُولّدة في هذه الجلسة متاحة للاختيار — لا يُلغي أيٌّ منها الآخر.
         </p>
         {aiError ? <div className="mt-2 text-[13px] text-coral">{aiError}</div> : null}
-        {aiOptions.length > 0 ? (
+        {(originalImageUrl || aiCandidates.length > 0) ? (
           <div className="mt-3">
             <div className="mb-2 text-[11px] font-semibold text-gray">اختر صورة الغلاف:</div>
             <div className="grid grid-cols-3 gap-2">
-              {aiOptions.map((url, i) => {
-                const selected = url === coverUrl;
+              {/* The ORIGINAL source image — always first and always selectable. */}
+              {originalImageUrl ? (
+                <button
+                  type="button"
+                  onClick={() => setCoverUrl(originalImageUrl)}
+                  aria-pressed={originalImageUrl === coverUrl}
+                  className={`relative overflow-hidden rounded-lg border-2 transition ${
+                    originalImageUrl === coverUrl ? "border-teal ring-2 ring-teal/30" : "border-line hover:border-teal/50"
+                  }`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={originalImageUrl} alt="الصورة الأصلية" className="aspect-[16/9] w-full object-cover" />
+                  <span className="absolute top-1 right-1 rounded bg-ink/80 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                    الصورة الأصلية
+                  </span>
+                  {originalImageUrl === coverUrl ? (
+                    <span className="absolute bottom-1 left-1 rounded bg-teal px-1.5 py-0.5 text-[10px] font-bold text-white">
+                      الغلاف ✓
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
+              {/* Session AI candidates (accumulated, newest last). */}
+              {aiCandidates.map((c, i) => {
+                const selected = c.url === coverUrl;
                 return (
                   <button
-                    key={url}
+                    key={c.url}
                     type="button"
-                    onClick={() => setCoverUrl(url)}
+                    onClick={() => setCoverUrl(c.url)}
                     aria-pressed={selected}
+                    title={c.conceptSummary || undefined}
                     className={`relative overflow-hidden rounded-lg border-2 transition ${
                       selected ? "border-teal ring-2 ring-teal/30" : "border-line hover:border-teal/50"
                     }`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={url} alt={`خيار ${i + 1}`} className="aspect-[16/9] w-full object-cover" />
+                    <img src={c.url} alt={c.conceptSummary || `خيار ${i + 1}`} className="aspect-[16/9] w-full object-cover" />
+                    {c.mode === "premium" ? (
+                      <span className="absolute top-1 right-1 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                        جودة عالية
+                      </span>
+                    ) : null}
                     {selected ? (
                       <span className="absolute bottom-1 left-1 rounded bg-teal px-1.5 py-0.5 text-[10px] font-bold text-white">
                         الغلاف ✓

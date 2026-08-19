@@ -3,7 +3,13 @@
 import { requireAdmin } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
-export type GenerateImageResult = { ok: true; urls: string[] } | { error: string };
+/** One generated cover candidate + the editorial concept it was built from
+ *  (used for the editor's session gallery and regeneration avoid-history). */
+export type ImageCandidate = { url: string; conceptSummary: string; mode: "fast" | "premium" };
+
+export type GenerateImageResult =
+  | { ok: true; urls: string[]; candidates: ImageCandidate[] }
+  | { error: string };
 
 /**
  * Proxy to the `generate-image` Edge Function: given the article's
@@ -18,18 +24,25 @@ export type GenerateImageResult = { ok: true; urls: string[] } | { error: string
  */
 export async function generateCoverImage(input: {
   title: string;
+  originalTitle?: string;
   excerpt?: string;
   summary?: string;
+  body?: string;
   category?: string;
+  sourceName?: string;
+  country?: string;
   quality?: "fast" | "premium";
   count?: number;
+  // Concept summaries already generated this editor session — the planner steers
+  // each new request toward a materially different visual direction.
+  avoidConcepts?: string[];
 }): Promise<GenerateImageResult> {
   await requireAdmin();
 
   const title = (input.title || "").trim();
   if (title.length < 4) return { error: "أدخل عنوان الخبر أولاً لتُبنى الصورة عليه." };
 
-  const quality = input.quality === "premium" ? "premium" : "fast";
+  const quality: "fast" | "premium" = input.quality === "premium" ? "premium" : "fast";
   // Default to exactly 1 image for BOTH modes; callers may opt into 2–3.
   const requested = Number(input.count);
   const count = Number.isInteger(requested) ? Math.min(3, Math.max(1, requested)) : 1;
@@ -41,14 +54,23 @@ export async function generateCoverImage(input: {
   const token = session?.access_token;
   if (!token) return { error: "انتهت الجلسة. سجّل الدخول مرة أخرى." };
 
+  // Body truncated to keep the payload bounded; the Edge Function truncates
+  // again and drives an editorial visual-planning step from this context.
   const { data, error } = await supabase.functions.invoke("generate-image", {
     body: {
       title,
+      original_title: (input.originalTitle ?? "").trim().slice(0, 300),
       excerpt: input.excerpt ?? "",
       summary: input.summary ?? "",
+      body: (input.body ?? "").trim().slice(0, 6000),
       category: input.category ?? "",
+      source_name: (input.sourceName ?? "").trim().slice(0, 160),
+      country: (input.country ?? "").trim().slice(0, 120),
       quality,
       count,
+      avoid_concepts: Array.isArray(input.avoidConcepts)
+        ? input.avoidConcepts.map((s) => String(s ?? "").trim().slice(0, 120)).filter(Boolean).slice(0, 12)
+        : [],
     },
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -78,11 +100,31 @@ export async function generateCoverImage(input: {
     return { error: reasons[String(data.reason)] ?? "تعذّر توليد الصور. حاول مرة أخرى." };
   }
 
-  const urls = Array.isArray(data.urls)
+  const urls: string[] = Array.isArray(data.urls)
     ? data.urls.filter((u: unknown): u is string => typeof u === "string" && u.length > 0)
     : typeof data.url === "string"
       ? [data.url]
       : [];
   if (urls.length === 0) return { error: "لم تُرجِع الخدمة صوراً. حاول مرة أخرى." };
-  return { ok: true, urls };
+
+  // Prefer the concept-annotated candidates; fall back to bare urls for an older
+  // Edge Function response shape.
+  const rawCandidates: unknown[] = Array.isArray(data.candidates) ? data.candidates : [];
+  const candidates: ImageCandidate[] = rawCandidates
+    .map((c): ImageCandidate | null => {
+      const o = (c ?? {}) as Record<string, unknown>;
+      const url = typeof o.url === "string" ? o.url : "";
+      if (!url) return null;
+      return {
+        url,
+        conceptSummary: typeof o.concept_summary === "string" ? o.concept_summary : "",
+        mode: o.mode === "premium" ? "premium" : "fast",
+      };
+    })
+    .filter((c): c is ImageCandidate => c !== null);
+  const finalCandidates = candidates.length > 0
+    ? candidates
+    : urls.map((url) => ({ url, conceptSummary: "", mode: quality }));
+
+  return { ok: true, urls, candidates: finalCandidates };
 }

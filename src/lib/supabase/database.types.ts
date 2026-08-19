@@ -153,6 +153,7 @@ export type Database = {
           read_minutes: number | null
           relevance_score: number | null
           slug: string
+          source_image_url: string | null
           source_lang: string | null
           source_name: string | null
           source_url: string | null
@@ -185,6 +186,7 @@ export type Database = {
           read_minutes?: number | null
           relevance_score?: number | null
           slug: string
+          source_image_url?: string | null
           source_lang?: string | null
           source_name?: string | null
           source_url?: string | null
@@ -217,6 +219,7 @@ export type Database = {
           read_minutes?: number | null
           relevance_score?: number | null
           slug?: string
+          source_image_url?: string | null
           source_lang?: string | null
           source_name?: string | null
           source_url?: string | null

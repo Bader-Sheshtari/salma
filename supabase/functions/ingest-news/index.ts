@@ -1453,6 +1453,10 @@ async function runIngestion(
       source_name: sourceName,
       source_url: finalUrl,
       cover_image_url: coverImage,
+      // The ORIGINAL publisher image, persisted independently of the cover so it
+      // stays selectable as «الصورة الأصلية» even after an AI/upload replaces the
+      // cover. Never modified by later cover changes.
+      source_image_url: coverImage,
       cover_credit_name: coverImage ? sourceName : null,
       cover_credit_url: coverImage ? citation.url : null,
       dedupe_key: key,

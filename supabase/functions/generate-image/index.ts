@@ -58,72 +58,262 @@ function modelFor(quality: Quality): string {
 
 // ---- Prompt -------------------------------------------------------------
 
-type Brief = { title: string; excerpt?: string; summary?: string; category?: string };
+// The article context available to the visual planner. Only text — never raw
+// unbounded article dumps; `body` is truncated by the caller and again here.
+type Brief = {
+  title: string;
+  originalTitle?: string;
+  excerpt?: string;
+  summary?: string;
+  body?: string;
+  category?: string;
+  sourceName?: string;
+  country?: string;
+};
 
-/** Three deliberately different treatments of the SAME story so the option set
- * offers real choice rather than three near-identical frames. Each generated
- * option uses one, in order. */
-const ANGLES = [
-  "ANGLE A — WIDE CONTEXTUAL SCENE: an establishing environmental shot that situates this specific story in a real, believable place. Build depth with distinct foreground, midground and background layers; people, if present, sit naturally within the scene rather than posing. Convey a strong sense of place and atmosphere.",
-  "ANGLE B — HUMAN-CENTERED EDITORIAL SCENE: an authentic, candid human moment directly relevant to the story, captured photojournalistically. Natural expressions, genuine gestures and real body language; respectful and modest. Do NOT depict any identifiable, sick, injured or distressed patient.",
-  "ANGLE C — CONCEPTUAL CLOSE-UP / STILL LIFE: a tightly framed detail, object or symbolic element tied to the article's core idea. Shallow depth of field, tactile texture and materials, elegant and intentional simplicity.",
-];
+// One planned editorial cover concept, grounded in what actually happened in the
+// article. The planner returns one per requested image; `concept_summary` is the
+// short line accumulated as regeneration "avoid history".
+type Concept = {
+  story_type: string;
+  what_happened: string;
+  core_visual_fact: string;
+  key_entities: string[];
+  real_world_subject: string;
+  geographic_relevance: string; // "none" | "kuwait" | "gulf" | "global" | free text
+  people_needed: boolean;
+  must_show: string[];
+  must_avoid: string[];
+  proposed_visual_direction: string;
+  concept_summary: string;
+};
 
-/** Positive visual direction applied to every option — the "premium editorial"
- * look the site wants, not generic stock. */
-const QUALITY = [
-  "Look and feel: premium magazine-style editorial photography with a realistic healthcare/news documentary sensibility, as if shot by a professional photojournalist for a high-end publication.",
-  "Lighting: cinematic yet natural; soft, directional, believable light — not flat studio lighting.",
-  "Composition: refined and intentional, clear foreground/background separation with a natural shallow depth of field, real-world believable setting, rich authentic detail and texture.",
-  "Rendering: crisp, high-resolution, sharp where it matters; polished but never plastic, artificial or exaggerated. 16:9 landscape framing.",
+// Text models for the editorial-visual planning step (NOT image models). Fast
+// uses a cheap, capable model; Premium a stronger one for richer art direction.
+// Never a google/gemini text model (reserved rule); both env-overridable.
+const PLANNER_MODEL_FAST =
+  Deno.env.get("IMAGE_PLANNER_MODEL") || "openai/gpt-5.4-mini";
+const PLANNER_MODEL_PREMIUM =
+  Deno.env.get("IMAGE_PLANNER_MODEL_PREMIUM") || "anthropic/claude-sonnet-5";
+
+function plannerModelFor(quality: Quality): string {
+  return quality === "premium" ? PLANNER_MODEL_PREMIUM : PLANNER_MODEL_FAST;
+}
+
+// Generic clichés the cover must avoid UNLESS the article specifically calls for
+// them. This is the anti-bias core: it removes the office/meeting/handshake/
+// dishdasha/stock-healthcare defaults the old fixed template produced.
+const GENERIC_AVOID = [
+  "office meetings, conference rooms, boardrooms, executives around a table, business discussions, handshakes, signing ceremonies;",
+  "people staring at laptops or phones; staged smiling doctors; a doctor holding a tablet or clipboard; posed thumbs-up;",
+  "generic hospital corridors, generic waiting rooms, and meaningless healthcare backdrops;",
+  "generic healthcare stock photography and stock clichés;",
+  "generic blue futuristic 'healthcare technology' holograms, glowing circuit overlays, and generic AI-brain imagery;",
+  "a company or organization name, logo or wordmark used as the main visual subject;",
+  "Gulf/Kuwaiti clothing (dishdasha/thobe/abaya) or Gulf-styled people added for decoration when the story does not involve them;",
+  "plastic, waxy or artificial-looking people; duplicated or distorted faces and hands;",
+  "any text, letters, words, numbers, logos, captions or watermarks;",
+  "blurry, low-detail, low-resolution or noisy rendering.",
 ].join(" ");
 
-/** Medical/news responsibility guardrails applied to every option. */
-const SAFETY = [
-  "Responsibility: keep the imagery realistic, credible and documentary in tone — never exaggerated, sensational, alarmist, fear-based or misleading.",
-  "Do NOT fabricate medical procedures, surgeries, charts, graphs, test results, numbers or statistics.",
-  "Do NOT show identifiable patients, real illness or injury, blood, gore, wounds, or graphic clinical/surgical content.",
-  "Do NOT imply a specific diagnosis, treatment claim or medical outcome that the article does not state.",
+// Medical/news responsibility + editorial-honesty guardrails (every image).
+const HONESTY = [
+  "Editorial honesty: this is an illustrative editorial/conceptual cover, NOT documentary evidence.",
+  "Do NOT depict a specific real, named or identifiable person; do NOT stage a fake photograph of a real meeting, a real doctor, or named executives; do NOT present an invented exact product/device design as if factual; do NOT fabricate clinical results, charts, numbers or statistics.",
+  "Do NOT show identifiable patients, real illness or injury, blood, gore, wounds, or graphic clinical/surgical content, and do NOT imply a diagnosis, treatment claim or outcome the article does not state.",
+  "Keep it realistic, credible and calm — never alarmist, sensational or fear-based.",
 ].join(" ");
 
-/** Things the image must avoid — steers away from stock-photo clichés and common
- * generation artifacts. */
-const NEGATIVE = [
-  "Avoid entirely: generic stock-photo aesthetics and cliché;",
-  "plastic-looking, waxy or artificial people;",
-  "over-smiling, posed doctors or thumbs-up gestures;",
-  "clichéd empty hospital corridors;",
-  "blurry, low-detail, low-resolution or noisy results;",
-  "duplicated, warped or distorted faces and hands;",
-  "unrealistic, futuristic or fictional medical devices;",
-  "any text, letters, words, numbers, logos, captions or watermarks.",
+const FAST_RENDER =
+  "Look and feel: credible editorial photography / clean conceptual visualization with natural, believable light and realistic materials; crisp and high-resolution; 16:9 landscape.";
+
+// Premium adds genuine art direction — not more fantasy, better editorial thinking.
+const PREMIUM_RENDER = [
+  "Art direction (premium editorial): compose like a cover for a high-end health/science publication.",
+  "Use a sophisticated, intentional composition with a clear visual hierarchy and a single strong focal idea; build real depth with distinct foreground/midground/background; rich authentic texture and material detail; cinematic, directional natural light.",
+  "Interpret the story ambitiously through the real subject, scale, and conceptual visualization — striking but truthful, never surreal decoration or false medical claims.",
+  "Crisp, high-resolution, gallery-grade rendering; 16:9 landscape; far fewer AI clichés than typical generations.",
 ].join(" ");
 
-/** Build an English editorial-photo prompt from the article's own text so the
- * generated cover is actually related to the news. `angle` selects one of the
- * ANGLES variants to diversify a multi-option set. */
-function buildPrompt(brief: Brief, angle: number): string {
-  const details = [
-    brief.title ? `Title: ${brief.title}` : "",
-    brief.summary ? `Summary: ${brief.summary}` : "",
-    brief.excerpt ? `Excerpt: ${brief.excerpt}` : "",
-    brief.category ? `Category: ${brief.category}` : "",
-  ]
-    .filter(Boolean)
-    .join(" | ");
+/** Build the image prompt from ONE planned concept. The scene is driven by the
+ * article-specific concept, not a fixed template. People appear only when the
+ * concept says they are needed; Gulf styling only when geographically relevant. */
+function buildImagePrompt(c: Concept, quality: Quality): string {
+  const geo = (c.geographic_relevance || "").toLowerCase();
+  const gulfRelevant = /kuwait|gulf|khalij|خليج|الكويت/.test(geo);
+  const people = c.people_needed
+    ? [
+        "People may appear ONLY as needed to tell this specific story; keep them natural, candid and modest, never posed stock models.",
+        gulfRelevant
+          ? "Since the story is set in Kuwait/the Gulf, any people and setting may reflect that context modestly and respectfully."
+          : "Do NOT add Gulf/Arab clothing or region-specific styling unless the concept requires it.",
+      ].join(" ")
+    : "Do NOT include any people — focus entirely on the real subject described above (the object/mechanism/environment/technology). Do not invent people because they are convenient.";
+
   return [
-    "Create a premium, photorealistic editorial cover photograph for an Arabic health-news website.",
-    "Anchor the image to the SPECIFIC main idea of THIS article — not a generic health or medical theme.",
-    `Article details — ${details}.`,
-    "Tone: calm, credible and professional health-news mood appropriate to this story; avoid alarmism.",
-    ANGLES[angle % ANGLES.length],
-    QUALITY,
-    "Keep it culturally appropriate and modest for a Gulf/Kuwaiti audience.",
-    SAFETY,
-    NEGATIVE,
+    "Editorial cover image for an Arabic health-news article. It must make a reader feel this image belongs to THIS SPECIFIC story — not a generic health or medical theme.",
+    `What happened in the article: ${c.what_happened}.`,
+    `Core visual fact to convey: ${c.core_visual_fact}.`,
+    `Depict this real-world subject: ${c.real_world_subject}.`,
+    `Visual direction: ${c.proposed_visual_direction}.`,
+    c.must_show.length ? `Must show: ${c.must_show.join("; ")}.` : "",
+    c.must_avoid.length ? `For this story specifically, avoid: ${c.must_avoid.join("; ")}.` : "",
+    people,
+    quality === "premium" ? PREMIUM_RENDER : FAST_RENDER,
+    HONESTY,
+    `Avoid entirely (generic clichés): ${GENERIC_AVOID}`,
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+// ---- Editorial visual planner (text-only step) --------------------------
+
+function truncate(s: string | undefined, n: number): string {
+  const t = (s ?? "").trim();
+  return t.length > n ? t.slice(0, n) : t;
+}
+
+/** System prompt: Salma's editorial visual director. Produces STRICT-JSON
+ * concepts grounded in what actually happened, with people as a decision (not a
+ * default) and generic clichés explicitly discouraged. */
+function plannerSystem(quality: Quality): string {
+  return [
+    "You are the editorial visual director for «سلمى», an independent Arabic health-news publication.",
+    "Your job: read a news article and design distinct COVER-IMAGE CONCEPTS that truthfully represent the SPECIFIC development in the article.",
+    "Think first: WHAT ACTUALLY HAPPENED in this story? Then: what is the strongest TRUTHFUL editorial visual for that development?",
+    "The concept must come from the real subject of the article — e.g. the specific cells/biological mechanism, disease, organ, drug, diagnostic, medical imaging, device, procedure capability, laboratory or scientific idea, healthcare infrastructure/service, or public-health environment discussed — NOT a generic 'healthcare-looking' scene.",
+    "People are NOT the default. Decide people_needed honestly: use people only when a human scene genuinely communicates THIS story; otherwise depict the real subject with no people.",
+    "Never propose: office meetings, conference rooms, handshakes, executives around a table, people at laptops, staged doctors, a doctor holding a tablet, meaningless hospital corridors, generic healthcare stock, generic blue futuristic holograms or AI-brain imagery, or a company name/logo as the main subject — UNLESS the article is specifically about that.",
+    "Do not add Gulf/Kuwaiti clothing or region-specific people as decoration; regional context matters only when the story is actually about a place/people.",
+    "Editorial honesty: concepts are illustrative/conceptual, never fake documentary evidence — no real named people, no staged fake events, no fabricated clinical results.",
+    quality === "premium"
+      ? "This is a PREMIUM cover: be more ambitious and original — sophisticated composition, conceptual visualization, scientific/subject detail, editorial metaphor and visual hierarchy — while staying truthful to the article."
+      : "This is a FAST cover: one strong, relevant, concrete visual direction grounded in the article; efficient but never generic.",
+    "Return STRICT JSON only, matching exactly: {\"concepts\":[{\"story_type\":string,\"what_happened\":string,\"core_visual_fact\":string,\"key_entities\":string[],\"real_world_subject\":string,\"geographic_relevance\":string,\"people_needed\":boolean,\"must_show\":string[],\"must_avoid\":string[],\"proposed_visual_direction\":string,\"concept_summary\":string}]}.",
+    "concept_summary is a short (<=12 words) label of the visual idea. proposed_visual_direction is 1-2 vivid sentences an image model can render.",
+  ].join(" ");
+}
+
+function plannerUser(brief: Brief, count: number, avoid: string[]): string {
+  const parts = [
+    brief.title ? `Arabic title: ${brief.title}` : "",
+    brief.originalTitle ? `Original/source title: ${brief.originalTitle}` : "",
+    brief.summary ? `Summary: ${brief.summary}` : "",
+    brief.excerpt ? `Excerpt: ${brief.excerpt}` : "",
+    brief.body ? `Article body (may be truncated): ${brief.body}` : "",
+    brief.category ? `Category: ${brief.category}` : "",
+    brief.sourceName ? `Original source/publisher: ${brief.sourceName}` : "",
+    brief.country ? `Geographic context from the story: ${brief.country}` : "",
+  ].filter(Boolean);
+  const avoidLine = avoid.length
+    ? `\n\nAlready-used concepts to AVOID (choose materially different visual directions — different subject, composition and storytelling, not a rearrangement): ${avoid.map((a) => `“${a}”`).join(", ")}.`
+    : "";
+  return (
+    `Design ${count} DISTINCT cover concept${count > 1 ? "s" : ""} for this article. ` +
+    (count > 1
+      ? "Each concept must be genuinely different from the others in subject, composition and storytelling (not three variations of one idea). "
+      : "") +
+    "Ground every concept in what actually happened.\n\n" +
+    parts.join("\n") +
+    avoidLine
+  );
+}
+
+/** Parse the planner's JSON (tolerating code fences / prose) into Concepts. */
+function parseConcepts(text: string): Concept[] {
+  let s = text.trim();
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(s);
+  if (fence) s = fence[1].trim();
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start >= 0 && end > start) s = s.slice(start, end + 1);
+  const obj = JSON.parse(s) as { concepts?: unknown };
+  const arr = Array.isArray(obj?.concepts) ? obj.concepts : [];
+  return arr.map((raw) => {
+    const c = (raw ?? {}) as Record<string, unknown>;
+    const strArr = (v: unknown): string[] =>
+      Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean).slice(0, 8) : [];
+    return {
+      story_type: String(c.story_type ?? "health_news"),
+      what_happened: String(c.what_happened ?? "").slice(0, 500),
+      core_visual_fact: String(c.core_visual_fact ?? "").slice(0, 300),
+      key_entities: strArr(c.key_entities),
+      real_world_subject: String(c.real_world_subject ?? "").slice(0, 300),
+      geographic_relevance: String(c.geographic_relevance ?? "none").slice(0, 60),
+      people_needed: c.people_needed === true,
+      must_show: strArr(c.must_show),
+      must_avoid: strArr(c.must_avoid),
+      proposed_visual_direction: String(c.proposed_visual_direction ?? "").slice(0, 500),
+      concept_summary: String(c.concept_summary ?? "").slice(0, 120),
+    };
+  });
+}
+
+/** Deterministic fallback concepts if the planner call/parse fails, so image
+ * generation still proceeds with anti-generic guardrails (never a hard failure).
+ * Grounded in the title/summary; varies direction per index for a multi set. */
+function fallbackConcepts(brief: Brief, count: number): Concept[] {
+  const base = brief.summary || brief.excerpt || brief.title || "the article's topic";
+  const dirs = [
+    "a concrete close-up of the real subject or object at the center of this story, with authentic texture and shallow depth of field",
+    "a conceptual visualization of the mechanism, process or idea the article describes, rendered cleanly and truthfully",
+    "the real environment or scientific/medical subject of the story shown with strong sense of place and depth",
+  ];
+  return Array.from({ length: count }, (_, i) => ({
+    story_type: "health_news",
+    what_happened: base.slice(0, 500),
+    core_visual_fact: (brief.title ?? base).slice(0, 300),
+    key_entities: [],
+    real_world_subject: "the specific real subject at the center of this article (not a generic health scene)",
+    geographic_relevance: "none",
+    people_needed: false,
+    must_show: [],
+    must_avoid: [],
+    proposed_visual_direction: dirs[i % dirs.length],
+    concept_summary: (brief.title ?? base).slice(0, 80),
+  }));
+}
+
+/** Run the text-only planner: one call → `count` distinct concepts. Falls back
+ * to deterministic concepts on any failure so the image step always proceeds. */
+async function planConcepts(
+  apiKey: string,
+  quality: Quality,
+  brief: Brief,
+  count: number,
+  avoid: string[],
+): Promise<Concept[]> {
+  try {
+    const res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://salma.health",
+        "X-Title": "Salma",
+      },
+      body: JSON.stringify({
+        model: plannerModelFor(quality),
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: plannerSystem(quality) },
+          { role: "user", content: plannerUser(brief, count, avoid) },
+        ],
+      }),
+    });
+    if (!res.ok) return fallbackConcepts(brief, count);
+    const data = await res.json().catch(() => null);
+    const text: string | undefined = data?.choices?.[0]?.message?.content;
+    if (typeof text !== "string" || !text.trim()) return fallbackConcepts(brief, count);
+    const concepts = parseConcepts(text).filter((c) => c.proposed_visual_direction || c.real_world_subject);
+    if (concepts.length === 0) return fallbackConcepts(brief, count);
+    // Pad (or trim) to exactly `count` so we generate the requested number.
+    while (concepts.length < count) concepts.push(...fallbackConcepts(brief, count - concepts.length));
+    return concepts.slice(0, count);
+  } catch {
+    return fallbackConcepts(brief, count);
+  }
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -309,12 +499,18 @@ async function completeReservation(
 }
 
 // ---- Request body limits ------------------------------------------------
-const MAX_BODY_BYTES = 16_384; // reject oversized payloads outright
+// Raised to accommodate a truncated article body + a small avoid-history so the
+// planner can understand the story; still bounded against abuse.
+const MAX_BODY_BYTES = 48_000; // reject oversized payloads outright
 const FIELD_MAX: Record<string, number> = {
   title: 300,
+  original_title: 300,
   excerpt: 2000,
   summary: 2000,
+  body: 6000,
   category: 120,
+  source_name: 160,
+  country: 120,
 };
 
 function field(body: Record<string, unknown>, key: keyof typeof FIELD_MAX): string {
@@ -356,9 +552,22 @@ Deno.serve(async (req: Request) => {
   }
 
   const title = field(body, "title");
+  const originalTitle = field(body, "original_title");
   const excerpt = field(body, "excerpt");
   const summary = field(body, "summary");
+  const bodyText = field(body, "body");
   const category = field(body, "category");
+  const sourceName = field(body, "source_name");
+  const country = field(body, "country");
+
+  // Regeneration diversity: concise concept summaries already generated in this
+  // editor session; the planner is told to explore materially different ideas.
+  const avoidConcepts: string[] = Array.isArray((body as { avoid_concepts?: unknown })?.avoid_concepts)
+    ? ((body as { avoid_concepts: unknown[] }).avoid_concepts)
+        .map((x) => String(x ?? "").trim().slice(0, 120))
+        .filter(Boolean)
+        .slice(0, 12)
+    : [];
 
   // quality: exactly one mode. Absent => "fast" (backward-compatible);
   // present-but-invalid => reject.
@@ -398,14 +607,33 @@ Deno.serve(async (req: Request) => {
     return Response.json({ ok: false, reason: reservation.reason }, { status });
   }
 
-  const brief = { title, excerpt, summary, category };
+  const brief: Brief = {
+    title,
+    originalTitle,
+    excerpt,
+    summary,
+    body: truncate(bodyText, FIELD_MAX.body),
+    category,
+    sourceName,
+    country,
+  };
   const model = modelFor(quality);
-  // One prompt per option, each with a different visual angle, run in parallel
-  // so total latency stays close to a single image (well under the ~150s cap).
-  let attempts: Array<{ url: string } | { reason: string; status?: number }>;
+
+  // STEP 1 (text-only): the editorial visual director understands the story and
+  // designs `count` DISTINCT article-specific concepts, avoiding already-used
+  // ones. One planner call regardless of count → no wasteful hidden loops.
+  const concepts = await planConcepts(apiKey, quality, brief, count, avoidConcepts);
+
+  // STEP 2: one image per concept (each a genuinely different visual direction),
+  // run in parallel so total latency stays close to a single image.
+  let attempts: Array<({ url: string } & { concept: Concept }) | { reason: string; status?: number }>;
   try {
     attempts = await Promise.all(
-      Array.from({ length: count }, (_, i) => generateOne(apiKey, admin, model, buildPrompt(brief, i))),
+      concepts.map((c) =>
+        generateOne(apiKey, admin, model, buildImagePrompt(c, quality)).then((r) =>
+          "url" in r ? { ...r, concept: c } : r,
+        ),
+      ),
     );
   } catch {
     // Unexpected failure: release the reservation so it never blocks the user.
@@ -413,8 +641,10 @@ Deno.serve(async (req: Request) => {
     return Response.json({ ok: false, reason: "no_image" });
   }
 
-  const urls = attempts.flatMap((a) => ("url" in a ? [a.url] : []));
-  if (urls.length === 0) {
+  const candidates = attempts.flatMap((a) =>
+    "url" in a ? [{ url: a.url, concept_summary: a.concept.concept_summary, mode: quality }] : [],
+  );
+  if (candidates.length === 0) {
     // Surface the first failure reason; mark the reservation failed (0 images).
     const firstFail = attempts.find((a) => "reason" in a) as
       | { reason: string; status?: number }
@@ -424,7 +654,9 @@ Deno.serve(async (req: Request) => {
   }
 
   // Meter only the images we actually produced.
-  await completeReservation(admin, reservation.id, auth.userId, "succeeded", urls.length, null);
-  // `url` kept for backward-compatible single-image callers.
-  return Response.json({ ok: true, urls, url: urls[0] });
+  await completeReservation(admin, reservation.id, auth.userId, "succeeded", candidates.length, null);
+  const urls = candidates.map((c) => c.url);
+  // `candidates` carries per-image concept metadata; `urls`/`url` stay for
+  // backward-compatible callers.
+  return Response.json({ ok: true, candidates, urls, url: urls[0] });
 });
