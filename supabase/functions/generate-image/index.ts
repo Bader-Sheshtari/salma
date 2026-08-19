@@ -90,12 +90,14 @@ type Concept = {
   must_avoid: string[];
   proposed_visual_direction: string;
   concept_summary: string;
-  // Source-aware recommendation: true when the article has a strong real-world
-  // anchor (a specific named person/company/hospital/product, or a powerful human
-  // moment) whose ORIGINAL source image would be a stronger, more credible cover
-  // than a generated concept. Only meaningful when a source image exists.
-  prefer_source_image: boolean;
-  source_image_reason: string;
+  // Editorial ASSET decision — which cover would be strongest and most truthful:
+  //   "original_source" — the preserved publisher image is best (needs one to exist)
+  //   "official_asset"  — a real image from an AUTHORITATIVE source tied to the
+  //                       story (official company/hospital/person/product page)
+  //                       would be strongest; names which source in asset_reason
+  //   "generate"        — an AI editorial illustration is the best fit
+  asset_recommendation: "original_source" | "official_asset" | "generate";
+  asset_reason: string;
 };
 
 // Text models for the editorial-visual planning step (NOT image models). Fast
@@ -199,13 +201,13 @@ function plannerSystem(quality: Quality): string {
     "Never propose as the hero: office meetings, conference rooms, handshakes, executives around a table, people at laptops, staged doctors, a doctor holding a tablet, meaningless hospital corridors, generic healthcare stock, generic blue futuristic holograms or AI-brain imagery, or a company name/logo as the main subject — UNLESS the article is specifically about that.",
     "Do not add Gulf/Kuwaiti clothing or region-specific people as decoration; regional context matters only when the story is actually about a place/people.",
     "Editorial honesty: concepts are illustrative/conceptual, never fake documentary evidence — no specific real named person, no staged fake events, no fabricated clinical results.",
-    // Source-aware: when a real-world anchor + an original source image exist,
-    // recommend using that real image instead of forcing a generated concept.
-    "SOURCE-AWARENESS: if the article is anchored to a concrete real-world entity — a named company, a named person, a specific hospital/institution, a specific product, or a powerful documented human situation — AND an original source (publisher) image is available, a real photograph is usually MORE credible and editorially stronger than an invented illustration. In that case set prefer_source_image=true with a one-line source_image_reason. If no source image is available, or the story is best served by a conceptual/scientific illustration, set prefer_source_image=false. You still design a full concept regardless (it is a fallback/alternative).",
+    // Asset decision: real photo vs AI is an editorial choice, not "AI at all costs".
+    "ASSET DECISION — for `asset_recommendation`, choose which cover is the strongest and MOST TRUTHFUL for this exact story: (a) 'original_source' — the preserved publisher image is best (ONLY when one is available); (b) 'official_asset' — a REAL image from an AUTHORITATIVE source tied to the story would be strongest, e.g. an official company logo/facility/product image, an official hospital/institution image, or an official headshot from the person's employer/university/government/official biography — when you choose this, name the likely authoritative source in asset_reason; (c) 'generate' — an AI editorial illustration is the best fit (typical for scientific/mechanistic stories with no strong real anchor).",
+    "Prefer a real, credible photograph over an invented illustration when the story is anchored to a concrete named company/person/hospital/product or a powerful documented human situation. A genuine documentary image can be the strongest cover — that is a SUCCESS, not a failure. The goal is the BEST EDITORIAL COVER, never 'AI at all costs'. Always still design a full generated concept as the fallback/alternative.",
     quality === "premium"
       ? "This is a PREMIUM cover: be more ambitious and original — sophisticated composition, real-world specificity, conceptual visualization, editorial metaphor and clear visual hierarchy — striking but always truthful to the article."
       : "This is a FAST cover: one strong, specific, story-true visual direction; efficient but never generic.",
-    "Return STRICT JSON only, matching exactly: {\"concepts\":[{\"story_type\":string,\"what_happened\":string,\"core_visual_fact\":string,\"key_entities\":string[],\"real_world_subject\":string,\"geographic_relevance\":string,\"people_needed\":boolean,\"must_show\":string[],\"must_avoid\":string[],\"proposed_visual_direction\":string,\"concept_summary\":string,\"prefer_source_image\":boolean,\"source_image_reason\":string}]}.",
+    "Return STRICT JSON only, matching exactly: {\"concepts\":[{\"story_type\":string,\"what_happened\":string,\"core_visual_fact\":string,\"key_entities\":string[],\"real_world_subject\":string,\"geographic_relevance\":string,\"people_needed\":boolean,\"must_show\":string[],\"must_avoid\":string[],\"proposed_visual_direction\":string,\"concept_summary\":string,\"asset_recommendation\":\"original_source\"|\"official_asset\"|\"generate\",\"asset_reason\":string}]}.",
     "concept_summary is a short (<=12 words) label of the visual idea. proposed_visual_direction is 1-2 vivid sentences an image model can render.",
   ].join(" ");
 }
@@ -264,8 +266,11 @@ function parseConcepts(text: string): Concept[] {
       must_avoid: strArr(c.must_avoid),
       proposed_visual_direction: String(c.proposed_visual_direction ?? "").slice(0, 500),
       concept_summary: String(c.concept_summary ?? "").slice(0, 120),
-      prefer_source_image: c.prefer_source_image === true,
-      source_image_reason: String(c.source_image_reason ?? "").slice(0, 200),
+      asset_recommendation:
+        c.asset_recommendation === "original_source" || c.asset_recommendation === "official_asset"
+          ? c.asset_recommendation
+          : "generate",
+      asset_reason: String(c.asset_reason ?? "").slice(0, 200),
     };
   });
 }
@@ -292,8 +297,8 @@ function fallbackConcepts(brief: Brief, count: number): Concept[] {
     must_avoid: [],
     proposed_visual_direction: dirs[i % dirs.length],
     concept_summary: (brief.title ?? base).slice(0, 80),
-    prefer_source_image: false,
-    source_image_reason: "",
+    asset_recommendation: "generate",
+    asset_reason: "",
   }));
 }
 
@@ -681,13 +686,13 @@ Deno.serve(async (req: Request) => {
   await completeReservation(admin, reservation.id, auth.userId, "succeeded", candidates.length, null);
   const urls = candidates.map((c) => c.url);
 
-  // Source-aware recommendation: if any planned concept judged the ORIGINAL
-  // source image the stronger cover (only possible when one exists), surface that
-  // as a non-binding hint so the editor can prefer «الصورة الأصلية».
-  const rec = concepts.find((c) => c.prefer_source_image && hasSourceImage);
-  const recommendation = rec
-    ? { prefer_source_image: true, reason: rec.source_image_reason }
-    : { prefer_source_image: false, reason: "" };
+  // Editorial asset decision (non-binding hint): does a REAL image beat an AI
+  // one for this story? Prefer the first concept's decision; downgrade an
+  // 'original_source' recommendation to 'generate' when no source image exists.
+  const primary = concepts[0];
+  let decision: Concept["asset_recommendation"] = primary?.asset_recommendation ?? "generate";
+  if (decision === "original_source" && !hasSourceImage) decision = "generate";
+  const recommendation = { decision, reason: primary?.asset_reason ?? "" };
 
   // `candidates` carries per-image concept metadata; `urls`/`url` stay for
   // backward-compatible callers.

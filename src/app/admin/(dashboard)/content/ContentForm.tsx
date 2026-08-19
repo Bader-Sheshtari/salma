@@ -92,13 +92,14 @@ export function ContentForm({
   // candidates, never destroys prior ones.
   const [aiCandidates, setAiCandidates] = useState<ImageCandidate[]>([]);
   const [aiQuality, setAiQuality] = useState<"fast" | "premium">("fast");
-  // BATCH size (how many DIFFERENT concepts to generate in one click). This is a
-  // separate, explicit control — NOT candidate/option numbering. Default 1.
-  const [aiBatch, setAiBatch] = useState(1);
-  // Non-binding hint from the planner: the original source image may be the
-  // strongest cover for this real-world-anchored story.
-  const [recommendSource, setRecommendSource] = useState<{ prefer: boolean; reason: string }>({
-    prefer: false,
+  // URLs from the MOST RECENT generation — badged «جديدة» so a new candidate is
+  // unmistakable without changing the current cover.
+  const [freshUrls, setFreshUrls] = useState<Set<string>>(new Set());
+  // Non-binding editorial hint from the planner: which cover is strongest — the
+  // original image, a real official asset from an authoritative source, or an AI
+  // illustration. Generation is intentionally ONE image per click (no batch).
+  const [assetRec, setAssetRec] = useState<{ decision: "original_source" | "official_asset" | "generate"; reason: string }>({
+    decision: "generate",
     reason: "",
   });
   // The ORIGINAL source image (publisher), persisted separately from the cover.
@@ -166,29 +167,23 @@ export function ContentForm({
         category,
         sourceName,
         quality: aiQuality,
-        count: aiBatch,
+        count: 1, // intentionally ONE image per click (sequential, cost-controlled)
         avoidConcepts,
         hasSourceImage: !!originalImageUrl,
       });
       if ("ok" in r) {
-        // ACCUMULATE new candidates (dedupe by url); keep prior ones + the
-        // original image option. Identify the newly-added ones so the newest
-        // becomes the visible preview (fixes "I generated but nothing appeared").
-        let firstNewUrl = "";
+        // Add the new candidate(s) to the gallery, NEWEST FIRST, and badge them
+        // «جديدة». Generation NEVER changes the current cover — selection is a
+        // separate, explicit action (the editor clicks a candidate to use it).
+        const fresh = new Set<string>();
         setAiCandidates((prev) => {
           const seen = new Set(prev.map((c) => c.url));
-          const merged = [...prev];
-          for (const c of r.candidates) {
-            if (!seen.has(c.url)) { seen.add(c.url); merged.push(c); if (!firstNewUrl) firstNewUrl = c.url; }
-          }
-          return merged;
+          const added: ImageCandidate[] = [];
+          for (const c of r.candidates) if (!seen.has(c.url)) { seen.add(c.url); added.push(c); fresh.add(c.url); }
+          return [...added, ...prev];
         });
-        // Show the freshly generated image immediately as the current cover. The
-        // original and every prior candidate remain selectable in the gallery, so
-        // nothing is lost — the editor can click back anytime.
-        if (firstNewUrl) setCoverUrl(firstNewUrl);
-        else if (!coverUrl && r.urls[0]) setCoverUrl(r.urls[0]);
-        setRecommendSource({ prefer: r.recommendation.preferSourceImage, reason: r.recommendation.reason });
+        setFreshUrls(fresh);
+        setAssetRec({ decision: r.recommendation.decision, reason: r.recommendation.reason });
       } else {
         setAiError(r.error);
       }
@@ -383,12 +378,10 @@ export function ContentForm({
             className="rounded-lg border border-teal bg-teal/5 px-4 py-2 text-[13px] font-semibold text-teal hover:bg-teal/10 disabled:opacity-60"
           >
             {aiBusy
-              ? `جارٍ التوليد${aiBatch > 1 ? ` (${aiBatch})` : ""}…`
-              : aiBatch > 1
-                ? `توليد ${aiBatch} أفكار مختلفة ✨`
-                : aiCandidates.length > 0
-                  ? "توليد صورة أخرى ✨"
-                  : "توليد صورة بالذكاء الاصطناعي ✨"}
+              ? "جارٍ التوليد…"
+              : aiCandidates.length > 0
+                ? "توليد صورة أخرى ✨"
+                : "توليد صورة بالذكاء الاصطناعي ✨"}
           </button>
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] font-semibold text-gray">الوضع:</span>
@@ -413,23 +406,6 @@ export function ContentForm({
               </button>
             </div>
           </div>
-          <div className="flex items-center gap-1.5" title="عدد الأفكار المختلفة التي تُولَّد دفعةً واحدة — ليست ترقيم الخيارات">
-            <span className="text-[11px] font-semibold text-gray">توليد دفعة:</span>
-            <div className="inline-flex overflow-hidden rounded-lg border border-line text-[12px] font-semibold">
-              {[1, 2, 3].map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => setAiBatch(n)}
-                  disabled={aiBusy || coverBusy}
-                  aria-pressed={aiBatch === n}
-                  className={`px-3 py-2 transition ${aiBatch === n ? "bg-teal text-white" : "text-teal hover:bg-cream"}`}
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
-          </div>
           {coverUrl ? (
             <button
               type="button"
@@ -441,16 +417,43 @@ export function ContentForm({
           ) : null}
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-gray">
-          يفهم النظام محتوى المقال أولاً ثم يبني أقوى مفهوم بصري خاص بهذا الخبر تحديداً. كل ضغطة على
-          الزر تُولّد صورة واحدة جديدة باتجاه بصري مختلف. «توليد دفعة» اختياري: يُولّد عدة أفكار مختلفة
-          دفعةً واحدة (وهو ليس ترقيم الخيارات). «توليد سريع» أسرع، و«جودة عالية» إخراج تحريري أعمق. تبقى
-          «الصورة الأصلية» وكل الصور المُولّدة في هذه الجلسة متاحة للاختيار — لا يُلغي أيٌّ منها الآخر.
+          يفهم النظام محتوى المقال أولاً ثم يبني أقوى مفهوم بصري خاص بهذا الخبر تحديداً. كل ضغطة على الزر
+          تُولّد صورة واحدة جديدة باتجاه بصري مختلف عمّا سبق. التوليد لا يغيّر الغلاف الحالي؛ تظهر الصورة
+          الجديدة في المعرض بشارة «جديدة»، وتصبح غلافاً فقط عند الضغط عليها. «توليد سريع» أسرع، و«جودة
+          عالية» إخراج تحريري أعمق. تبقى «الصورة الأصلية» وكل الصور المُولّدة في هذه الجلسة متاحة للاختيار.
         </p>
         {aiError ? <div className="mt-2 text-[13px] text-coral">{aiError}</div> : null}
-        {recommendSource.prefer && originalImageUrl ? (
+        {assetRec.decision === "original_source" && originalImageUrl ? (
           <div className="mt-2 rounded-lg border border-teal/40 bg-teal/5 px-3 py-2 text-[12px] text-teal">
             توصية تحريرية: «الصورة الأصلية» من المصدر قد تكون الأقوى لهذا الخبر.
-            {recommendSource.reason ? <span className="text-gray"> — {recommendSource.reason}</span> : null}
+            {assetRec.reason ? <span className="text-gray"> — {assetRec.reason}</span> : null}
+          </div>
+        ) : assetRec.decision === "official_asset" ? (
+          <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+            <div className="font-semibold">
+              توصية تحريرية: صورة رسمية من مصدر موثوق قد تكون الأقوى والأصدق لهذا الخبر.
+              {assetRec.reason ? <span className="font-normal"> — {assetRec.reason}</span> : null}
+            </div>
+            {rows.some((r) => /^https?:\/\//i.test(r.url.trim())) ? (
+              <div className="mt-1 text-[11px]">
+                افتح المصدر الرسمي، واحفظ الصورة الرسمية (شعار/مبنى/منتج/صورة شخصية رسمية) ثم ارفعها عبر «رفع صورة الغلاف»
+                مع الحفاظ على نسبة المصدر:
+                <span className="ms-1 inline-flex flex-wrap gap-x-2">
+                  {rows
+                    .filter((r) => /^https?:\/\//i.test(r.url.trim()))
+                    .slice(0, 6)
+                    .map((r, i) => (
+                      <a key={i} href={r.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-teal underline">
+                        {r.label || new URL(r.url).host.replace(/^www\./, "")} ↗
+                      </a>
+                    ))}
+                </span>
+              </div>
+            ) : (
+              <div className="mt-1 text-[11px] text-amber-800">
+                لا توجد روابط مصادر رسمية مرتبطة بهذا المقال بعد — أضِف مصدراً رسمياً في قسم «المصادر» أدناه، أو استخدم الصورة الأصلية / التوليد.
+              </div>
+            )}
           </div>
         ) : null}
         {(originalImageUrl || aiCandidates.length > 0) ? (
@@ -470,7 +473,7 @@ export function ContentForm({
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={originalImageUrl} alt="الصورة الأصلية" className="aspect-[16/9] w-full object-cover" />
                   <span className="absolute top-1 right-1 rounded bg-ink/80 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                    الصورة الأصلية{recommendSource.prefer ? " · موصى بها" : ""}
+                    الصورة الأصلية{assetRec.decision === "original_source" ? " · موصى بها" : ""}
                   </span>
                   {originalImageUrl === coverUrl ? (
                     <span className="absolute bottom-1 left-1 rounded bg-teal px-1.5 py-0.5 text-[10px] font-bold text-white">
@@ -479,9 +482,11 @@ export function ContentForm({
                   ) : null}
                 </button>
               ) : null}
-              {/* Session AI candidates (accumulated, newest last). */}
+              {/* Session AI candidates — NEWEST FIRST; the latest generation is
+                  badged «جديدة». Clicking a candidate is what sets the cover. */}
               {aiCandidates.map((c, i) => {
                 const selected = c.url === coverUrl;
+                const isFresh = freshUrls.has(c.url);
                 return (
                   <button
                     key={c.url}
@@ -490,11 +495,16 @@ export function ContentForm({
                     aria-pressed={selected}
                     title={c.conceptSummary || undefined}
                     className={`relative overflow-hidden rounded-lg border-2 transition ${
-                      selected ? "border-teal ring-2 ring-teal/30" : "border-line hover:border-teal/50"
+                      selected ? "border-teal ring-2 ring-teal/30" : isFresh ? "border-teal/60 ring-2 ring-teal/20" : "border-line hover:border-teal/50"
                     }`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={c.url} alt={c.conceptSummary || `خيار ${i + 1}`} className="aspect-[16/9] w-full object-cover" />
+                    {isFresh ? (
+                      <span className="absolute top-1 left-1 rounded bg-teal px-1.5 py-0.5 text-[10px] font-bold text-white">
+                        جديدة
+                      </span>
+                    ) : null}
                     {c.mode === "premium" ? (
                       <span className="absolute top-1 right-1 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
                         جودة عالية

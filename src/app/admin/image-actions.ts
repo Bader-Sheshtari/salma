@@ -7,12 +7,14 @@ import { createClient } from "@/lib/supabase/server";
  *  (used for the editor's session gallery and regeneration avoid-history). */
 export type ImageCandidate = { url: string; conceptSummary: string; mode: "fast" | "premium" };
 
-/** Non-binding editorial hint: the planner judged the ORIGINAL source image the
- *  stronger cover for this real-world-anchored story (only when one exists). */
-export type SourceImageRecommendation = { preferSourceImage: boolean; reason: string };
+/** Non-binding editorial hint: which cover is strongest/most truthful —
+ *  the preserved original image, a real official asset from an authoritative
+ *  source tied to the story, or an AI-generated editorial illustration. */
+export type AssetDecision = "original_source" | "official_asset" | "generate";
+export type AssetRecommendation = { decision: AssetDecision; reason: string };
 
 export type GenerateImageResult =
-  | { ok: true; urls: string[]; candidates: ImageCandidate[]; recommendation: SourceImageRecommendation }
+  | { ok: true; urls: string[]; candidates: ImageCandidate[]; recommendation: AssetRecommendation }
   | { error: string };
 
 /**
@@ -135,8 +137,12 @@ export async function generateCoverImage(input: {
     : urls.map((url) => ({ url, conceptSummary: "", mode: quality }));
 
   const rawRec = (data.recommendation ?? {}) as Record<string, unknown>;
-  const recommendation: SourceImageRecommendation = {
-    preferSourceImage: rawRec.prefer_source_image === true,
+  const decision: AssetDecision =
+    rawRec.decision === "original_source" || rawRec.decision === "official_asset"
+      ? rawRec.decision
+      : "generate";
+  const recommendation: AssetRecommendation = {
+    decision,
     reason: typeof rawRec.reason === "string" ? rawRec.reason : "",
   };
 
