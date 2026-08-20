@@ -75,26 +75,44 @@ type Brief = {
   hasSourceImage?: boolean;
 };
 
-// One planned editorial cover concept, grounded in what actually happened in the
-// article. The planner returns one per requested image; `concept_summary` is the
-// short line accumulated as regeneration "avoid history".
+// A structured ARTICLE-TO-IMAGE BRIEF for one cover concept. The planner must
+// first extract the story's real discrete elements (entity / mechanism /
+// condition / news event), then design a concept that visibly COMBINES at least
+// two or three of them and passes a specificity gate — so the cover is
+// unmistakably about THIS article, not a generic "medical mood". One brief per
+// requested image; `concept_summary` + `interpretation_lens` accumulate as the
+// regeneration "avoid history".
 type Concept = {
-  story_type: string;
-  what_happened: string;
-  core_visual_fact: string;
-  key_entities: string[];
-  real_world_subject: string;
-  geographic_relevance: string; // "none" | "kuwait" | "gulf" | "global" | free text
+  // Extracted real elements of the story (each "" only if genuinely absent).
+  story_angle: string; // the core editorial news angle in one line
+  primary_entity: string; // main named company/org/product/person (e.g. "Moderna")
+  secondary_entity: string; // partner/second entity if any
+  medical_mechanism: string; // technology/mechanism (e.g. "mRNA personalized vaccine")
+  condition: string; // disease/condition (e.g. "melanoma / skin cancer")
+  news_event_type: string; // trial result | approval | partnership | manufacturing | expansion | discovery | market reaction | ...
+  // The designed concept, built from the elements above.
+  primary_visual_subject: string; // the strongest truthful HERO subject
+  secondary_visual_cue: string; // a supporting cue tying in another element
   people_needed: boolean;
+  geographic_relevance: string; // "none" | "kuwait" | "gulf" | "global" | free text
   must_show: string[];
   must_avoid: string[];
-  proposed_visual_direction: string;
-  concept_summary: string;
+  proposed_visual_direction: string; // 1-2 vivid renderable sentences
+  // Which real elements this concept makes legible together (>= 2, ideally 3).
+  elements_combined: string[];
+  // Why this image is unmistakably about THIS article and would NOT fit many
+  // unrelated health stories (the specificity gate's justification).
+  specificity_rationale: string;
+  // The distinct editorial interpretation this concept uses, so successive
+  // generations explore a genuinely different reading (not a re-pose). E.g.
+  // "entity+mechanism+condition" | "development/manufacturing/research" |
+  // "clinical/personalized-treatment" | "business/science hybrid".
+  interpretation_lens: string;
+  concept_summary: string; // short (<=12 words) label
   // Editorial ASSET decision — which cover would be strongest and most truthful:
   //   "original_source" — the preserved publisher image is best (needs one to exist)
   //   "official_asset"  — a real image from an AUTHORITATIVE source tied to the
   //                       story (official company/hospital/person/product page)
-  //                       would be strongest; names which source in asset_reason
   //   "generate"        — an AI editorial illustration is the best fit
   asset_recommendation: "original_source" | "official_asset" | "generate";
   asset_reason: string;
@@ -162,14 +180,30 @@ function buildImagePrompt(c: Concept, quality: Quality): string {
       ].join(" ")
     : "Do NOT include any people — focus entirely on the real subject described above (the object/mechanism/environment/technology). Do not invent people because they are convenient.";
 
+  // The real story elements this cover must make legible TOGETHER — the anti-
+  // genericness core. A cover that renders only one weak clue is not acceptable.
+  const elements = [
+    c.primary_entity ? `entity/company: ${c.primary_entity}` : "",
+    c.secondary_entity ? `second entity: ${c.secondary_entity}` : "",
+    c.medical_mechanism ? `mechanism/technology: ${c.medical_mechanism}` : "",
+    c.condition ? `condition/disease: ${c.condition}` : "",
+    c.news_event_type ? `news event: ${c.news_event_type}` : "",
+  ].filter(Boolean).join("; ");
+
   return [
-    "Editorial cover image for an Arabic health-news article. It must make a reader feel this image belongs to THIS SPECIFIC story — not a generic health or medical theme.",
-    `What happened in the article: ${c.what_happened}.`,
-    `Core visual fact to convey: ${c.core_visual_fact}.`,
-    `Depict this real-world subject: ${c.real_world_subject}.`,
+    "Editorial cover image for an Arabic health-news article. It must be UNMISTAKABLY about THIS specific story — an editor should instantly say 'yes, this is that article' — never a generic health or medical mood that could fit many unrelated stories.",
+    `Story angle: ${c.story_angle}.`,
+    elements ? `This cover must visually tie together these REAL elements of the story (at least two, ideally three, legible in one coherent image): ${elements}.` : "",
+    `Hero subject: ${c.primary_visual_subject}.`,
+    c.secondary_visual_cue ? `Supporting cue (secondary, must not dominate): ${c.secondary_visual_cue}.` : "",
     `Visual direction: ${c.proposed_visual_direction}.`,
+    c.primary_entity
+      ? `Make the identity of ${c.primary_entity} legible through its real-world context (its research/manufacturing/product/clinical setting) — but NEVER use its logo, wordmark or name as the hero, and never depict a specific real person.`
+      : "",
     c.must_show.length ? `Must show: ${c.must_show.join("; ")}.` : "",
     c.must_avoid.length ? `For this story specifically, avoid: ${c.must_avoid.join("; ")}.` : "",
+    // Hard anti-generic rule tuned to the reported failure mode.
+    "Do NOT reduce the cover to a single weak clue (e.g. a bare skin/shoulder close-up for a cancer story, an unlabelled vial, a lone doctor, or an anonymous body part). If a body part or object is used, it must be combined with the entity/mechanism context so the specific story is clear.",
     people,
     quality === "premium" ? PREMIUM_RENDER : FAST_RENDER,
     HONESTY,
@@ -192,23 +226,39 @@ function truncate(s: string | undefined, n: number): string {
 function plannerSystem(quality: Quality): string {
   return [
     "You are the editorial visual director for «سلمى», an independent Arabic health-news publication.",
-    "Your job: choose THE SINGLE STRONGEST editorial COVER for a SPECIFIC article — the way a top photo editor picks a magazine cover — not merely 'a nice image about the topic'.",
-    "Think first: WHAT ACTUALLY HAPPENED in this story, and what is the human or real-world stake? Then: what one image would make a reader instantly feel this belongs to THIS article and want to read it?",
-    "Ground the concept in the real subject of THIS story — the specific people affected, the real place, the actual development, the specific cells/mechanism/organ/drug/device/diagnostic/service/institution discussed.",
-    "IMPORTANT — do not default to safe symbolic abstractions. Do NOT make the MAIN subject a floating vaccine vial or bottle, a map, a giant mosquito, syringes on a plain background, an abstract infographic/chart scene, or a generic 'science' motif UNLESS that object is genuinely the strongest possible cover for this exact story. Such elements may appear as SUPPORTING detail, not as the lazy default hero.",
-    "When the strongest story is HUMAN — e.g. a vaccine that protects real children, a community affected by a disease, patients who benefit — a strong, dignified, real-world human moment is often the best cover; prefer it over a symbolic object when it tells the story better. (Represent people respectfully and generically; never a specific identifiable real individual.)",
-    "People are still a DECISION, not a reflex: use people when the human stake is the story; use the real object/mechanism/place when THAT is the story. Either way, pick the most evocative, specific, truthful image.",
-    "Never propose as the hero: office meetings, conference rooms, handshakes, executives around a table, people at laptops, staged doctors, a doctor holding a tablet, meaningless hospital corridors, generic healthcare stock, generic blue futuristic holograms or AI-brain imagery, or a company name/logo as the main subject — UNLESS the article is specifically about that.",
+    "Your job: design THE SINGLE STRONGEST editorial COVER for a SPECIFIC article — the way a top photo editor picks a magazine cover. A merely attractive 'medical-looking' image is a FAILURE. The cover must be unmistakably about THIS article.",
+
+    // STEP 1 — read the article and EXTRACT its real discrete elements.
+    "STEP 1 — Read the article closely and extract its REAL elements: story_angle (the core news angle), primary_entity (the main named company/organization/product/person, e.g. 'Moderna'), secondary_entity (partner/second entity, if any), medical_mechanism (the technology/mechanism, e.g. 'mRNA personalized cancer vaccine'), condition (the disease/condition, e.g. 'melanoma / skin cancer'), and news_event_type (e.g. trial result, approval, partnership, manufacturing, expansion, discovery, market reaction). Fill each field from the article; use \"\" ONLY if the element is genuinely absent. Do not invent elements.",
+
+    // STEP 2 — design a concept that COMBINES elements (the anti-genericness core).
+    "STEP 2 — Design a cover concept that visibly TIES TOGETHER at least TWO — ideally THREE — of these real elements in one coherent image (primary_entity + medical_mechanism + condition, or entity + mechanism + news_event, etc.). List them in elements_combined. A concept that rests on only ONE weak clue is REJECTED — e.g. for a skin-cancer story, a bare shoulder or skin close-up shows only the condition and misses the company and the mechanism; that is exactly the failure to avoid.",
+
+    // STEP 3 — the specificity gate.
+    "STEP 3 — SPECIFICITY GATE: ask 'could this exact image plausibly illustrate many unrelated health stories?' If yes, it FAILS — redesign it to be more specific. In specificity_rationale, state in one line WHY this cover is unmistakably about THIS article (name the entity/mechanism/condition it renders). If you cannot justify it, choose a more specific subject.",
+
+    // Named entities → make identity legible without logos/real faces.
+    "When the article names a company/product/hospital/person, make that identity LEGIBLE through its real-world context — the kind of research lab, manufacturing line, product/clinical setting or environment that reader associates with it — but NEVER use its logo/wordmark/name as the hero, and NEVER depict a specific real, named or identifiable person.",
+    "If the story is a company + a medical innovation, combine company identity + the scientific/medical mechanism + the clinical meaning tastefully in one editorial image. A market/business angle may appear as a SECONDARY cue only, never dominating unless the article is primarily a business story.",
+
+    // People: a decision, not a reflex.
+    "People are a DECISION, not a reflex. Use a dignified, generic human moment when the human stake IS the story; otherwise depict the real subject/mechanism/environment with no people. Never a specific identifiable individual.",
+    "Never propose as the hero: random patient body-part close-ups (shoulders, skin, hands) with no story-specific grounding, generic doctors in conversation, generic lab scenes with no article-specific anchor, office meetings, conference rooms, handshakes, people at laptops, staged doctors, meaningless hospital corridors, generic healthcare stock, blue futuristic holograms or AI-brain imagery, or a logo as the main subject.",
     "Do not add Gulf/Kuwaiti clothing or region-specific people as decoration; regional context matters only when the story is actually about a place/people.",
     "Editorial honesty: concepts are illustrative/conceptual, never fake documentary evidence — no specific real named person, no staged fake events, no fabricated clinical results.",
-    // Asset decision: real photo vs AI is an editorial choice, not "AI at all costs".
-    "ASSET DECISION — for `asset_recommendation`, choose which cover is the strongest and MOST TRUTHFUL for this exact story: (a) 'original_source' — the preserved publisher image is best (ONLY when one is available); (b) 'official_asset' — a REAL image from an AUTHORITATIVE source tied to the story would be strongest, e.g. an official company logo/facility/product image, an official hospital/institution image, or an official headshot from the person's employer/university/government/official biography — when you choose this, name the likely authoritative source in asset_reason; (c) 'generate' — an AI editorial illustration is the best fit (typical for scientific/mechanistic stories with no strong real anchor).",
-    "Prefer a real, credible photograph over an invented illustration when the story is anchored to a concrete named company/person/hospital/product or a powerful documented human situation. A genuine documentary image can be the strongest cover — that is a SUCCESS, not a failure. The goal is the BEST EDITORIAL COVER, never 'AI at all costs'. Always still design a full generated concept as the fallback/alternative.",
+
+    // Distinct interpretation per generation (successive-generation policy).
+    "interpretation_lens: name the ONE editorial reading this concept uses, chosen from (but not limited to): 'entity+mechanism+condition', 'development/manufacturing/research environment', 'clinical/personalized-treatment', 'business/science hybrid'. If prior concepts are listed to avoid, you MUST choose a DIFFERENT lens and a different hero subject — a genuinely different valid interpretation of the SAME article, not a re-pose or a minor composition change. Every lens must still stay faithful to the extracted elements.",
+
+    // Asset decision (unchanged intent).
+    "ASSET DECISION — for asset_recommendation choose the strongest, most truthful cover: 'original_source' (the preserved publisher image is best; only if one exists); 'official_asset' (a REAL image from an authoritative source tied to the story would be strongest — name the likely source in asset_reason); or 'generate' (an AI editorial illustration is the best fit). Always still design a full generated concept as the alternative.",
+
     quality === "premium"
-      ? "This is a PREMIUM cover: be more ambitious and original — sophisticated composition, real-world specificity, conceptual visualization, editorial metaphor and clear visual hierarchy — striking but always truthful to the article."
-      : "This is a FAST cover: one strong, specific, story-true visual direction; efficient but never generic.",
-    "Return STRICT JSON only, matching exactly: {\"concepts\":[{\"story_type\":string,\"what_happened\":string,\"core_visual_fact\":string,\"key_entities\":string[],\"real_world_subject\":string,\"geographic_relevance\":string,\"people_needed\":boolean,\"must_show\":string[],\"must_avoid\":string[],\"proposed_visual_direction\":string,\"concept_summary\":string,\"asset_recommendation\":\"original_source\"|\"official_asset\"|\"generate\",\"asset_reason\":string}]}.",
-    "concept_summary is a short (<=12 words) label of the visual idea. proposed_visual_direction is 1-2 vivid sentences an image model can render.",
+      ? "This is a PREMIUM cover: more ambitious and original — sophisticated composition, real-world specificity, layered conceptual visualization and clear visual hierarchy that fuse entity + mechanism + condition — striking but always truthful."
+      : "This is a FAST cover: one strong, SPECIFIC, story-true direction that combines the real elements; efficient but never generic.",
+
+    "Return STRICT JSON only, matching exactly: {\"concepts\":[{\"story_angle\":string,\"primary_entity\":string,\"secondary_entity\":string,\"medical_mechanism\":string,\"condition\":string,\"news_event_type\":string,\"primary_visual_subject\":string,\"secondary_visual_cue\":string,\"people_needed\":boolean,\"geographic_relevance\":string,\"must_show\":string[],\"must_avoid\":string[],\"proposed_visual_direction\":string,\"elements_combined\":string[],\"specificity_rationale\":string,\"interpretation_lens\":string,\"concept_summary\":string,\"asset_recommendation\":\"original_source\"|\"official_asset\"|\"generate\",\"asset_reason\":string}]}.",
+    "concept_summary is a short (<=12 words) label. proposed_visual_direction is 1-2 vivid sentences an image model can render.",
   ].join(" ");
 }
 
@@ -223,18 +273,18 @@ function plannerUser(brief: Brief, count: number, avoid: string[]): string {
     brief.sourceName ? `Original source/publisher: ${brief.sourceName}` : "",
     brief.country ? `Geographic context from the story: ${brief.country}` : "",
     brief.hasSourceImage
-      ? "An ORIGINAL source (publisher) image IS available for this article — consider recommending it (prefer_source_image=true) if it is the strongest, most credible cover."
-      : "No original source image is available — do not recommend one (prefer_source_image=false).",
+      ? "An ORIGINAL source (publisher) image IS available — you MAY set asset_recommendation='original_source' if it is the strongest, most credible cover."
+      : "No original source image is available — do NOT set asset_recommendation='original_source'.",
   ].filter(Boolean);
   const avoidLine = avoid.length
-    ? `\n\nAlready-used concepts to AVOID (choose materially different visual directions — different subject, composition and storytelling, not a rearrangement): ${avoid.map((a) => `“${a}”`).join(", ")}.`
+    ? `\n\nAlready-used concepts to AVOID (each begins with its [interpretation_lens]). You MUST choose an interpretation_lens NOT already listed here AND a different hero subject — a genuinely different valid reading of the SAME article, never a re-pose or minor re-composition, still faithful to the same extracted elements: ${avoid.map((a) => `“${a}”`).join(", ")}.`
     : "";
   return (
     `Design ${count} DISTINCT cover concept${count > 1 ? "s" : ""} for this article. ` +
     (count > 1
-      ? "Each concept must be genuinely different from the others in subject, composition and storytelling (not three variations of one idea). "
+      ? "Each concept must use a DIFFERENT interpretation_lens and a different hero subject (not variations of one idea). "
       : "") +
-    "Ground every concept in what actually happened.\n\n" +
+    "First extract the real elements, then combine at least two or three of them, then pass the specificity gate.\n\n" +
     parts.join("\n") +
     avoidLine
   );
@@ -255,16 +305,22 @@ function parseConcepts(text: string): Concept[] {
     const strArr = (v: unknown): string[] =>
       Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean).slice(0, 8) : [];
     return {
-      story_type: String(c.story_type ?? "health_news"),
-      what_happened: String(c.what_happened ?? "").slice(0, 500),
-      core_visual_fact: String(c.core_visual_fact ?? "").slice(0, 300),
-      key_entities: strArr(c.key_entities),
-      real_world_subject: String(c.real_world_subject ?? "").slice(0, 300),
-      geographic_relevance: String(c.geographic_relevance ?? "none").slice(0, 60),
+      story_angle: String(c.story_angle ?? "").slice(0, 300),
+      primary_entity: String(c.primary_entity ?? "").slice(0, 160),
+      secondary_entity: String(c.secondary_entity ?? "").slice(0, 160),
+      medical_mechanism: String(c.medical_mechanism ?? "").slice(0, 200),
+      condition: String(c.condition ?? "").slice(0, 160),
+      news_event_type: String(c.news_event_type ?? "").slice(0, 120),
+      primary_visual_subject: String(c.primary_visual_subject ?? c.real_world_subject ?? "").slice(0, 300),
+      secondary_visual_cue: String(c.secondary_visual_cue ?? "").slice(0, 300),
       people_needed: c.people_needed === true,
+      geographic_relevance: String(c.geographic_relevance ?? "none").slice(0, 60),
       must_show: strArr(c.must_show),
       must_avoid: strArr(c.must_avoid),
       proposed_visual_direction: String(c.proposed_visual_direction ?? "").slice(0, 500),
+      elements_combined: strArr(c.elements_combined),
+      specificity_rationale: String(c.specificity_rationale ?? "").slice(0, 300),
+      interpretation_lens: String(c.interpretation_lens ?? "").slice(0, 80),
       concept_summary: String(c.concept_summary ?? "").slice(0, 120),
       asset_recommendation:
         c.asset_recommendation === "original_source" || c.asset_recommendation === "official_asset"
@@ -280,26 +336,35 @@ function parseConcepts(text: string): Concept[] {
  * Grounded in the title/summary; varies direction per index for a multi set. */
 function fallbackConcepts(brief: Brief, count: number): Concept[] {
   const base = brief.summary || brief.excerpt || brief.title || "the article's topic";
-  const dirs = [
-    "a concrete close-up of the real subject or object at the center of this story, with authentic texture and shallow depth of field",
-    "a conceptual visualization of the mechanism, process or idea the article describes, rendered cleanly and truthfully",
-    "the real environment or scientific/medical subject of the story shown with strong sense of place and depth",
+  const lenses = [
+    { lens: "entity+mechanism+condition", dir: "an editorial visualization that ties together the article's main entity, its medical mechanism, and the specific condition it addresses, in one coherent composition" },
+    { lens: "development/manufacturing/research environment", dir: "the specific research or manufacturing environment behind this development, rendered with real material detail tied to the article's mechanism" },
+    { lens: "clinical/personalized-treatment", dir: "the clinical or personalized-treatment meaning of this development for the specific condition in the article" },
   ];
-  return Array.from({ length: count }, (_, i) => ({
-    story_type: "health_news",
-    what_happened: base.slice(0, 500),
-    core_visual_fact: (brief.title ?? base).slice(0, 300),
-    key_entities: [],
-    real_world_subject: "the specific real subject at the center of this article (not a generic health scene)",
-    geographic_relevance: "none",
-    people_needed: false,
-    must_show: [],
-    must_avoid: [],
-    proposed_visual_direction: dirs[i % dirs.length],
-    concept_summary: (brief.title ?? base).slice(0, 80),
-    asset_recommendation: "generate",
-    asset_reason: "",
-  }));
+  return Array.from({ length: count }, (_, i) => {
+    const L = lenses[i % lenses.length];
+    return {
+      story_angle: base.slice(0, 300),
+      primary_entity: "",
+      secondary_entity: "",
+      medical_mechanism: "",
+      condition: "",
+      news_event_type: "",
+      primary_visual_subject: "the specific real subject, entity context and mechanism at the center of THIS article (never a generic health scene or a lone body part)",
+      secondary_visual_cue: "",
+      people_needed: false,
+      geographic_relevance: "none",
+      must_show: [],
+      must_avoid: [],
+      proposed_visual_direction: L.dir,
+      elements_combined: [],
+      specificity_rationale: "grounded in the article's own subject and mechanism, not a generic medical mood",
+      interpretation_lens: L.lens,
+      concept_summary: (brief.title ?? base).slice(0, 80),
+      asset_recommendation: "generate",
+      asset_reason: "",
+    };
+  });
 }
 
 /** Run the text-only planner: one call → `count` distinct concepts. Falls back
@@ -333,7 +398,7 @@ async function planConcepts(
     const data = await res.json().catch(() => null);
     const text: string | undefined = data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) return fallbackConcepts(brief, count);
-    const concepts = parseConcepts(text).filter((c) => c.proposed_visual_direction || c.real_world_subject);
+    const concepts = parseConcepts(text).filter((c) => c.proposed_visual_direction || c.primary_visual_subject);
     if (concepts.length === 0) return fallbackConcepts(brief, count);
     // Pad (or trim) to exactly `count` so we generate the requested number.
     while (concepts.length < count) concepts.push(...fallbackConcepts(brief, count - concepts.length));
@@ -671,7 +736,17 @@ Deno.serve(async (req: Request) => {
   }
 
   const candidates = attempts.flatMap((a) =>
-    "url" in a ? [{ url: a.url, concept_summary: a.concept.concept_summary, mode: quality }] : [],
+    "url" in a
+      ? [{
+          url: a.url,
+          // Tag the summary with its interpretation lens so the accumulated
+          // avoid-history (fed back on the next click) drives lens rotation —
+          // each new generation explores a genuinely different editorial reading.
+          concept_summary:
+            (a.concept.interpretation_lens ? `[${a.concept.interpretation_lens}] ` : "") + a.concept.concept_summary,
+          mode: quality,
+        }]
+      : [],
   );
   if (candidates.length === 0) {
     // Surface the first failure reason; mark the reservation failed (0 images).
