@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   clusterRows, clusterKey, titleSignature, sourceTier, bestSource, isL5Eligible,
   scoreCandidate, selectBalanced, emptyDayState, defaultLaneConfig, gccSignal, resolveGcc,
+  candidateMergeGroups, dominantStoryType, significantTokens,
   type RadarRow, type RegistryEntry, type ScoredCandidate,
 } from "./esl-core.ts";
 
@@ -179,6 +180,81 @@ test("reader usefulness is decisive between otherwise-comparable strong-source s
   const useful = scoreCandidate(row({ ...common, title: "practical guidance patients", esl_usefulness: 90 }), [], reg, emptyDayState(), NOW);
   const niche = scoreCandidate(row({ ...common, title: "niche mechanism abstract", esl_usefulness: 20 }), [], reg, emptyDayState(), NOW);
   assert.ok(useful.score > niche.score);
+});
+
+// ---- cross-language canonical event merge --------------------------------
+
+const WIN72 = 72 * 60 * 60 * 1000;
+// The three ACTUAL production Moderna/Merck mRNA-melanoma-vaccine variants
+// (Chinese / Romanian / Greek originals) as radar-rank translated them to Arabic.
+// Original titles kept in their real (non-English) languages, as production has
+// them; the Arabic translation (title_ar) is the cross-language bridge.
+const moderna = [
+  row({ id: "zho", event_uri: "zho-2095743", language: "zho", source_domain: "ec.ltn.com.tw", esl_story_type: "corporate_business", esl_lane: "L4", esl_usefulness: 50, title: "莫德納 stock jumps 176%", title_ar: "اختراق كبير في لقاح السرطان! ارتفاع سعر سهم موديرنا", published_at: "2026-08-19T23:56:00Z" }),
+  row({ id: "ron", event_uri: "ron-489835", language: "ron", source_domain: "stiripesurse.ro", esl_story_type: "scientific_study", esl_lane: "L1", esl_usefulness: 75, title: "Moderna Merck test major piele", title_ar: "لقاح ضد سرطان الجلد ينجح في اختبار رئيسي: موديرنا وميرك", published_at: "2026-08-20T15:57:00Z" }),
+  row({ id: "ell", event_uri: "ell-1289360", language: "ell", source_domain: "liberal.gr", esl_story_type: "scientific_study", esl_lane: "L1", esl_usefulness: 75, title: "mRNA emvolio Moderna Merck", title_ar: "السرطان: لقاح mRNA المخصص يمر بالاختبار الكبير - موديرنا وميرك", published_at: "2026-08-20T13:56:00Z" }),
+];
+// Negative control: a DIFFERENT vaccine development (Shigella conjugate) — shares
+// only the generic word "لقاح" (vaccine), must NOT be gathered with the Moderna set.
+const shigella = row({ id: "shg", event_uri: null, source_domain: "thelancet.com", esl_story_type: "scientific_study", esl_lane: "L1", title: "Synthetic carbohydrate conjugate vaccine SF2a-TT15 Shigella", title_ar: "سلامة ومناعة لقاح الكربوهيدرات الاصطناعي SF2a ضد الشيغيلا", published_at: "2026-08-19T22:42:00Z" });
+
+test("cross-language pre-filter gathers the 3 Moderna variants (via Arabic tokens)", () => {
+  const groups = candidateMergeGroups(moderna, WIN72, 2);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].length, 3);
+});
+
+test("negative control: a different vaccine development is NOT gathered with Moderna", () => {
+  const groups = candidateMergeGroups([...moderna, shigella], WIN72, 2);
+  const big = groups.find((g) => g.length > 1);
+  assert.ok(big && big.length === 3); // still just the 3 Moderna variants
+  assert.ok(!big!.some((r) => r.id === "shg")); // Shigella excluded
+});
+
+test("negative control: same company, different development & time → not merged", () => {
+  const trial = row({ id: "t", source_domain: "reuters.com", title: "Moderna melanoma trial", title_ar: "موديرنا لقاح سرطان الجلد تجربة", published_at: "2026-08-20T10:00:00Z" });
+  const earnings = row({ id: "e", source_domain: "reuters.com", title: "Moderna quarterly earnings revenue", title_ar: "موديرنا أرباح فصلية إيرادات مبيعات", published_at: "2026-05-01T10:00:00Z" });
+  const groups = candidateMergeGroups([trial, earnings], WIN72, 2);
+  assert.equal(groups.length, 0); // months apart + only "موديرنا" in common → never even a candidate pair
+});
+
+test("dominant story type keeps the most substantive framing (study over stock surge)", () => {
+  assert.equal(dominantStoryType(moderna), "scientific_study");
+});
+
+test("significantTokens bridges languages through the Arabic translation", () => {
+  const a = significantTokens(moderna[0]); // Chinese-origin, Arabic title
+  const b = significantTokens(moderna[1]); // Romanian-origin, Arabic title
+  const shared = [...a].filter((t) => b.has(t));
+  assert.ok(shared.includes("لقاح") && shared.includes("سرطان") && shared.includes("موديرنا"));
+});
+
+test("near-duplicate backstop: a split-off same-development variant does not take a 2nd slot", () => {
+  // Two Moderna/Merck variants the LLM merge left in separate clusters. Among a
+  // set where "موديرنا"/"وميرك" are rare, they share ≥2 distinctive tokens.
+  const modA = scoreCandidate(row({ id: "mA", source_domain: "stiripesurse.ro", esl_usefulness: 75, title: "skin cancer test", title_ar: "لقاح ضد سرطان الجلد ينجح في اختبار رئيسي موديرنا وميرك" }), [], reg, emptyDayState(), NOW);
+  const modB = scoreCandidate(row({ id: "mB", source_domain: "liberal.gr", esl_usefulness: 70, title: "mRNA test", title_ar: "السرطان لقاح mRNA المخصص يمر بالاختبار الكبير موديرنا وميرك" }), [], reg, emptyDayState(), NOW);
+  const fillers = ["اكتشاف جديد حول ضغط الدم", "دراسة النوم والذاكرة", "تطعيم الأطفال في المدارس"].map((t, i) =>
+    scoreCandidate(row({ id: "f" + i, source_domain: "reuters.com", esl_usefulness: 60, title: "f" + i, title_ar: t }), [], reg, emptyDayState(), NOW));
+  const res = selectBalanced([modA, modB, ...fillers], emptyDayState(), 8, defaultLaneConfig(8));
+  const mods = res.selected.filter((c) => c.rep.id === "mA" || c.rep.id === "mB");
+  assert.equal(mods.length, 1); // only ONE of the two Moderna variants
+  assert.ok(res.skipped.some((s) => s.reason === "near_duplicate"));
+});
+
+test("near-duplicate backstop does NOT over-merge different developments sharing only common words", () => {
+  // Two different FDA approvals: they share regulatory boilerplate (الغذاء/الدواء/
+  // ترخيص) that is COMMON across the set, so it is not distinctive; their entities
+  // differ → both remain selectable.
+  const common = "الغذاء والدواء تمنح ترخيص دواء";
+  const fdaA = scoreCandidate(row({ id: "a", source_domain: "reuters.com", esl_usefulness: 70, title: "lilly", title_ar: `${common} ليلي لمرض السكري` }), [], reg, emptyDayState(), NOW);
+  const fdaB = scoreCandidate(row({ id: "b", source_domain: "reuters.com", esl_usefulness: 70, title: "novo", title_ar: `${common} نوفو لعلاج السمنة` }), [], reg, emptyDayState(), NOW);
+  // extra approvals inflate the document-frequency of the boilerplate tokens.
+  const more = ["فايزر لالتهاب", "روش للسرطان", "باير للقلب"].map((x, i) =>
+    scoreCandidate(row({ id: "m" + i, source_domain: "reuters.com", esl_usefulness: 60, title: "m" + i, title_ar: `${common} ${x}` }), [], reg, emptyDayState(), NOW));
+  const res = selectBalanced([fdaA, fdaB, ...more], emptyDayState(), 8, defaultLaneConfig(8));
+  const picked = res.selected.filter((c) => c.rep.id === "a" || c.rep.id === "b");
+  assert.equal(picked.length, 2); // both distinct approvals selected
 });
 
 test("low-score candidate is skipped with reason", () => {

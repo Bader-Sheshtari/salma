@@ -244,6 +244,106 @@ export function resolveGcc(llmGcc: boolean, ...texts: (string | null | undefined
   return texts.some((t) => gccSignal(t));
 }
 
+// ---- Cross-language canonical event merge -------------------------------
+// Event Registry assigns LANGUAGE-SCOPED event ids, so the same real-world
+// development surfaces as different event_uris in different languages and never
+// clusters. radar-rank translates every headline to Arabic (title_ar), which
+// gives a cross-language token bridge. We use it in two bounded stages:
+//   (1) a cheap DETERMINISTIC pre-filter (significant shared tokens + a time
+//       window) gathers only the AMBIGUOUS candidate set — most stories share
+//       nothing and are never considered;
+//   (2) a bounded LLM confirmer (index.ts) decides which of those actually
+//       describe the SAME concrete development, and the result is cached.
+// This never sends the whole pool to an LLM and never over-merges on topic alone.
+
+const LATIN_STOP = new Set([
+  "the", "a", "an", "of", "to", "in", "for", "and", "on", "with", "new", "study",
+  "says", "after", "over", "amid", "as", "by", "is", "are", "at", "its", "from",
+]);
+const AR_STOP = new Set([
+  "في", "من", "على", "عن", "الى", "مع", "بعد", "قبل", "هذا", "هذه", "التي", "الذي",
+  "بين", "حول", "خلال", "ضد", "او", "ما", "لكن", "كما", "قد", "عبر", "أول", "أمام",
+]);
+
+/** Strip a leading Arabic article/clitic so "السرطان" and "سرطان" match. */
+function normAr(w: string): string {
+  const s = stripArabicMarks(w);
+  return s.replace(/^(وال|بال|فال|كال|لل|ال)/, "");
+}
+
+/** Significant content tokens from a row's Arabic translation + original title:
+ *  Latin words (entities/acronyms like moderna, mrna, merck, melanoma) and
+ *  article-normalized Arabic words. Common stopwords removed. */
+export function significantTokens(row: { title: string | null; title_ar: string | null }): Set<string> {
+  const text = `${row.title_ar ?? ""}\n${row.title ?? ""}`;
+  const out = new Set<string>();
+  for (const m of text.toLowerCase().matchAll(/[a-z][a-z0-9-]{2,}/g)) {
+    if (!LATIN_STOP.has(m[0])) out.add(m[0]);
+  }
+  for (const raw of stripArabicMarks(text).split(/[^ء-ي]+/)) {
+    if (!raw) continue;
+    const w = normAr(raw);
+    if (w.length >= 3 && !AR_STOP.has(w) && !AR_STOP.has(raw)) out.add(w);
+  }
+  return out;
+}
+
+/** How many significant tokens two rows share (cross-language via title_ar). */
+export function sharedTokenCount(a: RadarRow, b: RadarRow): number {
+  const B = significantTokens(b);
+  let n = 0;
+  for (const t of significantTokens(a)) if (B.has(t)) n++;
+  return n;
+}
+
+/**
+ * Deterministic pre-filter: union-find groups of rows that PLAUSIBLY describe
+ * the same development — they share at least `minShared` significant tokens and
+ * fall within `windowMs`. Returns only multi-member groups (the bounded set that
+ * warrants an LLM confirmation). Different developments about the same company
+ * are deliberately NOT split here — that precision is the LLM's job.
+ */
+export function candidateMergeGroups(reps: RadarRow[], windowMs: number, minShared: number): RadarRow[][] {
+  const n = reps.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const toks = reps.map(significantTokens);
+  const times = reps.map((r) => Date.parse(r.published_at ?? r.first_seen_at ?? "") || 0);
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (times[i] && times[j] && Math.abs(times[i] - times[j]) > windowMs) continue;
+      let shared = 0;
+      for (const x of toks[i]) if (toks[j].has(x)) { shared++; if (shared >= minShared) break; }
+      if (shared >= minShared) parent[find(i)] = find(j);
+    }
+  }
+  const groups = new Map<number, RadarRow[]>();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    (groups.get(r) ?? groups.set(r, []).get(r)!).push(reps[i]);
+  }
+  return [...groups.values()].filter((g) => g.length > 1);
+}
+
+// When merging language variants that were classified with different story types
+// (e.g. a "stock surge" corporate framing of a trial result), keep the most
+// SUBSTANTIVE one — it drives best-source selection for the merged event.
+const STORY_SUBSTANCE: StoryType[] = [
+  "regulatory_decision", "scientific_study", "public_health", "product_safety_or_recall",
+  "product_claim", "guidance_explainer", "product_or_technology_announcement",
+  "corporate_business", "general",
+];
+export function dominantStoryType(members: RadarRow[]): StoryType {
+  let best: StoryType = "general";
+  let bestRank = STORY_SUBSTANCE.length;
+  for (const m of members) {
+    const st = (m.esl_story_type as StoryType) ?? "general";
+    const rank = STORY_SUBSTANCE.indexOf(st);
+    if (rank >= 0 && rank < bestRank) { bestRank = rank; best = st; }
+  }
+  return best;
+}
+
 // ---- L5 evidence gate ----------------------------------------------------
 export function isL5Eligible(row: { esl_lane: string | null; esl_evidence_class: string | null }): boolean {
   return row.esl_lane === "L5" && (row.esl_evidence_class === "research" || row.esl_evidence_class === "guidance");
@@ -381,6 +481,33 @@ export type SelectionResult = {
  * (never forced on dry days), a min-score gate, and the remaining daily cap.
  * `day` reflects what was already selected earlier this editorial day.
  */
+// Selection-time near-duplicate backstop. Even after cross-language canonical
+// merging (LLM-assisted, imperfect), two candidates can be the same development
+// (e.g. a language variant the merge split off). Guard deterministically on
+// shared DISTINCTIVE tokens — tokens that are rare across the candidate set
+// (entities/specific subjects like "موديرنا"/"melanoma"), NOT common words like
+// "الدواء"/"vaccine" that many unrelated stories share. Two candidates that share
+// enough distinctive tokens must not both consume a daily slot.
+const NEARDUP_MAX_DF = 3;      // a token in > this many candidates is "common", not distinctive
+const NEARDUP_MIN_SHARED = 2;  // shared distinctive tokens at/above this → same development
+
+function distinctiveTokenSets(candidates: ScoredCandidate[]): Map<ScoredCandidate, Set<string>> {
+  const df = new Map<string, number>();
+  const perCand = new Map<ScoredCandidate, Set<string>>();
+  for (const c of candidates) {
+    const toks = significantTokens(c.rep);
+    perCand.set(c, toks);
+    for (const t of toks) df.set(t, (df.get(t) ?? 0) + 1);
+  }
+  const out = new Map<ScoredCandidate, Set<string>>();
+  for (const c of candidates) {
+    const distinctive = new Set<string>();
+    for (const t of perCand.get(c)!) if ((df.get(t) ?? 0) <= NEARDUP_MAX_DF) distinctive.add(t);
+    out.set(c, distinctive);
+  }
+  return out;
+}
+
 export function selectBalanced(
   candidates: ScoredCandidate[],
   day: DayState,
@@ -396,6 +523,8 @@ export function selectBalanced(
   const laneCounts: Record<string, number> = { ...day.laneCounts };
   const seenTopics = new Set(day.topicSigs);
   const seenDomains = new Set(day.domains);
+  const distinctive = distinctiveTokenSets(candidates);
+  const selectedDistinctive: Set<string>[] = [];
 
   const ranked = [...candidates].sort((a, b) => b.score - a.score);
   for (const c of ranked) {
@@ -403,6 +532,17 @@ export function selectBalanced(
     if (c.score < cfg.minScore) { skipped.push({ cand: c, reason: "low_score" }); continue; }
     const sig = titleSignature(c.rep.title_ar || c.rep.title);
     if (sig && seenTopics.has(sig)) { skipped.push({ cand: c, reason: "duplicate_topic" }); continue; }
+    // Near-duplicate of something already picked this run (same development).
+    const dset = distinctive.get(c)!;
+    if (dset.size) {
+      let near = false;
+      for (const prev of selectedDistinctive) {
+        let shared = 0;
+        for (const t of dset) if (prev.has(t)) { if (++shared >= NEARDUP_MIN_SHARED) { near = true; break; } }
+        if (near) break;
+      }
+      if (near) { skipped.push({ cand: c, reason: "near_duplicate" }); continue; }
+    }
     const ceiling = cfg.ceilings[c.lane] ?? remainingCap;
     const cur = laneCounts[c.lane] ?? 0;
     // Breaking override keys on the INTRINSIC (pre-diversity-penalty) score, so a
@@ -414,6 +554,7 @@ export function selectBalanced(
     selected.push(c);
     laneCounts[c.lane] = cur + 1;
     if (sig) seenTopics.add(sig);
+    if (dset.size) selectedDistinctive.push(dset);
     const dom = normalizeDomain(c.rep.source_domain);
     if (dom) seenDomains.add(dom);
   }

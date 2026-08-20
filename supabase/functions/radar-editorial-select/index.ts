@@ -33,6 +33,7 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
   clusterRows, bestSource, scoreCandidate, selectBalanced, resolveGcc,
   sourceTier, sourceRole, normalizeDomain, defaultLaneConfig, emptyDayState, isL5Eligible,
+  candidateMergeGroups, dominantStoryType,
   type RadarRow, type RegistryEntry, type StoryType, type Lane, type DayState, type ScoredCandidate,
 } from "./esl-core.ts";
 
@@ -185,6 +186,83 @@ async function cacheClassification(admin: SupabaseClient, id: string, c: Classif
     esl_usefulness: c.usefulness,
     esl_classified_at: new Date().toISOString(),
   }).eq("id", id);
+}
+
+// ---- cross-language canonical event merge ---------------------------------
+// Time window within which two headlines may describe the same development.
+const CANON_WINDOW_MS = intEnv("ESL_CANON_WINDOW_HOURS", 72) * 3_600_000;
+
+const CANON_SYSTEM = `You are Salma's event de-duplicator. You are given health-news headlines (Arabic translation + original-language title) that a pre-filter flagged as POSSIBLY the same real-world development (they were published in the same window and share key terms). Decide which ones report the SAME CONCRETE DEVELOPMENT.
+
+SAME development = same entities (companies/institutions/people) AND same medical subject AND the same specific event — e.g. the same trial result, the same regulatory approval, the same recall, the same outbreak update. Different-language reports of the same event ARE the same development (merge them). A market/stock reaction to that same event is still the same development.
+
+DIFFERENT developments must NOT be merged even when they share a company or topic: a trial result vs a partnership vs quarterly earnings vs a different drug/indication are DIFFERENT. When unsure, keep them separate.
+
+Respond with ONLY a JSON array [{"i":<index>,"dev":<integer>}], one object per input in order. Items that are the same development share the same dev integer; every distinct development gets its own integer.`;
+
+/** Bounded LLM confirmation over the ambiguous candidate set. Returns rowId →
+ *  dev-group integer. Never throws; empty map on failure (→ no merges). */
+async function canonicalizeAmbiguous(groups: RadarRow[][]): Promise<Map<string, number>> {
+  const flat = groups.flat();
+  const out = new Map<string, number>();
+  if (flat.length < 2 || !OPENROUTER_KEY) return out;
+  const lines = flat
+    .map((r, i) => `${i}. [ar] ${String(r.title_ar ?? "").slice(0, 150)} | [orig] ${String(r.title ?? "").slice(0, 130)} | ${String(r.published_at ?? "").slice(0, 10)}`)
+    .join("\n");
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 45_000);
+  let json: Record<string, unknown> | null = null;
+  try {
+    const res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: CLASSIFY_MODEL,
+        temperature: 0,
+        messages: [
+          { role: "system", content: CANON_SYSTEM },
+          { role: "user", content: `Group these ${flat.length} headlines by concrete development:\n${lines}` },
+        ],
+      }),
+      signal: ctrl.signal,
+    });
+    json = await res.json();
+  } catch {
+    return out;
+  } finally {
+    clearTimeout(timer);
+  }
+  const raw = String((json as { choices?: { message?: { content?: string } }[] })?.choices?.[0]?.message?.content ?? "");
+  if (!raw) return out;
+  try {
+    const s = raw.indexOf("["); const e = raw.lastIndexOf("]");
+    const parsed = JSON.parse(raw.slice(s, e + 1));
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        const o = (item ?? {}) as Record<string, unknown>;
+        const idx = Number(o.i); const dev = Number(o.dev);
+        if (Number.isInteger(idx) && idx >= 0 && idx < flat.length && Number.isFinite(dev)) {
+          out.set(flat[idx].id, dev);
+        }
+      }
+    }
+  } catch { /* ignore → no merges */ }
+  return out;
+}
+
+/** Stable canonical key for a merged development: the smallest provider_uri
+ *  among its members (numeric where possible). Same members → same key. */
+function canonKeyFor(members: RadarRow[]): string {
+  let best: string | null = null;
+  for (const m of members) {
+    const u = String(m.provider_uri ?? "").trim();
+    if (!u) continue;
+    if (best === null) { best = u; continue; }
+    const a = Number(u), b = Number(best);
+    if (Number.isFinite(a) && Number.isFinite(b)) { if (a < b) best = u; }
+    else if (u < best) best = u;
+  }
+  return `canon:${best ?? members[0]?.id ?? "x"}`;
 }
 
 // ---- promotion (live mode only) -------------------------------------------
@@ -444,9 +522,55 @@ Deno.serve(async (req) => {
     }
   }
 
-  // --- 6) Best source + score per classified cluster -----------------------
+  // --- 5b) Cross-language canonical event merge ----------------------------
+  // Event Registry ids are language-scoped, so the same development appears under
+  // different event_uris per language and never clusters. Merge it into ONE
+  // candidate so it consumes ONE daily slot. Bounded + cached: a deterministic
+  // pre-filter (shared Arabic-title tokens + time window) gathers only ambiguous
+  // reps; a single LLM call confirms same-vs-different development; the decision
+  // is cached on the rows (esl_canonical_key) so re-runs never re-pay for it.
+  const classifiedActive = active.filter((c) => c.anchor.esl_lane);
+  const preGroups = candidateMergeGroups(classifiedActive.map((c) => c.anchor), CANON_WINDOW_MS, 2);
+  let canonMap = new Map<string, number>();
+  let canonLLMItems = 0;
+  if (preGroups.length && preGroups.some((g) => g.some((r) => !r.esl_canonical_key))) {
+    canonMap = await canonicalizeAmbiguous(preGroups);
+    canonLLMItems = preGroups.reduce((n, g) => n + g.length, 0);
+  }
+  const mergeKeyOf = (c: Cluster): string => {
+    if (c.anchor.esl_canonical_key) return c.anchor.esl_canonical_key; // cached decision
+    const dev = canonMap.get(c.anchor.id);
+    return dev !== undefined ? `dev:${dev}` : c.key; // this run's LLM group, else stand-alone
+  };
+  const byMergeKey = new Map<string, Cluster[]>();
+  for (const c of classifiedActive) {
+    const k = mergeKeyOf(c);
+    (byMergeKey.get(k) ?? byMergeKey.set(k, []).get(k)!).push(c);
+  }
+  // Unclassified clusters pass through untouched (they become 'unclassified' in step 6).
+  const merged: Cluster[] = active.filter((c) => !c.anchor.esl_lane);
+  let crossLangMerges = 0;
+  let slotsPrevented = 0;
+  for (const [mk, grp] of byMergeKey) {
+    if (grp.length === 1) { merged.push(grp[0]); continue; }
+    const members = grp.flatMap((g) => g.members);
+    const canonKey = mk.startsWith("canon:") ? mk : canonKeyFor(members);
+    const domStory = dominantStoryType(members); // keep the most substantive framing
+    const donor = members
+      .filter((m) => (m.esl_story_type as StoryType) === domStory && m.esl_lane)
+      .sort((a, b) => (b.esl_usefulness ?? 0) - (a.esl_usefulness ?? 0))[0] ?? pickAnchor(members, registry);
+    merged.push({ key: canonKey, members, anchor: { ...donor, esl_story_type: domStory, esl_canonical_key: canonKey } });
+    crossLangMerges++;
+    slotsPrevented += grp.length - 1;
+    for (const m of members) m.esl_canonical_key = canonKey;
+    await admin.from("radar_shadow_articles")
+      .update({ esl_canonical_key: canonKey, esl_canonicalized_at: new Date().toISOString() })
+      .in("id", members.map((m) => m.id));
+  }
+
+  // --- 6) Best source + score per (possibly merged) cluster ----------------
   const scored: ScoredCandidate[] = [];
-  for (const c of active) {
+  for (const c of merged) {
     const a = c.anchor;
     if (!a.esl_lane) { clusterSkips.push({ key: c.key, reason: "unclassified", rep: a }); continue; }
     // Editorial quality floor: hype/pseudoscience were marked usefulness 0 +
@@ -455,6 +579,8 @@ Deno.serve(async (req) => {
       clusterSkips.push({ key: c.key, reason: "editorial_exclude", rep: a }); continue;
     }
     const storyType = (a.esl_story_type as StoryType) ?? "general";
+    // Best source across ALL members (a merge can reveal a stronger source than
+    // the weak outlet that first surfaced one language variant).
     const rep = bestSource(c.members, storyType, registry);
     // Carry the story-level classification onto the chosen representative row.
     const repScored: RadarRow = {
@@ -467,8 +593,14 @@ Deno.serve(async (req) => {
       clusterSkips.push({ key: c.key, reason: "evidence_failed", rep: repScored }); continue;
     }
     const sc = scoreCandidate(repScored, c.members, registry, day, nowMs);
-    sc.clusterKey = c.key; // keep the cluster's canonical key (event or title sig)
+    sc.clusterKey = c.key; // canonical/event/title key — used for dedup + audit
     scored.push(sc);
+    // Audit the merged-away language variants as members of this one cluster.
+    if (c.key.startsWith("canon:")) {
+      for (const m of c.members) {
+        if (m.id !== rep.id) clusterSkips.push({ key: c.key, reason: "merged_duplicate", rep: m });
+      }
+    }
   }
 
   // --- 7) Balanced, stateful selection -------------------------------------
@@ -497,9 +629,13 @@ Deno.serve(async (req) => {
     selectionRows.push(row);
   }
 
-  // Record the notable skips too (audit "why not"): cluster-level skips first,
-  // then the balancer's skips. Bounded to keep the sidecar tidy.
-  for (const s of clusterSkips.slice(0, 120)) {
+  // Record the notable skips too (audit "why not"). ALWAYS keep the meaningful
+  // reasons (merged_duplicate / evidence_failed / editorial_exclude /
+  // already_covered) — the 'unclassified' backlog is large and would otherwise
+  // crowd them out, so it is capped to a small sample.
+  const importantSkips = clusterSkips.filter((s) => s.reason !== "unclassified");
+  const unclassifiedSample = clusterSkips.filter((s) => s.reason === "unclassified").slice(0, 20);
+  for (const s of [...importantSkips, ...unclassifiedSample]) {
     selectionRows.push(skipRow(editorialDay, runId, mode, s.rep, s.key, s.reason, registry));
   }
   for (const s of skipped.slice(0, 120)) {
@@ -528,9 +664,16 @@ Deno.serve(async (req) => {
     remaining_cap: remainingCap,
     promoted_today_before: promotedToday,
     pool_size: rows.length,
-    clusters: clusters.size,
+    event_clusters: clusters.size,
     active_clusters: active.length,
     classified_this_run: needClassify.length,
+    canon: {
+      ambiguous_groups: preGroups.length,
+      llm_items: canonLLMItems,
+      cross_language_merges: crossLangMerges,
+      duplicate_slots_prevented: slotsPrevented,
+      clusters_after_merge: merged.length,
+    },
     scored: scored.length,
     selected: selected.length,
     selected_lane_mix: laneMix,
@@ -538,11 +681,13 @@ Deno.serve(async (req) => {
     promotions: mode === "live" ? promotions : undefined,
     skips: {
       already_covered: clusterSkips.filter((s) => s.reason === "already_covered").length,
+      merged_duplicate: clusterSkips.filter((s) => s.reason === "merged_duplicate").length,
       unclassified: clusterSkips.filter((s) => s.reason === "unclassified").length,
       editorial_exclude: clusterSkips.filter((s) => s.reason === "editorial_exclude").length,
       evidence_failed: clusterSkips.filter((s) => s.reason === "evidence_failed").length,
       low_score: skipped.filter((s) => s.reason === "low_score").length,
       duplicate_topic: skipped.filter((s) => s.reason === "duplicate_topic").length,
+      near_duplicate: skipped.filter((s) => s.reason === "near_duplicate").length,
       lane_full: skipped.filter((s) => s.reason === "lane_full").length,
       cap_reached: skipped.filter((s) => s.reason === "cap_reached").length,
     },
