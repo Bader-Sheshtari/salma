@@ -7,10 +7,12 @@
 
 export type Lane = "L1" | "L2" | "L3" | "L4" | "L5";
 export type StoryType =
-  | "regulatory_decision"
   | "scientific_study"
+  | "regulatory_decision"
   | "public_health"
   | "corporate_business"
+  | "product_or_technology_announcement"
+  | "product_safety_or_recall"
   | "product_claim"
   | "guidance_explainer"
   | "general";
@@ -113,11 +115,16 @@ export function sourceRole(domain: string | null | undefined, registry: Map<stri
 // The strongest source for the specific claim — NOT simply the highest tier.
 
 const ROLE_PREFERENCE: Record<StoryType, SourceRole[]> = {
-  regulatory_decision: ["regulator", "wire", "journal", "institution", "general"],
   scientific_study: ["journal", "institution", "wire", "regulator", "general"],
+  regulatory_decision: ["regulator", "wire", "journal", "institution", "general"],
   public_health: ["regulator", "institution", "wire", "journal", "general"],
   // Corporate: independent wire adds context/verification over a company release.
   corporate_business: ["wire", "general", "regulator", "institution", "company"],
+  // A company showing off tech/a product: prefer INDEPENDENT verification (wire /
+  // specialist / journal) over the company's own announcement.
+  product_or_technology_announcement: ["wire", "journal", "institution", "regulator", "general", "company"],
+  // A recall / safety action: the regulator is the authority; independent wire next.
+  product_safety_or_recall: ["regulator", "wire", "journal", "institution", "general", "company"],
   // Product/efficacy: prefer independent/regulatory evidence for the claim.
   product_claim: ["regulator", "journal", "wire", "institution", "general", "company"],
   guidance_explainer: ["institution", "regulator", "journal", "general"],
@@ -194,6 +201,49 @@ export function clusterRows(rows: RadarRow[]): Map<string, RadarRow[]> {
   return m;
 }
 
+// ---- GCC relevance guard (content-based) --------------------------------
+// GCC relevance must come from the SUBJECT of the story, never from the fact
+// that a Gulf/Arabic outlet published it. This deterministic guard only ever
+// DOWNGRADES the classifier's gcc flag: a story is treated as GCC-relevant only
+// when the classifier said so AND an explicit GCC signal (a Gulf country,
+// city, institution, or regulator) actually appears in the headline. It never
+// upgrades, so it cannot manufacture GCC relevance.
+
+const GCC_TOKENS_EN = [
+  "kuwait", "saudi", "ksa", "uae", "united arab emirates", "emirati", "emirates",
+  "qatar", "qatari", "bahrain", "bahraini", "oman", "omani", "riyadh", "jeddah",
+  "mecca", "makkah", "medina", "dubai", "abu dhabi", "sharjah", "doha", "manama",
+  "muscat", "gcc", "gulf cooperation", "gulf states", "sfda", "arabian gulf",
+];
+const GCC_TOKENS_AR = [
+  "الكويت", "السعودية", "السعودي", "الإمارات", "الامارات", "إماراتي", "اماراتي",
+  "قطر", "قطري", "البحرين", "بحريني", "عمان", "عماني", "الخليج", "خليجي",
+  "مجلس التعاون", "الرياض", "جدة", "مكة", "المدينة المنورة", "دبي", "أبوظبي",
+  "ابوظبي", "الشارقة", "الدوحة", "المنامة", "مسقط", "السعوديه",
+];
+
+/** Strip Arabic diacritics (harakat/tatweel) so token matching is robust. */
+function stripArabicMarks(s: string): string {
+  return s.replace(/[ـً-ْٰ]/g, "");
+}
+
+/** True when an explicit GCC subject signal appears in the given text (title). */
+export function gccSignal(text: string | null | undefined): boolean {
+  const raw = String(text ?? "");
+  if (!raw.trim()) return false;
+  const en = raw.toLowerCase();
+  if (GCC_TOKENS_EN.some((k) => en.includes(k))) return true;
+  const ar = stripArabicMarks(raw);
+  return GCC_TOKENS_AR.some((k) => ar.includes(stripArabicMarks(k)));
+}
+
+/** Resolve the final GCC flag: the classifier's judgement gated by an actual
+ *  in-headline GCC signal. Downgrade-only (never invents GCC relevance). */
+export function resolveGcc(llmGcc: boolean, ...texts: (string | null | undefined)[]): boolean {
+  if (!llmGcc) return false;
+  return texts.some((t) => gccSignal(t));
+}
+
 // ---- L5 evidence gate ----------------------------------------------------
 export function isL5Eligible(row: { esl_lane: string | null; esl_evidence_class: string | null }): boolean {
   return row.esl_lane === "L5" && (row.esl_evidence_class === "research" || row.esl_evidence_class === "guidance");
@@ -256,14 +306,21 @@ export function scoreCandidate(
   const originality = rep.duplicate_status === "already_in_salma" ? 0.1 : rep.duplicate_status === "possible_duplicate" ? 0.6 : 1.0;
   const gccBonus = gcc ? 0.06 : 0;
 
+  // Weighting: reader-usefulness and source authority carry real weight;
+  // freshness is a light nudge (a fresher weak-source story must NOT out-rank an
+  // otherwise comparable strong-source one on recency alone).
   const base =
-    0.30 * importance +
-    0.16 * suitability +
-    0.14 * authority +
-    0.14 * usefulness +
-    0.14 * freshness +
+    0.26 * importance +
+    0.12 * suitability +
+    0.18 * authority +
+    0.18 * usefulness +
+    0.08 * freshness +
     0.12 * originality +
     gccBonus;
+
+  // "Breaking": genuinely major news may override the authority-floor penalty
+  // (an important story is sometimes first surfaced by a weak outlet).
+  const breaking = rep.priority_level === "very_important" && (rep.priority_score ?? 0) >= 80;
 
   // Diversity penalties vs today's selected set.
   const sig = titleSignature(rep.title_ar || rep.title);
@@ -275,6 +332,15 @@ export function scoreCandidate(
   if (country && country !== "" && day.countries.has(country)) penalty += 0.05;
   const laneCount = day.laneCounts[lane] ?? 0;
   if (laneCount >= 3) penalty += 0.08 * (laneCount - 2); // discourage lane pile-up
+
+  // Authority-floor penalty: a weak-source cluster should need STRONGER
+  // justification to consume one of only ~8 daily slots. Not a ban — breaking
+  // importance waives it, and credible GCC/local coverage (often legitimately
+  // the right local source) is only lightly penalized.
+  if (!breaking) {
+    if (tier >= 5) penalty += gcc ? 0.05 : 0.14;
+    else if (tier === 4) penalty += gcc ? 0 : 0.05;
+  }
 
   return {
     rep, clusterKey: clusterKey(rep), memberCount: members.length,

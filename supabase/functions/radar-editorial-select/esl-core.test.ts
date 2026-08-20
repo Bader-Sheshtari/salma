@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   clusterRows, clusterKey, titleSignature, sourceTier, bestSource, isL5Eligible,
-  scoreCandidate, selectBalanced, emptyDayState, defaultLaneConfig,
+  scoreCandidate, selectBalanced, emptyDayState, defaultLaneConfig, gccSignal, resolveGcc,
   type RadarRow, type RegistryEntry, type ScoredCandidate,
 } from "./esl-core.ts";
 
@@ -120,6 +120,65 @@ test("breaking very_important overrides a full lane ceiling", () => {
   const breaking = scoreCandidate(row({ title: "huge breaking approval", esl_lane: "L1", priority_level: "very_important", priority_score: 95, esl_usefulness: 95, source_domain: "fda.gov", esl_story_type: "regulatory_decision" }), [], reg, day, NOW);
   const res = selectBalanced([breaking], day, 8, cfg);
   assert.equal(res.selected.length, 1); // overrides ceiling
+});
+
+// ---- editorial-tuning pass: GCC guard, story types, tier penalty, usefulness ----
+
+test("A. GCC guard: DRC Ebola via a Gulf/Arabic outlet is NOT GCC", () => {
+  const arTitle = "عدد مصابي إيبولا في الكونغو الديموقراطية يتجاوز الـ5000";
+  assert.equal(gccSignal(arTitle), false);
+  // Even if the classifier wrongly said gcc:true (Arabic outlet), the guard downgrades.
+  assert.equal(resolveGcc(true, arTitle, "DRC Ebola cases exceed 5000"), false);
+  // A UK/Britain regulatory story is likewise not GCC.
+  assert.equal(resolveGcc(true, "بريطانيا تمهّد لعلاج الأنسولين الأسبوعي", "UK weekly insulin"), false);
+});
+
+test("GCC guard: a real GCC-subject story IS GCC (downgrade-only, never invents)", () => {
+  assert.equal(gccSignal("الكويت تطلق حملة تطعيم وطنية"), true);
+  assert.equal(gccSignal("Saudi SFDA approves new diabetes drug"), true);
+  assert.equal(resolveGcc(true, "UAE launches health initiative"), true);
+  // Guard never upgrades: classifier said false → stays false even with a GCC token.
+  assert.equal(resolveGcc(false, "Kuwait health news"), false);
+});
+
+test("B. product recall → regulator is the best source", () => {
+  const members = [row({ source_domain: "pulse2.com" }), row({ source_domain: "fda.gov" }), row({ source_domain: "yahoo.com" })];
+  assert.equal(bestSource(members, "product_safety_or_recall", reg).source_domain, "fda.gov");
+});
+
+test("C. company tech showcase → independent wire beats the company/aggregator", () => {
+  const members = [row({ source_domain: "businesswire.com" }), row({ source_domain: "reuters.com" }), row({ source_domain: "newspim.com" })];
+  assert.equal(bestSource(members, "product_or_technology_announcement", reg).source_domain, "reuters.com");
+});
+
+test("D. comparable stories: a T2 source beats a T5-only source", () => {
+  const common = { title: "new therapy shows benefit", priority_level: "important", esl_usefulness: 70 } as Partial<RadarRow>;
+  const t2 = scoreCandidate(row({ ...common, source_domain: "reuters.com" }), [], reg, emptyDayState(), NOW);
+  const t5 = scoreCandidate(row({ ...common, source_domain: "some-aggregator.co" }), [], reg, emptyDayState(), NOW);
+  assert.ok(t2.score > t5.score);
+});
+
+test("a FRESH T5 story does not beat an OLDER T2 story on recency alone", () => {
+  const common = { title: "trial reports results", priority_level: "important", esl_usefulness: 70 } as Partial<RadarRow>;
+  const freshT5 = scoreCandidate(row({ ...common, source_domain: "some-aggregator.co", published_at: "2026-08-20T11:30:00Z" }), [], reg, emptyDayState(), NOW);
+  const olderT2 = scoreCandidate(row({ ...common, source_domain: "reuters.com", published_at: "2026-08-18T12:00:00Z" }), [], reg, emptyDayState(), NOW);
+  assert.ok(olderT2.score > freshT5.score);
+});
+
+test("E. a breaking (very_important) T5 story still clears the bar", () => {
+  const breaking = scoreCandidate(
+    row({ title: "major outbreak declared emergency", source_domain: "some-aggregator.co", priority_level: "very_important", priority_score: 92, esl_usefulness: 80 }),
+    [], reg, emptyDayState(), NOW,
+  );
+  const res = selectBalanced([breaking], emptyDayState(), 8, defaultLaneConfig(8));
+  assert.equal(res.selected.length, 1); // authority-floor penalty waived for breaking importance
+});
+
+test("reader usefulness is decisive between otherwise-comparable strong-source stories", () => {
+  const common = { source_domain: "reuters.com", priority_level: "important" } as Partial<RadarRow>;
+  const useful = scoreCandidate(row({ ...common, title: "practical guidance patients", esl_usefulness: 90 }), [], reg, emptyDayState(), NOW);
+  const niche = scoreCandidate(row({ ...common, title: "niche mechanism abstract", esl_usefulness: 20 }), [], reg, emptyDayState(), NOW);
+  assert.ok(useful.score > niche.score);
 });
 
 test("low-score candidate is skipped with reason", () => {

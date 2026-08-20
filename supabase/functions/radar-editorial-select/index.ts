@@ -31,7 +31,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
-  clusterRows, bestSource, scoreCandidate, selectBalanced,
+  clusterRows, bestSource, scoreCandidate, selectBalanced, resolveGcc,
   sourceTier, sourceRole, normalizeDomain, defaultLaneConfig, emptyDayState, isL5Eligible,
   type RadarRow, type RegistryEntry, type StoryType, type Lane, type DayState, type ScoredCandidate,
 } from "./esl-core.ts";
@@ -71,12 +71,13 @@ type Classification = {
 
 const VALID_LANES = new Set(["L1", "L2", "L3", "L4", "L5"]);
 const VALID_STORY = new Set([
-  "regulatory_decision", "scientific_study", "public_health",
-  "corporate_business", "product_claim", "guidance_explainer", "general",
+  "scientific_study", "regulatory_decision", "public_health", "corporate_business",
+  "product_or_technology_announcement", "product_safety_or_recall", "product_claim",
+  "guidance_explainer", "general",
 ]);
 
-const CLASSIFY_SYSTEM = `You are Salma's editorial classifier. Salma is a serious Arabic health-news platform for Kuwait and the GCC. For each article (given by title + source), assign structured editorial attributes. Respond with ONLY a JSON array, one object per input in order, each:
-{"i":<index>,"lane":"L1|L2|L3|L4|L5","lane_confidence":0..1,"story_type":"regulatory_decision|scientific_study|public_health|corporate_business|product_claim|guidance_explainer|general","evidence_class":"research|guidance|none","gcc":true|false,"usefulness":0..100}
+const CLASSIFY_SYSTEM = `You are Salma's editorial classifier. Salma is a serious Arabic health-news platform for Kuwait and the GCC, written for a broad, educated health-news reader (not a specialist journal audience). For each article (given by title + source), assign structured editorial attributes. Respond with ONLY a JSON array, one object per input in order, each:
+{"i":<index>,"lane":"L1|L2|L3|L4|L5","lane_confidence":0..1,"story_type":"<one of the story types below>","evidence_class":"research|guidance|none","gcc":true|false,"usefulness":0..100}
 
 LANES:
 - L1 Medical/Clinical: diseases, treatments, drugs, trials, clinical guidelines, medical devices.
@@ -85,17 +86,27 @@ LANES:
 - L4 Health Economy/Business: pharma companies, M&A, funding, market/regulatory business, insurance.
 - L5 Healthy Life/Quality-of-life: nutrition, sleep, exercise, mental wellbeing, prevention, everyday health.
 
-story_type = the nature of the CLAIM (used to pick the best source later).
+STORY_TYPE = the true nature of the CLAIM (drives best-source selection). Choose the single most precise:
+- "scientific_study": reports an ACTUAL study/trial/peer-reviewed finding with real results. NOT a company merely showcasing or promoting a technology.
+- "regulatory_decision": an approval/authorization/ban/label change by a regulator (FDA, EMA, SFDA, ministry).
+- "public_health": outbreaks, epidemiology, vaccination campaigns, ministry/WHO public-health action.
+- "corporate_business": M&A, funding, earnings, market/company business news.
+- "product_or_technology_announcement": a company announcing/showcasing/launching a product, device, or technology WITHOUT real study evidence (conferences, demos, press releases). If it is a company promoting its own tech, use THIS — not scientific_study.
+- "product_safety_or_recall": a recall, safety alert, withdrawal, contamination, or adverse-event/safety action on a product.
+- "product_claim": an efficacy/health claim about a specific product or intervention.
+- "guidance_explainer": evidence-based guidance/explainer from a respected institution or authority.
+- "general": credible health news not fitting the above.
 
 evidence_class:
-- "research": grounded in a study, trial, or peer-reviewed/scientific finding.
+- "research": grounded in a real study, trial, or peer-reviewed/scientific finding.
 - "guidance": evidence-based guidance/explainer from a respected institution or health authority.
-- "none": neither — opinion, marketing, or unsupported.
+- "none": neither — opinion, marketing, announcement, or unsupported. (A product/technology announcement with no study is "none", NOT "research".)
 
 L5 QUALITY BAR (critical): serious Salma content only. If an item is a miracle cure, wellness-influencer hype, supplement marketing, weak/fad weight-loss, exaggerated longevity, sensational food-or-disease scare, or a weak observational "X causes Y" leap, set evidence_class:"none" AND usefulness:0. Do NOT lower the bar to fill space.
 
-gcc: true if the story is specifically relevant to Kuwait/GCC readers (regional event, regulator, or population), else false.
-usefulness: how genuinely useful/important this is to a GCC health reader (0..100). Hype/pseudoscience → 0.`;
+gcc (STRICT, content-based only): true ONLY when the SUBJECT of the story materially concerns Kuwait, Saudi Arabia, UAE, Qatar, Bahrain, Oman, a GCC institution/regulator, or a GCC healthcare system/company/population. NEVER infer GCC relevance from the language (Arabic), the publisher's location, a Gulf/Arabic domain, or a Gulf outlet merely republishing a global story. Example: "Ebola cases in the DR Congo" published by a Gulf Arabic outlet → gcc:false (the subject is Congo, not the GCC). A UK/US/global approval reported by an Arabic outlet → gcc:false. When in doubt → false.
+
+usefulness (0..100) = EDITORIAL VALUE FOR A BROAD HEALTH-NEWS READER, distinct from raw scientific importance. Ask: "Would a normal educated Salma reader reasonably care about or benefit from understanding this?" Reward meaningful patient/public impact, practical relevance, understandable consequence, broad medical importance, and strong curiosity value. A highly technical, niche journal finding with no clear patient/public consequence should score LOWER even if scientifically legitimate; a genuinely important, understandable medical development scores higher. Hype/pseudoscience → 0. (This does not dumb down medicine — major technical breakthroughs still rate highly; it separates niche abstracts from broadly relevant health news.)`;
 
 /** One bounded batched classification call. Returns a map id → classification for
  *  the anchors it could classify; anchors it couldn't stay unclassified (skipped
@@ -347,7 +358,7 @@ Deno.serve(async (req) => {
   const sinceISO = new Date(nowMs - POOL_HOURS * 3_600_000).toISOString();
   const { data: poolRows } = await admin
     .from("radar_shadow_articles")
-    .select("id,provider,provider_uri,event_uri,title,url,source_title,source_domain,language,country,published_at,first_seen_at,priority_score,priority_level,expected_category_slug,duplicate_status,matched_content_id,esl_lane,esl_story_type,esl_evidence_class,esl_gcc,esl_usefulness,publish_status")
+    .select("id,provider,provider_uri,event_uri,title,title_ar,url,source_title,source_domain,language,country,published_at,first_seen_at,priority_score,priority_level,expected_category_slug,duplicate_status,matched_content_id,esl_lane,esl_story_type,esl_evidence_class,esl_gcc,esl_usefulness,publish_status")
     .not("ranked_at", "is", null)
     .is("publish_status", null)
     .gte("first_seen_at", sinceISO)
@@ -364,7 +375,7 @@ Deno.serve(async (req) => {
       provider_uri: (r.provider_uri as string | null) ?? null,
       event_uri: (r.event_uri as string | null) ?? null,
       title: (r.title as string | null) ?? null,
-      title_ar: null, // radar rows carry no Arabic title (created later by the Writer)
+      title_ar: (r.title_ar as string | null) ?? null, // radar-rank fills a headline translation for many rows
       url: (r.url as string | null) ?? null,
       source_title: (r.source_title as string | null) ?? null,
       source_domain: (r.source_domain as string | null) ?? null,
@@ -424,9 +435,12 @@ Deno.serve(async (req) => {
     for (const anchor of needClassify) {
       const c = cls.get(anchor.id);
       if (!c) continue;
-      anchor.esl_lane = c.lane; anchor.esl_story_type = c.story_type; anchor.esl_evidence_class = c.evidence_class;
-      anchor.esl_gcc = c.gcc; anchor.esl_usefulness = c.usefulness;
-      await cacheClassification(admin, anchor.id, c);
+      // GCC guard: gate the classifier's gcc flag on an actual in-headline GCC
+      // subject signal (never language/publisher). Downgrade-only.
+      const guarded = { ...c, gcc: resolveGcc(c.gcc, anchor.title_ar, anchor.title) };
+      anchor.esl_lane = guarded.lane; anchor.esl_story_type = guarded.story_type; anchor.esl_evidence_class = guarded.evidence_class;
+      anchor.esl_gcc = guarded.gcc; anchor.esl_usefulness = guarded.usefulness;
+      await cacheClassification(admin, anchor.id, guarded);
     }
   }
 
