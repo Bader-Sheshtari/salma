@@ -139,17 +139,17 @@ const GENERIC_AVOID = [
   "generic hospital corridors, generic waiting rooms, and meaningless healthcare backdrops;",
   "generic healthcare stock photography and stock clichés;",
   "generic blue futuristic 'healthcare technology' holograms, glowing circuit overlays, and generic AI-brain imagery;",
-  "a company or organization name, logo or wordmark used as the main visual subject;",
+  "a company name or logo floating alone as the WHOLE cover with no editorial scene (it may appear as a supporting element, not the entire image);",
   "Gulf/Kuwaiti clothing (dishdasha/thobe/abaya) or Gulf-styled people added for decoration when the story does not involve them;",
   "plastic, waxy or artificial-looking people; duplicated or distorted faces and hands;",
-  "any text, letters, words, numbers, logos, captions or watermarks;",
+  "gibberish/garbled text, a fabricated exact brand logo, a fake branded product, invented numbers/statistics/charts, captions or watermarks (a short, correctly-spelled entity name as clean editorial typography is fine when it strengthens the cover);",
   "blurry, low-detail, low-resolution or noisy rendering.",
 ].join(" ");
 
 // Medical/news responsibility + editorial-honesty guardrails (every image).
 const HONESTY = [
   "Editorial honesty: this is an illustrative editorial/conceptual cover, NOT documentary evidence.",
-  "Do NOT depict a specific real, named or identifiable person; do NOT stage a fake photograph of a real meeting, a real doctor, or named executives; do NOT present an invented exact product/device design as if factual; do NOT fabricate clinical results, charts, numbers or statistics.",
+  "Do NOT INVENT identity: no fabricated exact brand logo, no fake branded product, and no fake photograph or generated face of a specific real named person; do NOT stage a fake documentary photo of a real meeting/doctor/executive; do NOT fabricate clinical results, charts, numbers or statistics. (A recognizable real-world entity CONTEXT and a short correctly-spelled entity name are allowed; verified REAL logos/photos come from the editor's source-aware asset workflow, not from generation.)",
   "Do NOT show identifiable patients, real illness or injury, blood, gore, wounds, or graphic clinical/surgical content, and do NOT imply a diagnosis, treatment claim or outcome the article does not state.",
   "Keep it realistic, credible and calm — never alarmist, sensational or fear-based.",
 ].join(" ");
@@ -193,12 +193,12 @@ function buildImagePrompt(c: Concept, quality: Quality): string {
   return [
     "Editorial cover image for an Arabic health-news article. It must be UNMISTAKABLY about THIS specific story — an editor should instantly say 'yes, this is that article' — never a generic health or medical mood that could fit many unrelated stories.",
     `Story angle: ${c.story_angle}.`,
-    elements ? `This cover must visually tie together these REAL elements of the story (at least two, ideally three, legible in one coherent image): ${elements}.` : "",
+    elements ? `Make legible the strongest 2-3 of these real story anchors (chosen for this concept — do NOT cram in every element; keep the composition clean and uncluttered): ${elements}.` : "",
     `Hero subject: ${c.primary_visual_subject}.`,
     c.secondary_visual_cue ? `Supporting cue (secondary, must not dominate): ${c.secondary_visual_cue}.` : "",
     `Visual direction: ${c.proposed_visual_direction}.`,
     c.primary_entity
-      ? `Make the identity of ${c.primary_entity} legible through its real-world context (its research/manufacturing/product/clinical setting) — but NEVER use its logo, wordmark or name as the hero, and never depict a specific real person.`
+      ? `Keep the identity of ${c.primary_entity} recognizable through its real-world context (its research/manufacturing/product/clinical setting); a short, correctly-spelled "${c.primary_entity}" may appear as tasteful editorial typography if it strengthens the cover. Do NOT invent a fake exact logo or branded product, and do NOT depict a specific real person's face.`
       : "",
     c.must_show.length ? `Must show: ${c.must_show.join("; ")}.` : "",
     c.must_avoid.length ? `For this story specifically, avoid: ${c.must_avoid.join("; ")}.` : "",
@@ -231,15 +231,15 @@ function plannerSystem(quality: Quality): string {
     // STEP 1 — read the article and EXTRACT its real discrete elements.
     "STEP 1 — Read the article closely and extract its REAL elements: story_angle (the core news angle), primary_entity (the main named company/organization/product/person, e.g. 'Moderna'), secondary_entity (partner/second entity, if any), medical_mechanism (the technology/mechanism, e.g. 'mRNA personalized cancer vaccine'), condition (the disease/condition, e.g. 'melanoma / skin cancer'), and news_event_type (e.g. trial result, approval, partnership, manufacturing, expansion, discovery, market reaction). Fill each field from the article; use \"\" ONLY if the element is genuinely absent. Do not invent elements.",
 
-    // STEP 2 — design a concept that COMBINES elements (the anti-genericness core).
-    "STEP 2 — Design a cover concept that visibly TIES TOGETHER at least TWO — ideally THREE — of these real elements in one coherent image (primary_entity + medical_mechanism + condition, or entity + mechanism + news_event, etc.). List them in elements_combined. A concept that rests on only ONE weak clue is REJECTED — e.g. for a skin-cancer story, a bare shoulder or skin close-up shows only the condition and misses the company and the mechanism; that is exactly the failure to avoid.",
+    // STEP 2 — combine the STRONGEST 2-3 anchors (specificity WITHOUT clutter).
+    "STEP 2 — Choose the STRONGEST TWO OR THREE anchors from those elements for THIS concept (NOT all of them) and make just those legible together in one coherent, uncluttered image; list the chosen ones in elements_combined. The purpose is specificity, not cramming every entity/fact into one frame. A concept resting on only ONE weak clue is REJECTED (e.g. a bare shoulder/skin close-up for a skin-cancer story shows only the condition and misses the company and the mechanism) — but equally, do NOT overload the cover with every element at once.",
 
     // STEP 3 — the specificity gate.
-    "STEP 3 — SPECIFICITY GATE: ask 'could this exact image plausibly illustrate many unrelated health stories?' If yes, it FAILS — redesign it to be more specific. In specificity_rationale, state in one line WHY this cover is unmistakably about THIS article (name the entity/mechanism/condition it renders). If you cannot justify it, choose a more specific subject.",
+    "STEP 3 — SPECIFICITY GATE: ask 'could this exact image plausibly illustrate many unrelated health stories?' If yes, it FAILS — redesign it to be more specific. In specificity_rationale, state in one line WHY this cover is unmistakably about THIS article (name the 2-3 anchors it renders). If the story is specifically about, say, Moderna, the cover must NOT look like it could equally be Pfizer, AstraZeneca or an anonymous biotech.",
 
-    // Named entities → make identity legible without logos/real faces.
-    "When the article names a company/product/hospital/person, make that identity LEGIBLE through its real-world context — the kind of research lab, manufacturing line, product/clinical setting or environment that reader associates with it — but NEVER use its logo/wordmark/name as the hero, and NEVER depict a specific real, named or identifiable person.",
-    "If the story is a company + a medical innovation, combine company identity + the scientific/medical mechanism + the clinical meaning tastefully in one editorial image. A market/business angle may appear as a SECONDARY cue only, never dominating unless the article is primarily a business story.",
+    // Named entities → KEEP identity recognizable; invent nothing.
+    "When the article names a company/product/hospital/person that is CENTRAL to the news, KEEP that identity recognizable — do not reduce the cover to an anonymous lab/factory merely to avoid branding. Allowed for a GENERATED image: the entity's real-world CONTEXT (its kind of research/manufacturing/product/clinical setting), and a short correctly-spelled entity NAME used tastefully as editorial typography (a supporting element, not garbled text). PROHIBITED: inventing a fake exact logo, a fake branded product, or a fake photo/generated face of a specific real named person. (A VERIFIED real logo or real person photo may be used — but only via the editor's separate source-aware asset workflow, never fabricated here.)",
+    "If the story is a company + a medical innovation, tie company identity to the scientific/medical mechanism and its clinical meaning — but pick the best 2-3 anchors, don't force all in. A market/business angle is a SECONDARY cue only, never dominating unless the article is primarily a business story.",
 
     // People: a decision, not a reflex.
     "People are a DECISION, not a reflex. Use a dignified, generic human moment when the human stake IS the story; otherwise depict the real subject/mechanism/environment with no people. Never a specific identifiable individual.",
