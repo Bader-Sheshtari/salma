@@ -17,6 +17,54 @@ export type GenerateImageResult =
   | { ok: true; urls: string[]; candidates: ImageCandidate[]; recommendation: AssetRecommendation }
   | { error: string };
 
+// User-friendly Arabic messages for each backend `reason`. Distinguishes wait /
+// daily-allowance / temporary-service / image-failure categories, and never
+// leaks API/provider internals or secrets.
+const IMAGE_ERROR_MESSAGES: Record<string, string> = {
+  no_title: "أدخل عنوان الخبر أولاً لتُبنى الصورة عليه.",
+  connect: "تعذّر الاتصال بخدمة توليد الصور مؤقتاً. حاول مرة أخرى.",
+  openrouter: "تعذّر توليد الصورة من الخدمة حالياً. حاول مرة أخرى بعد قليل.",
+  no_image: "لم تُرجِع الخدمة صورة. حاول مرة أخرى.",
+  bad_format: "صيغة الصورة المُولّدة غير مدعومة.",
+  upload: "تعذّر حفظ الصورة المُولّدة. حاول مرة أخرى.",
+  bad_request: "طلب غير صالح.",
+  bad_quality: "وضع التوليد غير صالح.",
+  bad_count: "عدد الصور غير صالح.",
+  too_large: "حجم الطلب كبير جداً.",
+  // Rate limits / quotas — surfaced clearly instead of a generic connection error.
+  rate_limited: "يرجى الانتظار قليلاً قبل توليد صورة أخرى.",
+  rate_user_minute: "يرجى الانتظار قليلاً قبل توليد صورة أخرى.",
+  rate_user_daily: "بلغت حدّك اليومي من توليد الصور. جرّب مجدداً بعد فترة.",
+  rate_global_daily: "بلغ النظام الحد اليومي لتوليد الصور. حاول لاحقاً.",
+  rate_premium_global_daily: "بلغ النظام الحد اليومي لصور «الجودة العالية». حاول لاحقاً أو استخدم «التوليد السريع».",
+  reservation_failed: "تعذّر التحقق من حدود الاستخدام مؤقتاً. حاول مرة أخرى.",
+};
+
+/** Map a backend reason to a friendly Arabic message. Unknown/absent → a safe
+ *  temporary-service message. */
+function imageErrorMessage(reason: string | undefined | null): string {
+  const r = String(reason ?? "").trim();
+  return IMAGE_ERROR_MESSAGES[r] ?? "تعذّر توليد الصورة مؤقتاً. حاول مرة أخرى.";
+}
+
+/** supabase-js surfaces a non-2xx Edge response (e.g. 429 rate limit, 503) as an
+ *  invoke `error` with the original Response in `.context` and `data === null`,
+ *  so the detailed `{ reason }` body is otherwise lost. Read it back so the
+ *  editor sees the REAL cause (wait / daily limit / service) — not a generic
+ *  "connection failed". Best-effort; falls back to a temporary-service message. */
+async function reasonFromInvokeError(error: unknown): Promise<string | undefined> {
+  const ctx = (error as { context?: unknown })?.context;
+  if (ctx && typeof (ctx as Response).json === "function") {
+    try {
+      const body = (await (ctx as Response).json()) as { reason?: unknown } | null;
+      if (body && typeof body.reason === "string") return body.reason;
+    } catch {
+      // response not JSON / already consumed → fall through
+    }
+  }
+  return undefined;
+}
+
 /**
  * Proxy to the `generate-image` Edge Function: given the article's
  * title/excerpt/summary/category it asks OpenRouter for a few editorial cover
@@ -85,29 +133,18 @@ export async function generateCoverImage(input: {
     headers: { Authorization: `Bearer ${token}` },
   });
 
-  if (error || !data) {
-    return { error: "تعذّر الاتصال بخدمة توليد الصور. حاول مرة أخرى." };
+  if (error) {
+    // A non-2xx edge response (rate limit / quota / service) arrives here with
+    // the body in error.context — recover the real reason instead of a generic
+    // "connection failed" so the editor sees e.g. the daily-limit message.
+    const reason = await reasonFromInvokeError(error);
+    return { error: imageErrorMessage(reason) };
+  }
+  if (!data) {
+    return { error: "تعذّر الاتصال بخدمة توليد الصور مؤقتاً. حاول مرة أخرى." };
   }
   if (data.ok === false) {
-    const reasons: Record<string, string> = {
-      no_title: "أدخل عنوان الخبر أولاً لتُبنى الصورة عليه.",
-      connect: "تعذّر الاتصال بخدمة توليد الصور.",
-      openrouter: `تعذّر توليد الصور (${data.status ?? ""}). تأكد من نموذج الصور ومن رصيد OpenRouter.`,
-      no_image: "لم تُرجِع الخدمة صوراً. حاول مرة أخرى أو جرّب نموذجاً آخر.",
-      bad_format: "صيغة الصورة المُولّدة غير مدعومة.",
-      upload: "تعذّر حفظ الصور المُولّدة.",
-      bad_request: "طلب غير صالح.",
-      bad_quality: "وضع التوليد غير صالح.",
-      bad_count: "عدد الصور غير صالح.",
-      too_large: "حجم الطلب كبير جداً.",
-      rate_limited: "تجاوزت الحد المسموح من التوليد مؤقتاً. انتظر قليلاً ثم حاول مجدداً.",
-      rate_user_minute: "أرسلت طلبات كثيرة بسرعة. انتظر دقيقة ثم حاول مجدداً.",
-      rate_user_daily: "بلغت حدّك اليومي من توليد الصور. حاول لاحقاً.",
-      rate_global_daily: "بلغ النظام الحد اليومي لتوليد الصور. حاول لاحقاً.",
-      rate_premium_global_daily: "بلغ النظام الحد اليومي لصور «الجودة العالية». حاول لاحقاً أو استخدم الوضع السريع.",
-      reservation_failed: "تعذّر التحقق من حدود الاستخدام مؤقتاً. حاول مرة أخرى.",
-    };
-    return { error: reasons[String(data.reason)] ?? "تعذّر توليد الصور. حاول مرة أخرى." };
+    return { error: imageErrorMessage(typeof data.reason === "string" ? data.reason : undefined) };
   }
 
   const urls: string[] = Array.isArray(data.urls)
