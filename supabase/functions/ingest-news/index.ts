@@ -2386,15 +2386,24 @@ Deno.serve(async (req: Request) => {
   const pilotLimit = gate.mode === "pilot" ? gate.limit : null;
   const targetedSourceUrl = gate.mode === "pilot" ? (gate.sourceUrl ?? null) : null;
 
-  // Radar one-click publish: URL-scoped human authorization to fetch an
-  // unregistered source. Granted ONLY when ALL hold: an ADMIN JWT (trigger
-  // "manual", never the cron secret's "cron"), an explicit radar_authorized_source
-  // === true flag, and a resolved targeted pilot URL. The authorization is scoped
-  // to exactly that URL — runIngestion mints the transient synthetic source only
-  // when the pilot URL equals this value. Cron can never set trigger "manual", so
-  // the scheduled path can never bypass the registry.
+  // ESL scheduled promotion: the Editorial Selection Layer runs server-side under
+  // the ingest secret (trigger "cron") and, like the admin one-click path, hands
+  // us the EXACT article URL + identifiers read from the TRUSTED
+  // radar_shadow_articles row (never operator free text). It opts in with
+  // op:"esl_promote"; a plain/legacy cron (no op) is unaffected and can still
+  // never bypass the registry.
+  const eslPromote = trigger === "cron" && (body as { op?: unknown })?.op === "esl_promote";
+
+  // Radar one-click publish: URL-scoped authorization to fetch an unregistered
+  // source. Granted ONLY when ALL hold: an authorized promoter — either an ADMIN
+  // JWT (trigger "manual") or the ESL cron promotion (eslPromote) — an explicit
+  // radar_authorized_source === true flag, and a resolved targeted pilot URL. The
+  // authorization is scoped to exactly that URL — runIngestion mints the transient
+  // synthetic source only when the pilot URL equals this value. A generic cron run
+  // (no op:"esl_promote") can never reach this branch and never bypasses the
+  // registry.
   const radarAuthorizedFlag = (body as { radar_authorized_source?: unknown })?.radar_authorized_source === true;
-  const radarAuthorizedUrl = trigger === "manual" && radarAuthorizedFlag && targetedSourceUrl
+  const radarAuthorizedUrl = (trigger === "manual" || eslPromote) && radarAuthorizedFlag && targetedSourceUrl
     ? targetedSourceUrl
     : null;
 

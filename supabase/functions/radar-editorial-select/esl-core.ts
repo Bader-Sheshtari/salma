@@ -1,0 +1,355 @@
+// Editorial Selection Layer — PURE, deterministic core.
+//
+// No network, no Deno APIs — everything here is unit-testable. The edge handler
+// (index.ts) loads data + runs the (bounded) LLM classification, then this core
+// does all clustering, source selection, scoring, diversity, and balancing so
+// the selection stays understandable and tunable (never an LLM black box).
+
+export type Lane = "L1" | "L2" | "L3" | "L4" | "L5";
+export type StoryType =
+  | "regulatory_decision"
+  | "scientific_study"
+  | "public_health"
+  | "corporate_business"
+  | "product_claim"
+  | "guidance_explainer"
+  | "general";
+
+export type RadarRow = {
+  id: string;
+  provider?: string | null;
+  provider_uri?: string | null;
+  event_uri: string | null;
+  title: string | null;
+  title_ar: string | null;
+  url: string | null;
+  source_title: string | null;
+  source_domain: string | null;
+  language: string | null;
+  country: string | null;
+  published_at: string | null;
+  first_seen_at: string;
+  priority_score: number | null;
+  priority_level: string | null; // very_important | important | low
+  expected_category_slug: string | null;
+  duplicate_status: string | null; // new | possible_duplicate | already_in_salma
+  matched_content_id: string | null;
+  esl_lane: string | null;
+  esl_story_type: string | null;
+  esl_evidence_class: string | null; // research | guidance | none
+  esl_gcc: boolean | null;
+  esl_usefulness: number | null; // 0..100
+};
+
+export type RegistryEntry = {
+  domain: string;
+  source_type: string; // official | research | medical_institution | media | reference
+  tier: string; // 1 | 2 | 3 | blocked
+  trust_score: number | null;
+};
+
+export type SourceRole = "regulator" | "journal" | "institution" | "wire" | "company" | "general";
+
+// ---- Source tier (deterministic) ----------------------------------------
+// Registry match first (Salma already knows the domain); conservative fallback
+// only when unknown. Tier 1 = strongest primary/official … 5 = weak aggregator.
+
+const REGULATOR_DOMAINS = new Set([
+  "fda.gov", "ema.europa.eu", "who.int", "cdc.gov", "nih.gov", "ecdc.europa.eu",
+  "mhra.gov.uk", "moh.gov.kw", "sfda.gov.sa", "mohap.gov.ae", "moph.gov.qa",
+]);
+const WIRE_DOMAINS = new Set([
+  "reuters.com", "apnews.com", "afp.com", "bloomberg.com",
+]);
+const JOURNAL_DOMAINS = new Set([
+  "nature.com", "nejm.org", "thelancet.com", "jamanetwork.com", "bmj.com",
+  "science.org", "cell.com", "thelancet.com",
+]);
+const SPECIALIST_DOMAINS = new Set([
+  "statnews.com", "medpagetoday.com", "endpts.com", "fiercebiotech.com",
+  "fiercepharma.com", "medscape.com",
+]);
+const MAJOR_MEDIA_DOMAINS = new Set([
+  "bbc.com", "bbc.co.uk", "theguardian.com", "nytimes.com", "washingtonpost.com",
+  "ft.com", "aljazeera.com", "cnn.com",
+]);
+
+export function normalizeDomain(d: string | null | undefined): string {
+  return String(d ?? "").trim().toLowerCase().replace(/^www\./, "");
+}
+
+/** Numeric source tier 1..5 for a domain. Registry wins; else domain heuristic. */
+export function sourceTier(domain: string | null | undefined, registry: Map<string, RegistryEntry>): number {
+  const d = normalizeDomain(domain);
+  if (!d) return 5;
+  const reg = registry.get(d);
+  if (reg) {
+    if (reg.tier === "blocked") return 5;
+    if (reg.source_type === "official") return 1;
+    if (reg.source_type === "research" || reg.source_type === "medical_institution") return 2;
+    if (reg.source_type === "reference") return 2;
+    if (reg.source_type === "media") return reg.tier === "1" ? 3 : 4;
+  }
+  if (REGULATOR_DOMAINS.has(d)) return 1;
+  if (JOURNAL_DOMAINS.has(d)) return 2;
+  if (WIRE_DOMAINS.has(d)) return 2;
+  if (SPECIALIST_DOMAINS.has(d)) return 3;
+  if (MAJOR_MEDIA_DOMAINS.has(d)) return 4;
+  return 5; // aggregator / unknown secondary
+}
+
+/** Coarse role of a domain, used for story-type-aware suitability. */
+export function sourceRole(domain: string | null | undefined, registry: Map<string, RegistryEntry>): SourceRole {
+  const d = normalizeDomain(domain);
+  const reg = registry.get(d);
+  if (REGULATOR_DOMAINS.has(d) || reg?.source_type === "official") return "regulator";
+  if (JOURNAL_DOMAINS.has(d) || reg?.source_type === "research") return "journal";
+  if (reg?.source_type === "medical_institution") return "institution";
+  if (WIRE_DOMAINS.has(d)) return "wire";
+  return "general";
+}
+
+// ---- Story-type-aware "best source for THIS claim" ----------------------
+// The strongest source for the specific claim — NOT simply the highest tier.
+
+const ROLE_PREFERENCE: Record<StoryType, SourceRole[]> = {
+  regulatory_decision: ["regulator", "wire", "journal", "institution", "general"],
+  scientific_study: ["journal", "institution", "wire", "regulator", "general"],
+  public_health: ["regulator", "institution", "wire", "journal", "general"],
+  // Corporate: independent wire adds context/verification over a company release.
+  corporate_business: ["wire", "general", "regulator", "institution", "company"],
+  // Product/efficacy: prefer independent/regulatory evidence for the claim.
+  product_claim: ["regulator", "journal", "wire", "institution", "general", "company"],
+  guidance_explainer: ["institution", "regulator", "journal", "general"],
+  general: ["wire", "journal", "regulator", "institution", "general"],
+};
+
+/** Pick the representative row of a cluster whose source best fits the story
+ *  type. Higher role-fit dominates; tier and freshness break ties. */
+export function bestSource(
+  members: RadarRow[],
+  storyType: StoryType,
+  registry: Map<string, RegistryEntry>,
+): RadarRow {
+  const pref = ROLE_PREFERENCE[storyType] ?? ROLE_PREFERENCE.general;
+  const rank = (r: RadarRow): number => {
+    const role = sourceRole(r.source_domain, registry);
+    const roleIdx = pref.indexOf(role);
+    const roleScore = roleIdx >= 0 ? (pref.length - roleIdx) : 0; // higher = better fit
+    const tier = sourceTier(r.source_domain, registry); // 1..5
+    const tierScore = (6 - tier); // 5..1
+    // role fit dominates (×10), tier is the tie-breaker, freshness a nudge.
+    const fresh = r.published_at ? -ageHours(r.published_at, nowMsFallback(members)) / 1000 : 0;
+    return roleScore * 10 + tierScore + fresh;
+  };
+  return [...members].sort((a, b) => rank(b) - rank(a))[0];
+}
+
+// Deterministic "now": callers pass an explicit nowMs into scoring; for bestSource
+// tie-break we only need relative freshness, so derive a stable reference from the
+// newest member rather than the wall clock (keeps the function pure/testable).
+function nowMsFallback(members: RadarRow[]): number {
+  let max = 0;
+  for (const m of members) {
+    const t = Date.parse(m.published_at ?? m.first_seen_at ?? "");
+    if (Number.isFinite(t) && t > max) max = t;
+  }
+  return max || 0;
+}
+
+function ageHours(iso: string, nowMs: number): number {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 999;
+  return Math.max(0, (nowMs - t) / 3_600_000);
+}
+
+// ---- Clustering: one event → one candidate ------------------------------
+// event_uri is the primary key (Event Registry's own event id). Rows without a
+// usable event_uri fall back to a normalized-title signature so obvious
+// republishers still collapse. Deterministic and cheap.
+
+const STOP = new Set(["the", "a", "an", "of", "to", "in", "for", "and", "on", "with", "new", "study", "says", "after"]);
+export function titleSignature(title: string | null | undefined): string {
+  const toks = String(title ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !STOP.has(w));
+  return toks.slice(0, 6).sort().join(" ");
+}
+
+export function clusterKey(row: RadarRow): string {
+  const ev = String(row.event_uri ?? "").trim();
+  if (ev) return `ev:${ev}`;
+  const sig = titleSignature(row.title_ar || row.title);
+  return sig ? `t:${sig}` : `id:${row.id}`;
+}
+
+export function clusterRows(rows: RadarRow[]): Map<string, RadarRow[]> {
+  const m = new Map<string, RadarRow[]>();
+  for (const r of rows) {
+    const k = clusterKey(r);
+    (m.get(k) ?? m.set(k, []).get(k)!).push(r);
+  }
+  return m;
+}
+
+// ---- L5 evidence gate ----------------------------------------------------
+export function isL5Eligible(row: { esl_lane: string | null; esl_evidence_class: string | null }): boolean {
+  return row.esl_lane === "L5" && (row.esl_evidence_class === "research" || row.esl_evidence_class === "guidance");
+}
+
+// ---- Composite score + diversity ----------------------------------------
+
+export type DayState = {
+  laneCounts: Record<string, number>;
+  domains: Set<string>;
+  countries: Set<string>;
+  topicSigs: Set<string>;
+  gccCount: number;
+  totalSelected: number;
+};
+
+export function emptyDayState(): DayState {
+  return { laneCounts: {}, domains: new Set(), countries: new Set(), topicSigs: new Set(), gccCount: 0, totalSelected: 0 };
+}
+
+const TIER_AUTHORITY = [0, 1.0, 0.85, 0.7, 0.55, 0.35]; // index by tier 1..5
+
+export type ScoredCandidate = {
+  rep: RadarRow;
+  clusterKey: string;
+  memberCount: number;
+  lane: Lane;
+  storyType: StoryType;
+  gcc: boolean;
+  tier: number;
+  role: SourceRole;
+  base: number;
+  penalty: number;
+  score: number;
+};
+
+/** Composite editorial score (0..~1). Transparent weighted signals; diversity
+ *  penalties are applied against the current editorial-day state. */
+export function scoreCandidate(
+  rep: RadarRow,
+  members: RadarRow[],
+  registry: Map<string, RegistryEntry>,
+  day: DayState,
+  nowMs: number,
+): ScoredCandidate {
+  const lane = (rep.esl_lane as Lane) ?? "L1";
+  const storyType = (rep.esl_story_type as StoryType) ?? "general";
+  const gcc = rep.esl_gcc === true;
+  const tier = sourceTier(rep.source_domain, registry);
+  const role = sourceRole(rep.source_domain, registry);
+
+  const importance = rep.priority_level === "very_important" ? 1 : rep.priority_level === "important" ? 0.7 : 0.45;
+  const authority = TIER_AUTHORITY[Math.min(5, Math.max(1, tier))];
+  const pref = ROLE_PREFERENCE[storyType] ?? ROLE_PREFERENCE.general;
+  const roleIdx = pref.indexOf(role);
+  const suitability = roleIdx >= 0 ? (pref.length - roleIdx) / pref.length : 0.4;
+  const usefulness = Math.min(100, Math.max(0, rep.esl_usefulness ?? 50)) / 100;
+  const ageH = ageHours(rep.published_at ?? rep.first_seen_at, nowMs);
+  const freshness = Math.exp(-ageH / 48); // ~half-life 1.4 days
+  const originality = rep.duplicate_status === "already_in_salma" ? 0.1 : rep.duplicate_status === "possible_duplicate" ? 0.6 : 1.0;
+  const gccBonus = gcc ? 0.06 : 0;
+
+  const base =
+    0.30 * importance +
+    0.16 * suitability +
+    0.14 * authority +
+    0.14 * usefulness +
+    0.14 * freshness +
+    0.12 * originality +
+    gccBonus;
+
+  // Diversity penalties vs today's selected set.
+  const sig = titleSignature(rep.title_ar || rep.title);
+  const dom = normalizeDomain(rep.source_domain);
+  const country = String(rep.country ?? "").trim();
+  let penalty = 0;
+  if (sig && day.topicSigs.has(sig)) penalty += 0.5; // same topic already today
+  if (dom && day.domains.has(dom)) penalty += 0.12; // same source already today
+  if (country && country !== "" && day.countries.has(country)) penalty += 0.05;
+  const laneCount = day.laneCounts[lane] ?? 0;
+  if (laneCount >= 3) penalty += 0.08 * (laneCount - 2); // discourage lane pile-up
+
+  return {
+    rep, clusterKey: clusterKey(rep), memberCount: members.length,
+    lane, storyType, gcc, tier, role,
+    base: Number(base.toFixed(4)), penalty: Number(penalty.toFixed(4)),
+    score: Number((base - penalty).toFixed(4)),
+  };
+}
+
+// ---- Balanced selection --------------------------------------------------
+
+export type LaneConfig = {
+  // soft floors/ceilings scaled by the effective cap
+  ceilings: Partial<Record<string, number>>; // per-lane hard-ish ceiling
+  floors: Partial<Record<string, number>>; // per-lane soft floor (aspiration)
+  minScore: number; // eligibility floor
+  breakingScore: number; // very_important+high score may exceed a soft ceiling
+};
+
+export function defaultLaneConfig(cap: number): LaneConfig {
+  // Scaled for an ~8/day cap; ceilings prevent an all-clinical day.
+  return {
+    ceilings: { L1: Math.ceil(cap * 0.55), L2: Math.ceil(cap * 0.4), L3: Math.ceil(cap * 0.45), L4: Math.max(2, Math.round(cap * 0.3)), L5: Math.ceil(cap * 0.55) },
+    floors: { L5: 2 },
+    minScore: 0.42,
+    breakingScore: 0.82,
+  };
+}
+
+export type SelectionResult = {
+  selected: ScoredCandidate[];
+  skipped: { cand: ScoredCandidate; reason: string }[];
+};
+
+/**
+ * Balanced, day-stateful pick. Greedy by score, honoring lane ceilings (a very
+ * important high-score story may override a soft ceiling), a soft L5 floor
+ * (never forced on dry days), a min-score gate, and the remaining daily cap.
+ * `day` reflects what was already selected earlier this editorial day.
+ */
+export function selectBalanced(
+  candidates: ScoredCandidate[],
+  day: DayState,
+  remainingCap: number,
+  cfg: LaneConfig,
+): SelectionResult {
+  const selected: ScoredCandidate[] = [];
+  const skipped: { cand: ScoredCandidate; reason: string }[] = [];
+  if (remainingCap <= 0) {
+    return { selected, skipped: candidates.map((c) => ({ cand: c, reason: "cap_reached" })) };
+  }
+  // Work on a mutable copy of day counts.
+  const laneCounts: Record<string, number> = { ...day.laneCounts };
+  const seenTopics = new Set(day.topicSigs);
+  const seenDomains = new Set(day.domains);
+
+  const ranked = [...candidates].sort((a, b) => b.score - a.score);
+  for (const c of ranked) {
+    if (selected.length >= remainingCap) { skipped.push({ cand: c, reason: "cap_reached" }); continue; }
+    if (c.score < cfg.minScore) { skipped.push({ cand: c, reason: "low_score" }); continue; }
+    const sig = titleSignature(c.rep.title_ar || c.rep.title);
+    if (sig && seenTopics.has(sig)) { skipped.push({ cand: c, reason: "duplicate_topic" }); continue; }
+    const ceiling = cfg.ceilings[c.lane] ?? remainingCap;
+    const cur = laneCounts[c.lane] ?? 0;
+    // Breaking override keys on the INTRINSIC (pre-diversity-penalty) score, so a
+    // genuinely major story isn't blocked by a full lane just because similar
+    // stories ran earlier today.
+    const breaking = c.rep.priority_level === "very_important" && c.base >= cfg.breakingScore;
+    if (cur >= ceiling && !breaking) { skipped.push({ cand: c, reason: "lane_full" }); continue; }
+    // accept
+    selected.push(c);
+    laneCounts[c.lane] = cur + 1;
+    if (sig) seenTopics.add(sig);
+    const dom = normalizeDomain(c.rep.source_domain);
+    if (dom) seenDomains.add(dom);
+  }
+  return { selected, skipped };
+}
