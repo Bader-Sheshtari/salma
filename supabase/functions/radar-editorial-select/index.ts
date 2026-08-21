@@ -278,7 +278,8 @@ function canonKeyFor(members: RadarRow[]): string {
 
 // ---- promotion (live mode only) -------------------------------------------
 
-type PromoteResult = { ok: boolean; status: string; content_id: string | null; reason: string | null };
+type EscalationSummary = { status: string; method: string; editorial_domain: string | null; editorial_tier: number | null };
+type PromoteResult = { ok: boolean; status: string; content_id: string | null; reason: string | null; escalation?: EscalationSummary | null };
 
 /**
  * Promote one selected candidate through the EXISTING radar prepare pipeline.
@@ -287,7 +288,7 @@ type PromoteResult = { ok: boolean; status: string; content_id: string | null; r
  * owns the terminal radar write and creates a PENDING Content row (prepare mode
  * never publishes). Returns the terminal outcome. Never throws.
  */
-async function promote(admin: SupabaseClient, rep: RadarRow, categorySlug: string | null): Promise<PromoteResult> {
+async function promote(admin: SupabaseClient, rep: RadarRow, categorySlug: string | null, clusterKey: string, storyType: string): Promise<PromoteResult> {
   if (!INGEST_SECRET) return { ok: false, status: "failed", content_id: null, reason: "no_ingest_secret" };
   if (!rep.url) return { ok: false, status: "failed", content_id: null, reason: "no_url" };
 
@@ -321,10 +322,16 @@ async function promote(admin: SupabaseClient, rep: RadarRow, categorySlug: strin
         radar_provider_uri: rep.provider_uri ?? null,
         radar_source_title: rep.source_title ?? null,
         radar_source_lang: rep.language ?? null,
+        // Primary Source Escalation facts (used by ingest-news before the Writer).
+        esl_cluster_key: clusterKey,
+        esl_story_type: storyType,
+        esl_title: rep.title ?? null,
+        esl_title_ar: rep.title_ar ?? null,
       }),
     });
     const data = await res.json().catch(() => null) as
-      | { ok?: boolean; radar_publish?: { status?: string; content_id?: string; reason?: string } }
+      | { ok?: boolean; radar_publish?: { status?: string; content_id?: string; reason?: string };
+          source_escalation?: { status?: string; method?: string; selected_editorial_source?: { domain?: string; tier?: number } } | null }
       | null;
     if (!res.ok || !data || data.ok === false) {
       // ingest-news owns the terminal radar write; reconcile so we don't leave
@@ -332,10 +339,18 @@ async function promote(admin: SupabaseClient, rep: RadarRow, categorySlug: strin
       await releaseIfStuck(admin, rep.id, "ingest_invoke_failed");
       return { ok: false, status: "failed", content_id: null, reason: "ingest_invoke_failed" };
     }
+    const esc = data.source_escalation
+      ? {
+          status: String(data.source_escalation.status ?? ""),
+          method: String(data.source_escalation.method ?? ""),
+          editorial_domain: data.source_escalation.selected_editorial_source?.domain ?? null,
+          editorial_tier: data.source_escalation.selected_editorial_source?.tier ?? null,
+        }
+      : null;
     const rp = data.radar_publish ?? null;
     // prepare mode success = a real PENDING Content row exists (status 'draft').
     if (rp && rp.status === "draft" && rp.content_id) {
-      return { ok: true, status: "draft", content_id: rp.content_id, reason: null };
+      return { ok: true, status: "draft", content_id: rp.content_id, reason: null, escalation: esc };
     }
     // Any other outcome (failed / no content) — Writer/Fidelity did not produce a
     // clean Content row. Do NOT publish anything; record and move on.
@@ -652,9 +667,15 @@ Deno.serve(async (req) => {
     const row: Record<string, unknown> = baseSelectionRow(editorialDay, runId, mode, c, true);
     row.selection_reason = selectionReason(c);
     if (mode === "live") {
-      const pr = await promote(admin, c.rep, c.rep.expected_category_slug ?? null);
+      const pr = await promote(admin, c.rep, c.rep.expected_category_slug ?? null, c.clusterKey, c.storyType);
       row.promotion_status = pr.ok ? "promoted" : "failed";
       row.promoted_content_id = pr.content_id;
+      if (pr.escalation) {
+        row.esc_status = pr.escalation.status;
+        row.esc_method = pr.escalation.method;
+        row.esc_editorial_domain = pr.escalation.editorial_domain;
+        row.esc_editorial_tier = pr.escalation.editorial_tier;
+      }
       if (!pr.ok) row.skip_reason = `promotion_${pr.status}:${pr.reason ?? ""}`.slice(0, 200);
       promotions.push({ key: c.clusterKey, status: pr.ok ? "promoted" : `failed:${pr.reason}`, content_id: pr.content_id });
       // Reflect this pick in the running day-state so LATER picks in THIS run stay

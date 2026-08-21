@@ -74,6 +74,14 @@ import {
 } from "./fetchSourceText.ts";
 import { type ErPost, fetchErArticleSource } from "./erSourceFallback.ts";
 import {
+  escalate,
+  domainOf as escDomainOf,
+  type EscalationInput,
+  type EscalationResult,
+  type RegistryEntry as EscRegistryEntry,
+  type StoryType as EscStoryType,
+} from "./sourceEscalation.ts";
+import {
   type FidelityArticle,
   type FidelityRepairAudit,
   type FidelityValidation,
@@ -289,7 +297,7 @@ type WriterAudit = {
 
 async function chatWeb(
   messages: { role: string; content: string }[],
-  options: { temperature?: number; maxTokens?: number; maxResults?: number } = {},
+  options: { temperature?: number; maxTokens?: number; maxResults?: number; model?: string } = {},
 ): Promise<WebChatResult> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY");
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
@@ -303,7 +311,7 @@ async function chatWeb(
       "X-Title": "Salma",
     },
     body: JSON.stringify({
-      model: DEFAULT_MODEL,
+      model: options.model ?? DEFAULT_MODEL,
       messages,
       temperature: options.temperature ?? 0.3,
       max_tokens: options.maxTokens ?? 2048,
@@ -1090,6 +1098,150 @@ async function extractOfficialAssets(
     }
   }
   return out;
+}
+
+// ---- Primary Source Escalation (bounded, ≤ selected/day) ------------------
+
+/** Trim a possibly-unknown value to a non-empty string, else null. */
+function asTrimmedTop(v: unknown): string | null {
+  const s = String(v ?? "").trim();
+  return s ? s : null;
+}
+
+/** Load news_sources into the escalation registry shape (domain → type/tier). */
+async function loadEscalationRegistry(admin: SupabaseClient): Promise<Map<string, EscRegistryEntry>> {
+  const map = new Map<string, EscRegistryEntry>();
+  const { data } = await admin.from("news_sources").select("domain,source_type,tier,active").eq("active", true);
+  for (const r of (data ?? []) as { domain: string; source_type: string; tier: string }[]) {
+    const d = escDomainOf(r.domain);
+    if (d) map.set(d, { domain: d, source_type: String(r.source_type), tier: String(r.tier) });
+  }
+  return map;
+}
+
+// Strong-source domains worth surfacing as a cited primary (STEP B link filter).
+const ESCALATION_LINK_HINTS = [
+  "fda.gov", "ema.europa.eu", "who.int", "cdc.gov", "nih.gov", "mhra.gov.uk",
+  "sfda.gov.sa", "nature.com", "nejm.org", "thelancet.com", "jamanetwork.com",
+  "bmj.com", "science.org", "doi.org", "ncbi.nlm.nih.gov", "reuters.com",
+  "apnews.com", "mayoclinic.org", "health.harvard.edu", "cochrane.org",
+];
+
+/** SSRF-safe: fetch the discovery article and return outbound links pointing to
+ *  known strong-source domains (STEP B). Mirrors the hardened asset fetch. */
+async function fetchOutboundLinks(url: string): Promise<string[]> {
+  let u: URL;
+  try { u = new URL(url); } catch { return []; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return [];
+  if (isBlockedHostname(u.hostname)) return [];
+  const cls = await validateResolvedAddresses(u.hostname, denoResolveDns).catch(() => "unsafe" as const);
+  if (cls !== "safe") return [];
+  let html: string;
+  try {
+    const res = await fetch(u.href, {
+      headers: { "User-Agent": NEUTRAL_USER_AGENT },
+      signal: AbortSignal.timeout(8000),
+      redirect: "follow",
+    });
+    if (!res.ok) return [];
+    if (!/text\/html|application\/xhtml/i.test(res.headers.get("content-type") ?? "")) return [];
+    html = (await res.text()).slice(0, 300000);
+  } catch { return []; }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of html.matchAll(/<a\b[^>]*\bhref=["']([^"']+)["']/gi)) {
+    let abs: string;
+    try { abs = new URL(m[1].trim(), u.href).href; } catch { continue; }
+    const host = escDomainOf(abs);
+    if (host === escDomainOf(u.href)) continue; // outbound only
+    if (!ESCALATION_LINK_HINTS.some((h) => host === h || host.endsWith("." + h))) continue;
+    if (seen.has(abs)) continue;
+    seen.add(abs);
+    out.push(abs);
+    if (out.length >= 15) break;
+  }
+  return out;
+}
+
+// Escalation search runs on a capable, plugin-supporting model (NOT the free
+// discovery default, which may not execute the web plugin). Overridable.
+const ESCALATION_MODEL = Deno.env.get("ESL_ESCALATION_MODEL") || "openai/gpt-4o-mini";
+
+/** ONE bounded web search for the development → citations (url + title). */
+async function escalationWebSearch(query: string): Promise<{ url: string; title: string }[]> {
+  const r = await chatWeb(
+    [
+      { role: "system", content: "You find the single strongest AUTHORITATIVE primary source (regulator, peer-reviewed journal, health institution, or major news wire) for a specific health development. Return citations only; do not write prose." },
+      { role: "user", content: `Find the most authoritative original/primary source URLs for this exact development: ${query}` },
+    ],
+    { maxResults: 6, temperature: 0, model: ESCALATION_MODEL },
+  );
+  return r.citations.map((c) => ({ url: c.url, title: c.title }));
+}
+
+/**
+ * Run escalation for one selected ESL cluster, with a per-cluster CACHE so the
+ * same development is never re-searched. Never throws (returns escalation_failed
+ * on error so promotion stays safe). Persists the audit row.
+ */
+async function runEscalation(
+  admin: SupabaseClient,
+  facts: { clusterKey: string; storyType: string; discoveryUrl: string; discoveryDomain: string; title: string | null; titleAr: string | null },
+): Promise<EscalationResult> {
+  // Cache hit → reuse (no fetch, no search).
+  const { data: cached } = await admin
+    .from("radar_source_escalation")
+    .select("status,method,discovery_url,discovery_domain,discovery_role,discovery_tier,editorial_url,editorial_domain,editorial_role,editorial_tier,supporting_url,upgrade_reason")
+    .eq("cluster_key", facts.clusterKey)
+    .maybeSingle();
+  if (cached) {
+    return {
+      status: cached.status as EscalationResult["status"],
+      method: (cached.method ?? "none") as EscalationResult["method"],
+      discovery_source: { url: cached.discovery_url ?? facts.discoveryUrl, domain: cached.discovery_domain ?? facts.discoveryDomain, role: (cached.discovery_role ?? "secondary_media") as EscalationResult["discovery_source"]["role"], tier: cached.discovery_tier ?? 5 },
+      selected_editorial_source: { url: cached.editorial_url ?? facts.discoveryUrl, domain: cached.editorial_domain ?? facts.discoveryDomain, role: (cached.editorial_role ?? "secondary_media") as EscalationResult["selected_editorial_source"]["role"], tier: cached.editorial_tier ?? 5 },
+      supporting_url: cached.supporting_url ?? null,
+      upgrade_reason: cached.upgrade_reason ?? "cached",
+    };
+  }
+
+  const registry = await loadEscalationRegistry(admin);
+  const input: EscalationInput = {
+    discoveryUrl: facts.discoveryUrl,
+    discoveryDomain: facts.discoveryDomain,
+    title: facts.title,
+    titleAr: facts.titleAr,
+    storyType: (facts.storyType || "general") as EscStoryType,
+  };
+  let result: EscalationResult;
+  try {
+    result = await escalate(input, { registry, fetchOutboundLinks, webSearch: escalationWebSearch });
+  } catch {
+    const disc = { url: facts.discoveryUrl, domain: facts.discoveryDomain, role: "secondary_media" as const, tier: 5 };
+    result = { status: "escalation_failed", method: "none", discovery_source: disc, selected_editorial_source: disc, supporting_url: null, upgrade_reason: "escalation error — discovery preserved" };
+  }
+
+  // Persist audit / cache (best-effort; never blocks promotion).
+  try {
+    await admin.from("radar_source_escalation").upsert({
+      cluster_key: facts.clusterKey,
+      story_type: facts.storyType,
+      status: result.status,
+      method: result.method,
+      discovery_url: result.discovery_source.url,
+      discovery_domain: result.discovery_source.domain,
+      discovery_role: result.discovery_source.role,
+      discovery_tier: result.discovery_source.tier,
+      editorial_url: result.selected_editorial_source.url,
+      editorial_domain: result.selected_editorial_source.domain,
+      editorial_role: result.selected_editorial_source.role,
+      editorial_tier: result.selected_editorial_source.tier,
+      supporting_url: result.supporting_url,
+      upgrade_reason: result.upgrade_reason,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "cluster_key" });
+  } catch { /* audit best-effort */ }
+  return result;
 }
 
 async function fetchCoverImage(url: string): Promise<string | null> {
@@ -2368,6 +2520,28 @@ Deno.serve(async (req: Request) => {
     return Response.json({ ok: true, assets });
   }
 
+  // Primary Source Escalation — DRY RUN (op:"escalate_source"). Runs the bounded
+  // escalation ladder for ONE selected cluster and returns/caches the result
+  // WITHOUT creating any Content. This is the safe way to validate escalation on
+  // real selected clusters. Read-only; authorized caller only (already gated above).
+  if ((body as { op?: unknown })?.op === "escalate_source") {
+    const b = body as Record<string, unknown>;
+    const discoveryUrl = asTrimmedTop(b.discovery_url);
+    const clusterKey = asTrimmedTop(b.cluster_key);
+    if (!discoveryUrl || !clusterKey) {
+      return Response.json({ ok: false, error: "cluster_key and discovery_url required" }, { status: 400 });
+    }
+    const result = await runEscalation(admin, {
+      clusterKey,
+      storyType: asTrimmedTop(b.story_type) ?? "general",
+      discoveryUrl,
+      discoveryDomain: asTrimmedTop(b.discovery_domain) ?? escDomainOf(discoveryUrl),
+      title: asTrimmedTop(b.title),
+      titleAr: asTrimmedTop(b.title_ar),
+    });
+    return Response.json({ ok: true, escalation: result });
+  }
+
   const gate = resolvePilotGate({
     authorized: true,
     requestedMode: (body as { writer_mode?: unknown })?.writer_mode,
@@ -2447,17 +2621,53 @@ Deno.serve(async (req: Request) => {
     ? asTrimmed((body as { radar_category_slug?: unknown })?.radar_category_slug)
     : null;
 
+  // Primary Source Escalation (LIVE, ESL promotion only). Try to upgrade the
+  // discovery source to a stronger, story-type-appropriate PRIMARY before the
+  // Writer runs. Bounded + cached; any failure keeps the discovery source. This
+  // never changes WHETHER we publish (still PENDING) — only WHICH source is the
+  // Writer's primary. The discovery URL is preserved in provenance below.
+  const bodyRec = body as Record<string, unknown>;
+  let escalation: EscalationResult | null = null;
+  let effSourceUrl = targetedSourceUrl;
+  let effAuthorizedUrl = radarAuthorizedUrl;
+  let effErProvider = radarErProvider;
+  let effErProviderUri = radarErProviderUri;
+  let effSourceTitle = radarSourceTitle;
+  let effSourceLang = radarSourceLang;
+  if (eslPromote && radarAuthorizedUrl && radarArticleId) {
+    escalation = await runEscalation(admin, {
+      clusterKey: asTrimmed(bodyRec.esl_cluster_key) ?? radarArticleId,
+      storyType: asTrimmed(bodyRec.esl_story_type) ?? "general",
+      discoveryUrl: radarAuthorizedUrl,
+      discoveryDomain: escDomainOf(radarAuthorizedUrl),
+      title: asTrimmed(bodyRec.esl_title),
+      titleAr: asTrimmed(bodyRec.esl_title_ar),
+    });
+    if (escalation.status === "upgraded") {
+      const up = escalation.selected_editorial_source.url;
+      if (/^https?:\/\//i.test(up)) {
+        // The Writer now fetches the upgraded primary (SSRF-safe fetch re-validates).
+        effSourceUrl = up;
+        effAuthorizedUrl = up;
+        effErProvider = null;        // upgraded URL is NOT the discovery ER article
+        effErProviderUri = null;
+        effSourceTitle = escalation.selected_editorial_source.domain;
+        effSourceLang = null;        // likely a different language → let it be inferred
+      }
+    }
+  }
+
   try {
     const result = await runIngestion(admin, {
       trigger,
       writerMode,
       pilotLimit,
-      targetedSourceUrl,
-      radarAuthorizedUrl,
-      radarErProvider,
-      radarErProviderUri,
-      radarSourceTitle,
-      radarSourceLang,
+      targetedSourceUrl: effSourceUrl,
+      radarAuthorizedUrl: effAuthorizedUrl,
+      radarErProvider: effErProvider,
+      radarErProviderUri: effErProviderUri,
+      radarSourceTitle: effSourceTitle,
+      radarSourceLang: effSourceLang,
     });
     // The pilot report (if any) is present only because runIngestion returned
     // normally, i.e. AFTER the mandatory audit persisted. It carries operational
@@ -2472,7 +2682,22 @@ Deno.serve(async (req: Request) => {
       radarPublish = await finalizeRadarPublish(admin, radarArticleId, pilot, radarCategorySlug, radarPublishMode);
     }
 
-    return Response.json({ ok: true, writer_mode: writerMode, radar_publish: radarPublish, ...result });
+    // Provenance: when escalation upgraded the source, preserve WHERE the story
+    // was originally discovered as a supporting reference on the created Content
+    // (the upgraded primary is already recorded by the writer as the main source).
+    if (escalation && escalation.status === "upgraded" && pilot?.created_content_id) {
+      try {
+        const rows: { content_id: string; label: string; url: string }[] = [
+          { content_id: pilot.created_content_id, label: "اكتُشِف عبر", url: escalation.discovery_source.url },
+        ];
+        if (escalation.supporting_url) {
+          rows.push({ content_id: pilot.created_content_id, label: "سياق مستقل", url: escalation.supporting_url });
+        }
+        await admin.from("content_sources").insert(rows);
+      } catch { /* provenance best-effort */ }
+    }
+
+    return Response.json({ ok: true, writer_mode: writerMode, radar_publish: radarPublish, source_escalation: escalation, ...result });
   } catch (e) {
     const message = e instanceof Error ? e.message : "ingestion failed";
     // The pipeline threw before producing a pilot report → no Content was
