@@ -136,6 +136,51 @@ export async function getContentForEdit(
   };
 }
 
+/** Evidence Intelligence sidecar row for one content item (admin read-only). */
+export type EvidenceIntelligenceRow = {
+  analysis_status: "complete" | "not_applicable" | "insufficient_source" | "analysis_failed";
+  analyzed_url: string | null;
+  analyzed_domain: string | null;
+  evidence_strength: string | null;
+  card: Record<string, unknown> | null;
+  model: string | null;
+  updated_at: string;
+};
+
+/**
+ * The Evidence Intelligence card for a content item, if the ESL pipeline
+ * produced one. Direct content_id link first; falls back to the ESL selection's
+ * cluster key (covers a promotion where the content link write was lost).
+ * Returns null for content with no evidence row (e.g. manual articles) — the
+ * editor simply shows nothing rather than an empty card.
+ */
+export async function getEvidenceForContent(id: string): Promise<EvidenceIntelligenceRow | null> {
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const cols = "analysis_status,analyzed_url,analyzed_domain,evidence_strength,card,model,updated_at";
+  const { data: direct } = await client
+    .from("radar_evidence_intelligence")
+    .select(cols)
+    .eq("content_id", id)
+    .maybeSingle();
+  if (direct) return direct as EvidenceIntelligenceRow;
+  const { data: sel } = await client
+    .from("radar_editorial_selection")
+    .select("cluster_key")
+    .eq("promoted_content_id", id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const clusterKey = (sel as { cluster_key?: string } | null)?.cluster_key;
+  if (!clusterKey) return null;
+  const { data: byCluster } = await client
+    .from("radar_evidence_intelligence")
+    .select(cols)
+    .eq("cluster_key", clusterKey)
+    .maybeSingle();
+  return (byCluster as EvidenceIntelligenceRow | null) ?? null;
+}
+
 /**
  * List recent AI-ingestion runs plus a lookup of the articles each run created
  * (id → title/status), so the history page can link straight to them.

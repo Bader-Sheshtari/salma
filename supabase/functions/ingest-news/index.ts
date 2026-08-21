@@ -33,6 +33,7 @@ import { clusterStories, pickBestIndex, type StoryText, storyDuplicate } from ".
 import { finalizeRun, selectRollbackTargets } from "./runFinalize.ts";
 import {
   buildWritingInstructions,
+  causationAsserted,
   parseWriterOutput,
   readingTimeMinutes,
   selectProfile,
@@ -87,6 +88,23 @@ import {
   type FidelityValidation,
   finalizeWriterDraft,
 } from "./fidelityRepair.ts";
+import {
+  analyzeEvidence,
+  associationGuardApplies,
+  type EvidenceCard,
+  type EvidenceInput,
+  type EvidenceOutcome,
+  type EvidenceStatus,
+  EVIDENCE_PROMPT_VERSION,
+  EVIDENCE_RESPONSE_FORMAT,
+  renderEvidenceGuidanceBlock,
+} from "./evidenceIntelligence.ts";
+
+// Evidence Intelligence analysis model. Medical/evidence interpretation needs a
+// capable model (accuracy > minimal token cost) — default to the same tier as
+// the sensitive writer route. Bounded to ≤ the ESL daily cap of stories/day,
+// one call each, cached per canonical cluster.
+const EVIDENCE_MODEL = Deno.env.get("EVIDENCE_MODEL") || "anthropic/claude-sonnet-5";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = Deno.env.get("OPENROUTER_MODEL") || "openai/gpt-oss-20b:free";
@@ -424,6 +442,53 @@ async function chatEditor(
   }
 }
 
+// ---- Evidence Intelligence model client -----------------------------------
+//
+// The ONE structured evidence-extraction call. Tool-free (no web plugin — the
+// stage interprets the already-fetched source text only), temperature 0, strict
+// json_schema output. Any transport/HTTP/empty failure is a plain reason string;
+// the orchestrator records analysis_failed and the story proceeds unchanged.
+async function chatEvidence(
+  messages: { role: string; content: string }[],
+): Promise<{ ok: true; content: string } | { ok: false; reason: string }> {
+  const apiKey = Deno.env.get("OPENROUTER_API_KEY");
+  if (!apiKey) return { ok: false, reason: "evidence_api_key_missing" };
+  try {
+    const res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://salma.health",
+        "X-Title": "Salma",
+      },
+      body: JSON.stringify({
+        model: EVIDENCE_MODEL,
+        messages,
+        temperature: 0,
+        // Arabic free-text fields are token-dense and reasoning-capable models
+        // count internal thinking toward the cap; 8000 keeps the call bounded
+        // (≤ daily cap of calls) while avoiding the truncated-completion
+        // failures observed at 1800/4000 on longer sources.
+        max_tokens: 8000,
+        response_format: EVIDENCE_RESPONSE_FORMAT,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) return { ok: false, reason: `evidence_http_${res.status}` };
+    const data = await res.json().catch(() => null);
+    const evald = evaluateWriterCompletion(data?.choices?.[0]);
+    if (evald.ok) return { ok: true, content: evald.content };
+    return {
+      ok: false,
+      reason: evald.kind === "completed_invalid" ? `evidence_completed_invalid:${evald.reason}` : "evidence_empty_completion",
+    };
+  } catch (e) {
+    const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+    return { ok: false, reason: timedOut ? "evidence_timeout" : "evidence_network_error" };
+  }
+}
+
 // ---- Hardened source-fetch adapter (E1.3D) ------------------------------
 //
 // The real network primitive handed to fetchSourceText. It performs ONE request
@@ -546,6 +611,8 @@ function renderWriterPacket(input: {
   citationTitles: string[];
   discovery: { originalTitle: string; excerpt: string; body: string };
   sourceName: string | null;
+  // Evidence Intelligence wording constraints (restrictions only — never facts).
+  evidenceGuidance?: string | null;
 }): string {
   const lines = [
     `المصدر المُتحقَّق منه: ${input.sourceName || "—"}`,
@@ -553,6 +620,12 @@ function renderWriterPacket(input: {
     `الحقائق المُتحقَّق منها (هذه هي المادة الوحيدة المسموح بذكرها؛ لا تُضِف رقماً أو تاريخاً أو اسماً أو اقتباساً أو ادّعاءً غير وارد هنا):`,
     input.verifiedFactText || "—",
   ];
+  // Evidence-derived wording constraints, BEFORE the unverified leads so they
+  // read as binding rules on the verified material. They restrict phrasing only
+  // and are never a source of facts or numbers.
+  if (input.evidenceGuidance) {
+    lines.push(``, input.evidenceGuidance);
+  }
   const extraTitles = input.citationTitles.filter(Boolean);
   if (extraTitles.length) {
     lines.push(``, `عناوين المصادر المرجعية (مُتحقَّق منها):`, ...extraTitles.map((t) => `- ${t}`));
@@ -703,6 +776,11 @@ async function writeArticle(input: {
   // the Radar path (from the trusted radar row); null for generic Discovery,
   // where the numeric validator falls back to the English convention.
   sourceLang?: string | null;
+  // Validated Evidence Card for this cluster (ESL promotions only; null when
+  // analysis was skipped/failed/unavailable). Supplies wording CONSTRAINTS to
+  // the writer packet and strengthens the association→causation guard. It is
+  // never a source of facts — grounding stays the verified source text alone.
+  evidence?: EvidenceCard | null;
 }): Promise<WriterOutcome> {
   const originalTitle = input.discovery.originalTitle ?? "";
 
@@ -754,6 +832,7 @@ async function writeArticle(input: {
         citationTitles: input.citationTitles,
         discovery: input.discovery,
         sourceName: input.sourceName,
+        evidenceGuidance: renderEvidenceGuidanceBlock(input.evidence) || null,
       }),
     },
   ];
@@ -776,7 +855,22 @@ async function writeArticle(input: {
         sourceLang: input.sourceLang ?? null,
       },
     });
-    return { ok: v.ok, errors: v.errors, cleanTitle: v.cleanTitle, readMinutes: v.readMinutes };
+    const errors = [...v.errors];
+    // Evidence-strengthened association→causation guard: when the validated
+    // Evidence Card says the underlying evidence is association-only, an asserted
+    // causal claim in the draft is a fidelity breach REGARDLESS of the writing
+    // profile's own marker heuristics — unless the source itself asserts
+    // causation (then the existing source-grounding rules already govern it).
+    // Same blocking code and semantics as the existing research_study check.
+    if (
+      associationGuardApplies(input.evidence) &&
+      !errors.includes("association_as_causation") &&
+      causationAsserted([a.title, a.excerpt, a.body].join("\n")) &&
+      !causationAsserted(verifiedFactText)
+    ) {
+      errors.push("association_as_causation");
+    }
+    return { ok: errors.length === 0, errors, cleanTitle: v.cleanTitle, readMinutes: v.readMinutes };
   };
 
   // Writer-stage gate: parse + STRUCTURAL (malformed_output) only. Source-fidelity
@@ -1244,6 +1338,81 @@ async function runEscalation(
   return result;
 }
 
+// ---- Evidence Intelligence (bounded, ≤ selected/day) ----------------------
+
+/** Real DB deps for analyzeEvidence: per-cluster cache + audit row in the
+ *  radar_evidence_intelligence sidecar. Rows are keyed by canonical cluster so
+ *  the same development is analyzed exactly once. */
+function evidenceDbDeps(admin: SupabaseClient): {
+  cacheGet: (clusterKey: string) => Promise<{ status: EvidenceStatus; card: EvidenceCard | null } | null>;
+  cachePut: (o: { status: EvidenceStatus; card: EvidenceCard | null; reason: string | null }, input: EvidenceInput) => Promise<void>;
+} {
+  return {
+    cacheGet: async (clusterKey) => {
+      const { data } = await admin
+        .from("radar_evidence_intelligence")
+        .select("analysis_status,card")
+        .eq("cluster_key", clusterKey)
+        .maybeSingle();
+      if (!data) return null;
+      return {
+        status: data.analysis_status as EvidenceStatus,
+        card: (data.card ?? null) as EvidenceCard | null,
+      };
+    },
+    cachePut: async (o, input) => {
+      await admin.from("radar_evidence_intelligence").upsert({
+        cluster_key: input.clusterKey,
+        story_type: input.storyType,
+        analyzed_url: input.sourceUrl,
+        analyzed_domain: input.sourceDomain,
+        analysis_status: o.status,
+        applicability: o.card?.applicability ?? null,
+        evidence_type: o.card?.evidence_type ?? null,
+        peer_review_status: o.card?.peer_review_status ?? null,
+        subject_type: o.card?.subject_type ?? null,
+        claim_relationship: o.card?.claim_relationship ?? null,
+        evidence_strength: o.card?.evidence_strength ?? null,
+        source_independence: o.card?.source_independence ?? null,
+        sample_size: o.card?.sample_size ?? null,
+        card: o.card,
+        reason: o.reason,
+        model: EVIDENCE_MODEL,
+        prompt_version: EVIDENCE_PROMPT_VERSION,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "cluster_key" });
+    },
+  };
+}
+
+/** Analyzer handed into runIngestion for an ESL promotion. It receives the SAME
+ *  verified source text the Writer is grounded in (single fetch — Evidence
+ *  Intelligence interprets exactly what the Writer sees). Never throws; a null/
+ *  failed outcome leaves the pipeline exactly as before this feature. */
+function makeEvidenceAnalyzer(
+  admin: SupabaseClient,
+  ctx: { clusterKey: string; storyType: string },
+): (verified: SourceText) => Promise<EvidenceOutcome | null> {
+  return async (verified) => {
+    try {
+      const outcome = await analyzeEvidence(
+        {
+          clusterKey: ctx.clusterKey,
+          storyType: ctx.storyType,
+          sourceUrl: verified.finalUrl,
+          sourceDomain: escDomainOf(verified.finalUrl),
+          sourceTitle: verified.title || null,
+          sourceText: verified.text,
+        },
+        { ...evidenceDbDeps(admin), chat: chatEvidence },
+      );
+      return outcome;
+    } catch {
+      return null; // evidence must never block the editorial pipeline
+    }
+  };
+}
+
 async function fetchCoverImage(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, {
@@ -1443,6 +1612,11 @@ async function runIngestion(
     // source's period-thousands / comma-decimals are read correctly. Cron/legacy
     // never set it → the validator uses the English-convention default.
     radarSourceLang?: string | null;
+    // Evidence Intelligence analyzer for an ESL promotion (bounded: ≤ the daily
+    // cap of stories, cached per canonical cluster). Runs over the SAME verified
+    // source text the Writer is grounded in, ONLY for the exact authorized URL.
+    // Null/absent (all non-ESL paths) → the pipeline is byte-for-byte unchanged.
+    evidenceAnalyzer?: ((verified: SourceText) => Promise<EvidenceOutcome | null>) | null;
   } = {},
 ): Promise<RunStats & { pilot?: PilotReport }> {
   const trigger = opts.trigger ?? "manual";
@@ -1961,8 +2135,16 @@ async function runIngestion(
         }
         return direct;
       },
-      write: (verified) =>
-        writeArticle({
+      write: async (verified) => {
+        // Evidence Intelligence (ESL promotions only, same scope as the other
+        // radar-authorized extras): ONE bounded, cached analysis of the SAME
+        // verified source text the Writer sees. Never blocks — a failed or
+        // unavailable analysis simply passes no evidence context.
+        let evidence: EvidenceOutcome | null = null;
+        if (opts.evidenceAnalyzer && chosen.url === radarAuthorizedUrl) {
+          evidence = await opts.evidenceAnalyzer(verified);
+        }
+        return writeArticle({
           verified,
           discovery: {
             originalTitle: draft.original_title,
@@ -1976,7 +2158,9 @@ async function runIngestion(
           // ONLY for the exact admin-authorized URL (same scope as the ER
           // fallback). Every other candidate passes null → English convention.
           sourceLang: chosen.url === radarAuthorizedUrl ? (opts.radarSourceLang ?? null) : null,
-        }),
+          evidence: evidence?.status === "complete" ? evidence.card : null,
+        });
+      },
     });
     if (!grounded.ok) {
       // Source fetch/extraction (incl. DNS-security) failed: no writer call, no
@@ -2542,6 +2726,49 @@ Deno.serve(async (req: Request) => {
     return Response.json({ ok: true, escalation: result });
   }
 
+  // Evidence Intelligence — DRY RUN (op:"analyze_evidence"). Fetches ONE source
+  // page (same hardened SSRF-safe path the pipeline uses), runs the bounded
+  // structured evidence analysis and returns the card WITHOUT creating any
+  // Content. persist:true additionally writes the per-cluster cache/audit row
+  // (so a validated real cluster is not re-analyzed at promotion time).
+  // Authorized caller only (already gated above).
+  if ((body as { op?: unknown })?.op === "analyze_evidence") {
+    const b = body as Record<string, unknown>;
+    const url = asTrimmedTop(b.url);
+    const clusterKey = asTrimmedTop(b.cluster_key);
+    if (!url || !clusterKey) {
+      return Response.json({ ok: false, error: "cluster_key and url required" }, { status: 400 });
+    }
+    const persist = b.persist === true;
+    const fetched = await fetchSourceText({
+      url,
+      registeredDomain: escDomainOf(url),
+      sourceName: null,
+      rawFetch: denoRawFetch,
+      resolveDns: denoResolveDns,
+    });
+    if (!fetched.ok) {
+      return Response.json({ ok: false, error: fetched.reason }, { status: 422 });
+    }
+    const db = evidenceDbDeps(admin);
+    const outcome = await analyzeEvidence(
+      {
+        clusterKey,
+        storyType: asTrimmedTop(b.story_type) ?? "general",
+        sourceUrl: fetched.finalUrl,
+        sourceDomain: escDomainOf(fetched.finalUrl),
+        sourceTitle: fetched.title || null,
+        sourceText: fetched.text,
+      },
+      {
+        cacheGet: persist ? db.cacheGet : async () => null,
+        cachePut: persist ? db.cachePut : async () => {},
+        chat: chatEvidence,
+      },
+    );
+    return Response.json({ ok: true, evidence: outcome, source_chars: fetched.charCount });
+  }
+
   const gate = resolvePilotGate({
     authorized: true,
     requestedMode: (body as { writer_mode?: unknown })?.writer_mode,
@@ -2628,6 +2855,9 @@ Deno.serve(async (req: Request) => {
   // Writer's primary. The discovery URL is preserved in provenance below.
   const bodyRec = body as Record<string, unknown>;
   let escalation: EscalationResult | null = null;
+  let evidenceOutcome: EvidenceOutcome | null = null;
+  let evidenceClusterKey: string | null = null;
+  let evidenceAnalyzer: ((verified: SourceText) => Promise<EvidenceOutcome | null>) | null = null;
   let effSourceUrl = targetedSourceUrl;
   let effAuthorizedUrl = radarAuthorizedUrl;
   let effErProvider = radarErProvider;
@@ -2655,6 +2885,20 @@ Deno.serve(async (req: Request) => {
         effSourceLang = null;        // likely a different language → let it be inferred
       }
     }
+
+    // Evidence Intelligence: analyze the strongest editorial source (post-
+    // escalation) for THIS selected cluster, over the same verified text the
+    // Writer will be grounded in. The analyzer runs inside the pipeline (single
+    // fetch); the outcome is captured here for the content link + response.
+    evidenceClusterKey = asTrimmed(bodyRec.esl_cluster_key) ?? radarArticleId;
+    const inner = makeEvidenceAnalyzer(admin, {
+      clusterKey: evidenceClusterKey,
+      storyType: asTrimmed(bodyRec.esl_story_type) ?? "general",
+    });
+    evidenceAnalyzer = async (verified) => {
+      evidenceOutcome = await inner(verified);
+      return evidenceOutcome;
+    };
   }
 
   try {
@@ -2668,6 +2912,7 @@ Deno.serve(async (req: Request) => {
       radarErProviderUri: effErProviderUri,
       radarSourceTitle: effSourceTitle,
       radarSourceLang: effSourceLang,
+      evidenceAnalyzer,
     });
     // The pilot report (if any) is present only because runIngestion returned
     // normally, i.e. AFTER the mandatory audit persisted. It carries operational
@@ -2697,7 +2942,28 @@ Deno.serve(async (req: Request) => {
       } catch { /* provenance best-effort */ }
     }
 
-    return Response.json({ ok: true, writer_mode: writerMode, radar_publish: radarPublish, source_escalation: escalation, ...result });
+    // Link the Evidence Intelligence audit row to the created Content so the
+    // admin editor can show the card directly. Best-effort; the cluster-key
+    // lookup via radar_editorial_selection remains the fallback path.
+    if (evidenceClusterKey && pilot?.created_content_id) {
+      try {
+        await admin
+          .from("radar_evidence_intelligence")
+          .update({ content_id: pilot.created_content_id })
+          .eq("cluster_key", evidenceClusterKey);
+      } catch { /* link best-effort */ }
+    }
+
+    const evidenceSummary = evidenceOutcome
+      ? {
+        status: (evidenceOutcome as EvidenceOutcome).status,
+        cached: (evidenceOutcome as EvidenceOutcome).cached,
+        evidence_type: (evidenceOutcome as EvidenceOutcome).card?.evidence_type ?? null,
+        evidence_strength: (evidenceOutcome as EvidenceOutcome).card?.evidence_strength ?? null,
+        claim_relationship: (evidenceOutcome as EvidenceOutcome).card?.claim_relationship ?? null,
+      }
+      : null;
+    return Response.json({ ok: true, writer_mode: writerMode, radar_publish: radarPublish, source_escalation: escalation, evidence_intelligence: evidenceSummary, ...result });
   } catch (e) {
     const message = e instanceof Error ? e.message : "ingestion failed";
     // The pipeline threw before producing a pilot report → no Content was

@@ -48,6 +48,11 @@ type OverviewRow = {
   source_before: string | null;
   source_after: string | null;
   image_changed: boolean;
+  // Evidence Intelligence metadata (observational linkage only).
+  ei_status: string | null;
+  ei_strength: string | null;
+  ei_peer_review: string | null;
+  ei_claim_relationship: string | null;
 };
 
 type RateRow = { key: string; n: number; published: number; rate: number };
@@ -178,6 +183,23 @@ const MAGNITUDE_AR: Record<string, string> = {
   major: "تعديل كبير",
 };
 
+// Evidence Intelligence facet labels (rows without a card group to null → excluded).
+const EVIDENCE_STRENGTH_AR: Record<string, string> = {
+  high: "قوي",
+  moderate: "متوسط",
+  limited: "محدود",
+  very_limited: "محدود جدًا",
+  unclear: "غير واضح",
+};
+const EVIDENCE_PEER_AR: Record<string, string> = {
+  peer_reviewed: "محكّمة",
+  preprint: "Preprint",
+  conference_only: "مؤتمر فقط",
+  institutional_guidance: "إرشادات مؤسسية",
+  regulatory: "تنظيمية",
+  unknown: "غير محدد",
+};
+
 export default async function EditorialFeedbackPage() {
   await requireAdmin();
   const svc = createAdminClient() as unknown as SupabaseClient;
@@ -288,6 +310,15 @@ export default async function EditorialFeedbackPage() {
         <RateTable
           title="القبول: مرشّحات ESL مقابل غيرها"
           rows={ratesBy(rows, (r) => (r.esl_selected ? "عبر ESL" : "خارج ESL"))}
+        />
+        {/* Evidence Intelligence linkage — metadata only, nothing feeds back. */}
+        <RateTable
+          title="القبول حسب قوة الأدلة (Evidence)"
+          rows={ratesBy(rows, (r) => EVIDENCE_STRENGTH_AR[r.ei_strength ?? ""] ?? null)}
+        />
+        <RateTable
+          title="القبول حسب مراجعة الأقران"
+          rows={ratesBy(rows, (r) => EVIDENCE_PEER_AR[r.ei_peer_review ?? ""] ?? null)}
         />
       </div>
 

@@ -523,7 +523,7 @@ function hasNegationWord(clause: string): boolean {
  * counts. Clauses are bounded by sentence/clause punctuation so a negation in a
  * different clause cannot mask a later un-negated causal claim.
  */
-function causationAsserted(text: string): boolean {
+export function causationAsserted(text: string): boolean {
   const src = text ?? "";
   for (const marker of CAUSATION_MARKERS) {
     let idx = src.indexOf(marker);

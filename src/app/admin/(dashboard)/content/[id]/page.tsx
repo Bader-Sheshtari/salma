@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCategories } from "@/lib/queries";
-import { getContentForEdit } from "@/lib/admin-queries";
+import { getContentForEdit, getEvidenceForContent } from "@/lib/admin-queries";
 import { formatDateTimeAr } from "@/lib/format";
 import { rejectContent } from "../../../actions";
 import { ContentForm } from "../ContentForm";
+import { EvidencePanel } from "../EvidencePanel";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,11 @@ type Props = { params: Promise<{ id: string }> };
 
 export default async function EditContent({ params }: Props) {
   const { id } = await params;
-  const [categories, data] = await Promise.all([getCategories(), getContentForEdit(id)]);
+  const [categories, data, evidence] = await Promise.all([
+    getCategories(),
+    getContentForEdit(id),
+    getEvidenceForContent(id),
+  ]);
   if (!data) notFound();
 
   const { content } = data;
@@ -92,6 +97,11 @@ export default async function EditContent({ params }: Props) {
           ) : null}
         </div>
       </div>
+
+      {/* Evidence Intelligence card (read-only, admin-only): what kind of
+          evidence this story rests on and what it can/can't support. Rendered
+          only when the ESL pipeline produced an analysis row. */}
+      <EvidencePanel evidence={evidence} />
 
       <ContentForm content={data.content} sources={data.sources} media={data.media} categories={categories} />
     </div>
