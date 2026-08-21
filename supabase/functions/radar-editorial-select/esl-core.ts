@@ -41,6 +41,7 @@ export type RadarRow = {
   esl_evidence_class: string | null; // research | guidance | none
   esl_gcc: boolean | null;
   esl_usefulness: number | null; // 0..100
+  esl_canonical_key?: string | null;
 };
 
 export type RegistryEntry = {

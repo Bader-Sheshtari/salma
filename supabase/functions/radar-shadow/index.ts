@@ -183,6 +183,18 @@ function toErTm(d: Date): string {
 }
 
 Deno.serve(async (req) => {
+  // P0 security: internal collector spending real Event Registry quota — the
+  // pg_cron wrapper authenticates with the same x-ingest-secret / INGEST_SECRET
+  // pattern as ingest-news. The public anon key satisfies the gateway's
+  // verify_jwt but never this check. Fails closed if the secret is unset.
+  const ingestSecret = Deno.env.get("INGEST_SECRET") ?? "";
+  if (!ingestSecret || req.headers.get("x-ingest-secret") !== ingestSecret) {
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const startedAt = new Date();
   const apiKey = Deno.env.get("EVENTREGISTRY_API_KEY") ?? "";
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";

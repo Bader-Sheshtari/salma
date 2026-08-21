@@ -15,6 +15,19 @@ verify_jwt = true
 [functions.radar-rank]
 verify_jwt = true
 
+# radar-shadow spends real Event Registry quota and is triggered only by the
+# pg_cron wrappers (anon bearer + x-ingest-secret). Gateway JWT verification is
+# pinned; real authorization is the in-code INGEST_SECRET check.
+[functions.radar-shadow]
+verify_jwt = true
+
+# radar-editorial-select (ESL) selects and promotes stories to Content PENDING.
+# Triggered only by pg_cron run_esl() (anon bearer + x-ingest-secret). Gateway
+# JWT verification pinned; real authorization is the in-code INGEST_SECRET
+# check, and the daily cap is clamped server-side (authz.ts).
+[functions.radar-editorial-select]
+verify_jwt = true
+
 # radar-translate fetches an external URL and spends OpenRouter credit on an
 # on-demand reading-aid translation. It is admin-only: require a valid signed JWT
 # at the gateway (the function additionally re-checks the caller's admin role).

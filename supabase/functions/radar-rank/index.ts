@@ -284,6 +284,18 @@ function chunk<T>(arr: T[], n: number): T[][] {
 }
 
 Deno.serve(async (req) => {
+  // P0 security: internal ranker spending real OpenRouter credit — the
+  // pg_cron wrapper authenticates with the same x-ingest-secret / INGEST_SECRET
+  // pattern as ingest-news. The public anon key satisfies the gateway's
+  // verify_jwt but never this check. Fails closed if the secret is unset.
+  const ingestSecret = Deno.env.get("INGEST_SECRET") ?? "";
+  if (!ingestSecret || req.headers.get("x-ingest-secret") !== ingestSecret) {
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const startedAt = new Date();
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";

@@ -22,11 +22,13 @@
 // radar_shadow_articles.esl_* so re-runs are free and the selection math stays a
 // transparent, tunable formula — never an LLM black box.
 //
-// Auth: deployed with verify_jwt=true (like radar-shadow); the run_esl() cron
-// function calls it with the project anon key. Promotion calls ingest-news with
-// the INGEST_SECRET (op:"esl_promote"), the same trusted server-to-server path
-// the admin one-click publish uses — with the exact article URL/ids read from the
-// trusted radar_shadow_articles row.
+// Auth (P0 security fix 2026-08-21): requires the x-ingest-secret header matching
+// the INGEST_SECRET function secret — the same internal server-to-server pattern
+// ingest-news enforces. verify_jwt=true remains at the gateway, but the anon key
+// alone is NOT sufficient. The run_esl() cron function sends both. Promotion
+// calls ingest-news with the INGEST_SECRET (op:"esl_promote"), the same trusted
+// server-to-server path the admin one-click publish uses — with the exact
+// article URL/ids read from the trusted radar_shadow_articles row.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
@@ -36,6 +38,7 @@ import {
   candidateMergeGroups, dominantStoryType,
   type RadarRow, type RegistryEntry, type StoryType, type Lane, type DayState, type ScoredCandidate,
 } from "./esl-core.ts";
+import { isAuthorizedInternal, resolveCap } from "./authz.ts";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 // Classification model — pinned like radar-rank (NOT the shared writer model).
@@ -383,13 +386,21 @@ function daysAgoISODate(d: Date, days: number): string {
 // ---- handler --------------------------------------------------------------
 
 Deno.serve(async (req) => {
+  // P0 security: internal function — require the cron secret before ANYTHING
+  // else (mode/cap parsing included). The public anon key satisfies the
+  // gateway's verify_jwt but never this check, so anon callers can neither
+  // trigger runs nor reach live mode.
+  if (!isAuthorizedInternal(req.headers.get("x-ingest-secret"), INGEST_SECRET)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
     return Response.json({ ok: false, error: "missing service env" }, { status: 500 });
   }
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
   const mode: "shadow" | "live" = (body as { mode?: unknown }).mode === "live" ? "live" : "shadow";
-  const capOverride = Number((body as { cap?: unknown }).cap);
-  const cap = Number.isInteger(capOverride) && capOverride > 0 ? capOverride : DAILY_CAP;
+  // Caller cap may only LOWER the server-side daily cap (hard max = ESL_DAILY_CAP,
+  // default 8) — see authz.ts resolveCap.
+  const cap = resolveCap((body as { cap?: unknown }).cap, DAILY_CAP);
 
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
