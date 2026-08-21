@@ -2,12 +2,13 @@
 
 > **Read this roadmap before starting any substantial Salma task. Update it after every meaningful milestone. Never silently remove, forget, or redefine a postponed item.**
 
-This is the permanent, canonical roadmap for the entire Salma project. It supersedes ad‑hoc notes. When a fact cannot be established from the repository or a confirmed decision, it is marked **NEEDS CONFIRMATION** rather than guessed.
+This is the permanent, canonical roadmap for the entire Salma project. It supersedes ad-hoc notes. When a fact cannot be established from the repository or a confirmed decision, it is marked **NEEDS CONFIRMATION** rather than guessed.
 
-- **Last updated:** 2026-08-19
-- **Product:** Salma — Arabic‑first (RTL) health & treatment news platform for Kuwait/GCC public + healthcare professionals.
-- **Stack (from `package.json`):** Next.js 16.2.9 (App Router), React 19.2.4, Supabase (`@supabase/ssr`, `@supabase/supabase-js`), TailwindCSS v4, `@dnd-kit` for admin ordering. AI ingestion runs inside the Supabase Edge Function `ingest-news` (Deno). AI via OpenRouter.
-- **Production Supabase project ref:** `ukraltlejlfkqbcifgcq`.
+- **Last updated:** 2026-08-21 (full launch-readiness audit; repo + production verification at HEAD `291ced7`)
+- **Product:** Salma — Arabic-first (RTL) health & treatment news platform for Kuwait/GCC public + healthcare professionals.
+- **Stack:** Next.js 16 App Router, React 19, Supabase (`@supabase/ssr`), TailwindCSS v4. AI pipeline in Supabase Edge Functions (Deno). AI via OpenRouter. Discovery via Event Registry / NewsAPI.ai.
+- **Production Supabase project ref:** `ukraltlejlfkqbcifgcq` (eu-central-1, free tier).
+- **Repo:** `github.com:Bader-Sheshtari/salma.git`, single `main` branch.
 
 ## Status legend
 
@@ -18,368 +19,201 @@ This is the permanent, canonical roadmap for the entire Salma project. It supers
 | **NEXT** | Immediate priority, not yet started. |
 | **LATER** | Planned but deliberately deferred. |
 | **BLOCKED** | Cannot proceed until a dependency/decision clears. |
-| **NEEDS CONFIRMATION** | Detail not established from repo/decisions; must be verified before relied upon. |
+| **SUPERSEDED** | Design decision preserved for the record but replaced by a shipped system. |
+| **NEEDS CONFIRMATION** | Not establishable from repo/production this session; verify before relying on it. |
 
-Priority tags: **before launch** / **after launch** / **optional**.
+Priority tiers: **P0** must fix before public/serious launch · **P1** complete around launch · **P2** post-launch/growth · **P3** advanced future.
 
 ---
 
-## Current Production Milestone (authoritative snapshot — 2026-08-10)
+# 1. Current Production State (verified 2026-08-21)
 
-| Item | Value |
+## 1.1 Editorial pipeline (the core of the product) — DONE, LIVE
+
+```
+Radar (Event Registry, medical + healthy-life intakes, multilingual)
+  → radar-rank (dedupe + LLM priority scoring)
+  → ESL: classification → event clustering → cross-language canonical clustering
+        → already-covered protection → story-type-aware source selection
+        → editorial scoring → diversity / daily balance → selected story
+  → Primary Source Escalation (discovery source ≠ editorial source)
+  → Evidence Intelligence (per-cluster Evidence Card → Writer constraints)
+  → Writer → Editorial Director → Fidelity validation → constrained repair
+  → Content PENDING → human editor review → human publish (only)
+```
+
+| System | Status | Evidence / commits |
+|---|---|---|
+| Radar global multilingual discovery (medical profile) | **DONE** | `radar-shadow` fn; cron `salma-radar-shadow` every 2h |
+| Healthy-Life / Quality-of-Life intake (sleep, activity, nutrition, prevention, wellbeing, aging, family/everyday, travel, lifestyle medicine) | **DONE** | commit `06609cb`; cron `salma-radar-healthlife` 01:30/09:30/17:30 UTC |
+| Radar ranking | **DONE** | `radar-rank` fn; cron `salma-radar-rank` every 2h at :10 |
+| ESL V1 (cluster → score → balance → promote) | **DONE, LIVE** | commits `cd08e40`, `fa0bf68`; see 1.2 |
+| Cross-language canonical clustering (language-scoped Event Registry IDs solved; Moderna/Merck melanoma vaccine 10 variants / 7 languages → 1 cluster validated) | **DONE** | commit `cb5fe48` |
+| Primary Source Escalation (bounded, cached, story-type aware, provenance-preserving; validated: t5→science.org, recall→fda.gov, strong Nature→no search) | **DONE** | commit `424b54b`; `radar_source_escalation` sidecar |
+| Evidence Intelligence V1 (study type, RCT vs observational, association vs causation, sample size, company-only claims, regulatory facts → Writer/Fidelity constraints; analysis source ≠ editorial primary provenance fix) | **DONE** | commits `578963d`, `291ced7`; `radar_evidence_intelligence` sidecar; admin EvidencePanel |
+| Editorial Feedback Loop V1 (**observational only** — publish/reject/reason/title-body edit magnitude/category/source/image signals linked to ESL metadata; `/admin/editorial-feedback`) | **DONE** | commit `abf279d`; does NOT auto-tune anything |
+| Writer + Editorial Director + Fidelity | **DONE — phase CLOSED** | in `ingest-news`; do not reopen without a repeated critical defect |
+
+## 1.2 ESL operating model — verified 2026-08-21
+
+- **Mode: LIVE** since 2026-08-21 ~14:50 UTC. The flip was a one-line production cron change (`run_esl('shadow')` → `run_esl('live')`) applied **out-of-band**; the repo migration `20260820010000_esl_cron.sql` still reads `'shadow'` — the repo is NOT the source of truth for the current cron command (see P1-8).
+- **Schedule:** cron `salma-esl` 3 runs/day at 06/12/18 UTC.
+- **Daily cap:** env `ESL_DAILY_CAP`, default **8 Content candidates total/day**; **stateful across the editorial day** (rebuilds day state + `promotedToday` from `radar_editorial_selection`; verified in `radar-editorial-select/index.ts`).
+- **One real-world development = one editorial opportunity** (canonical clustering + cross-day already-covered protection over `ESL_HISTORY_DAYS`).
+- **All output lands `pending`.** Promotion hardcodes `radar_publish_mode:"prepare"`; `DRAFT_STATUS="pending"`. **Never auto-publishes.** Verified: no cron path publishes; the only publish path is the admin one-click behind `requireAdmin()`.
+- **Production verification this session (read-only, service-role REST):** live-mode selection rows exist from the 2026-08-20 cap=1 live test; content = 424 pending / 116 published / 0 rejected / 4 draft; anon API sees **published content only** (pending/draft blocked); ESL/escalation/evidence/feedback sidecar tables all blocked to anon (RLS fixes confirmed applied). First scheduled live run: 2026-08-21 18:00 UTC (after this audit's cutoff — **NEEDS CONFIRMATION** that it produced pending candidates as expected).
+
+## 1.3 Legacy ingestion path
+
+- Cron `salma-news-ingest` (every 6h) still fires but posts `{}`, which the pilot gate **rejects** — it is a **no-op burner** today. The ESL path is the real production pipeline. Cleanup: P1-9.
+- Old **Priority Score v1** + **Source Universe** design tasks (pre-ESL WS10/WS5 plans): **SUPERSEDED** by ESL scoring/clustering and story-type-aware source selection (see §8 Preserved Decisions for the record).
+
+---
+
+# 2. P0 — Must Fix Before Public / Serious Launch
+
+Genuine blockers only. All are documented findings from the 2026-08-21 audit — **none have been fixed yet.**
+
+### P0-1 · Role escalation hole: plain `admin` can self-promote to `super_admin`
+`guard_profile_changes()` skips the role-revert for any caller where `is_admin()` is true (including plain admins), and only explicitly blocks promotion to `owner`. Combined with RLS `profiles_update_own_or_manager` (`auth.uid() = id` allowed), a signed-in plain admin can `PATCH /rest/v1/profiles` on their own row → `super_admin` → gain manager powers (create admins, reset other admins' passwords, read confidential transfer sources). Owner tier is genuinely protected (last-owner demote/disable/delete all blocked). **Fix:** tighten the trigger so non-managers can never change `role` at all (including their own).
+Refs: `20260701153625_role_hierarchy.sql:37-77`, `20260701164252_profiles_manager_update_policy.sql`.
+
+### P0-2 · Unauthenticated ESL + radar edge functions (anon-key invokable)
+`radar-editorial-select`, `radar-rank`, `radar-shadow` have **no in-code auth**; `verify_jwt=true` is satisfied by the public anon key (which ships in every browser bundle and is hard-coded in 4 committed cron migrations). Consequences: anyone can trigger unbounded paid OpenRouter/Event Registry spend, and — worst — POST `{"mode":"live","cap":<no upper bound>}` to the ESL, which holds `INGEST_SECRET` and can drive Content creation, bypassing `ingest-news`'s own admin check. (`ingest-news`, `synthesize-url`, `generate-image`, `radar-translate` correctly re-verify the caller.) **Fix:** add the same shared-secret or admin-JWT check the other functions use; bound `cap`; pin `verify_jwt` in `config.toml` for all functions.
+Refs: `radar-editorial-select/index.ts:385`, `radar-rank/index.ts:286`, `radar-shadow/index.ts:185`, `supabase/config.toml`.
+
+### P0-3 · Public Supabase signup is ENABLED
+Production GoTrue reports `disable_signup: false` — anyone with the public anon key can create an account, on a platform whose auth model is **admin-only** (no signup UI exists; accounts should come only from manager `createAdmin`). New accounts get role `user` and the guard limits escalation, but this widens the authenticated attack surface for no product reason. **Fix:** disable public signup in Supabase Auth settings (dashboard change).
+
+### P0-4 · Zero legal / policy pages
+No Privacy Policy, no Terms, no editorial standards page, no corrections policy, no standalone medical disclaimer, **no AI disclosure anywhere on the public site** — while the site collects emails (newsletter) and comments, and publishes AI-assisted health content (`ai_summary` box, AI pipeline). Footer mentions "المعايير التحريرية" as dead text, not a link. The medical disclaimer exists only buried in Contact body copy. **Launch minimum:** Privacy Policy, Terms, medical disclaimer page, AI-assisted-content disclosure, and a public editorial-standards + corrections page (credibility-critical for a health-news brand). Content drafting requires owner/legal input — flagged, not drafted.
+
+### P0-5 · Production domain / `NEXT_PUBLIC_SITE_URL` unset
+All absolute URLs (metadataBase, canonicals, OG/Twitter, sitemap, robots `Sitemap:`/`Host:`) flow from `NEXT_PUBLIC_SITE_URL` with fallback `http://localhost:3000` (`src/lib/site.ts`). The variable is in **neither** `.env.example` nor `.env.local`, and nothing validates it — if unset in Vercel, the whole site silently ships localhost SEO. Branded domain: **NEEDS CONFIRMATION** (no domain configured anywhere in repo; no `.vercel` link locally). **Fix:** choose/configure final domain, set the env var in Vercel, add a build-time guard, document it.
+
+### P0-6 · No backup / restore capability
+PITR intentionally disabled (preserved decision); **no backup scripts, no storage/media backup, no restore runbook, no restore drill ever performed**. `.env.example` documents ~1/3 of required secrets (missing `INGEST_SECRET`, `EVENTREGISTRY_API_KEY`, all `ESL_*` knobs, `app_config` rows) — **the production configuration exists only inside the Supabase dashboard and could not be rebuilt from documentation.** "Backup exists" ≠ "restore tested" — currently neither is true. **Fix:** enable a backup strategy (PITR or scheduled dumps + storage copy), write the secrets/rebuild inventory, and run one real restore drill.
+
+---
+
+# 3. P1 — Complete Around Launch
+
+Ordered roughly by importance.
+
+1. **Minimum viable monitoring** — today there is **zero** alerting; a crashed/stopped ESL leaves **no trace** (no run table, no top-level try/catch, `pg_net` response discarded; `radar_shadow_runs`/`radar_rank_runs` exist but no admin UI reads them). Minimum: (a) ESL run-level logging incl. failure rows, (b) one simple alert channel (email/webhook) for cron/edge failures, (c) a stale-pipeline ("no candidates today") check, (d) an admin health strip showing last run per cron. Not enterprise observability.
+2. **Security headers** — `next.config.ts` sets none (no CSP, no `X-Frame-Options` → admin is clickjackable, no HSTS/nosniff/Referrer-Policy). Cheap, high-value.
+3. **Auth hardening pass (final)** — `changeOwnPassword` requires no current password (session theft = takeover); no password-reset-by-email flow (a locked-out **owner** has no in-app recovery); no MFA for admins; enable Supabase leaked-password protection if available on plan; `/admin/users` page is owner-only but its server actions accept `super_admin` (UI/policy mismatch — align deliberately). The long-standing "final authentication hardening at the end" decision — **this is now "the end."**
+4. **Route-level error/empty states** — no `error.tsx`, `not-found.tsx`, `global-error.tsx`, or `loading.tsx` anywhere; 8 `notFound()` call sites dead-end on Next's unstyled English LTR default page. Add branded Arabic RTL 404/error pages.
+5. **Full launch QA pass** — never performed end-to-end. Scope: reader (home/category/article/video, Arabic RTL, mobile+desktop, images, sharing, SEO metadata, broken links, loading/error/empty), admin (login, roles, create/edit/reject+reason/publish/unpublish/delete, categories, images, attribution, feedback surface, Evidence Card, Radar, ESL-generated content), pipeline (Radar→ESL→escalation→evidence→Writer→Fidelity→PENDING→human publish). ~491 unit tests exist (pure logic only) but there's **no `npm test` script and no CI** — wire both.
+6. **Newsletter honesty fix** — homepage runs a prominent newsletter CTA, but capture is a dead end: no consent text, no double opt-in, no unsubscribe, no admin subscriber view, no sender. Around launch either (a) add consent text + admin list view + unsubscribe path, or (b) hide the CTA until the real newsletter ships (P2). Collecting emails with zero privacy text is also a P0-4 dependency.
+7. **Comment/ratings/newsletter anti-spam** — anon inserts are unthrottled (`with check (true)`); moderation queue is floodable. Add rate limiting + honeypot (CAPTCHA optional).
+8. **Repo/production drift reconciliation** — commit a migration reflecting the live ESL cron (`run_esl('live')`) so the repo is the source of truth again; same for any other out-of-band prod changes.
+9. **Legacy cleanup** — retire or repurpose the no-op `salma-news-ingest` cron (fires 4×/day, rejected by pilot gate); reconcile local migration filenames vs applied remote versions; note the `ingest-news` publish branch is **default-on** (`radar_publish_mode` defaults to `"publish"`) and only ESL's hardcoded `"prepare"` prevents auto-publish — flip the default to `"prepare"` for structural safety.
+10. **Basic reader analytics** — currently none (no Vercel Analytics/GA/Plausible/anything). Pick a privacy-respecting option and install before launch so day-one traffic isn't lost. Richer product analytics = P2.
+11. **Editorial governance docs** — written editorial SOP: who reviews, review checklist (Evidence Card usage), corrections/updates/retractions procedure, breaking-news standard, sourcing/attribution/quotation rules, news-vs-guidance distinction, human-review requirement (already enforced technically). Public-facing versions belong to P0-4; this item is the internal operating doc.
+12. **SEO completeness** — JSON-LD exists for article/video (`src/lib/seo.ts`, NewsArticle/VideoObject + citations — good) but: no Organization/WebSite JSON-LD on home; category/doctor pages lack canonical+description+OG; sitemap omits `/about`, `/contact`, `/doctors`, `/transfers`. Small fixes.
+13. **Doctors section data** — `doctors` table is **empty in production** (0 rows) while public `/doctors` + `/transfers` pages ship. Populate or hide for launch.
+
+---
+
+# 4. P2 — Post-Launch / Growth
+
+| Item | Status | Notes |
+|---|---|---|
+| **Newsletter (full)** | LATER | Delivery provider, templates, double opt-in, subscriber management UI, sending workflow, analytics, automation. Schema today is 3 columns (email/id/created_at) — needs consent/status/token columns. |
+| **Comments upgrades** | LATER | Core flow is DONE (public submit → forced `pending` → admin approve/reject/delete → approved-only render). Remaining: scale moderation, abuse handling beyond P1 rate-limiting, possible identified comments. |
+| **Reader/product analytics (rich)** | LATER | Engagement, reading behavior, traffic sources, article/category performance, newsletter conversion, retention. Distinct from the shipped editorial-feedback analytics. |
+| **Research / Studies section (public)** | LATER | Does NOT exist (no route). Distinct from Evidence Intelligence (editor-facing). Note: `study` content type is advertised in search copy but the DB CHECK constraint doesn't allow it — unreachable; fix constraint or copy when building this. |
+| **Social Q&A** | LATER (preserved postponement) | Schema exists (`social_questions`/`social_answers`); no UI. |
+| **Kuwait / GCC dedicated intelligence (Radar V1.2)** | LATER | Dedicated intake for Kuwait/Saudi/UAE/Qatar/Bahrain/Oman ministries, regulators, hospitals, companies, investments. Planned as next Radar profile after launch stabilizes. |
+| **ESL supply improvements (V1.3)** | LATER | Residual tier-5 share is a supply problem → needs strong-source discovery; L5 research-vs-guidance split refinement. |
+| **Sharing extensions** | LATER | Current: WhatsApp, email, native share, copy link. Consider X/Telegram/Facebook. |
+| **Evergreen Editorial Planner** | LATER | Non-breaking magazine-style planning (sleep, nutrition, exercise, prevention, QoL explainers). Distinct from Healthy-Life NEWS discovery. |
+| **Ads / monetization** | LATER | Placements, commercial policy, sponsored-content labeling, model. Requires editorial-trust alignment + legal (see §6). |
+| **Design polish backlog** | LATER | Deferred Apple-design items: translucent header, hero swipe (Embla), ticker replacement concept. Apple-design polish phase itself is DONE (commit `67c3c7e`) — do not reopen. |
+| **Editorial audit persistence** | LATER | Persist Editorial Director/fidelity audit verdicts queryably (currently observability-only). |
+| **Search scale** | LATER | Search is good (Arabic-aware normalization + fuzzy) but fetches the whole published corpus per query — fine now, needs pagination/caching at scale. |
+
+---
+
+# 5. P3 — Advanced Future Intelligence
+
+Preserve; do **not** build before launch. We already have substantial AI infrastructure — additions must earn their place.
+
+1. **Direct Authoritative Source Network** — direct discovery monitoring of FDA, EMA, WHO, CDC, SFDA, GCC ministries, PubMed, ClinicalTrials.gov, NEJM/Lancet/JAMA/BMJ/Nature, pharma newsrooms, major institutions. **Distinct from Primary Source Escalation** (which upgrades sources *after* discovery; the feed network would BE discovery). Not built.
+2. **Story Intelligence** — evolving-story understanding (trial → submission → approval → launch → safety update as one thread).
+3. **AI Editorial Director (planning)** — higher-level daily mix/planning recommendations. NOT the existing Editorial Director writing stage.
+4. **Personalization** — reader-interest personalization.
+5. **Health Knowledge Graph** — entity graph (companies, drugs, diseases, studies, trials, hospitals, regulators, people, countries, Salma stories).
+6. **Feedback Loop → tuning** — the Feedback Loop stays observational; any future automated tuning of ESL/weights/prompts is a deliberate, separate decision.
+
+---
+
+# 6. Deferred / Requires Business or Legal Decision
+
+| Item | Status | Gate |
+|---|---|---|
+| **Doctor ratings (public reliance)** | BLOCKED | Legal + commercial sign-off. Schema + admin moderation + public display exist; do not promote publicly until cleared. |
+| **Medical Profiles** | LATER (preserved postponement) | Wait until 2–3 real stories validate the format. |
+| **PITR re-enablement / paid tier** | Owner decision | Currently free tier, PITR off — interacts with P0-6. |
+| **Monetization model** | Owner decision | See P2. |
+| **Branded domain choice** | Owner decision | Blocks parts of P0-5. |
+
+---
+
+# 7. Platform Foundations (verified DONE — reference)
+
+Condensed record of completed workstreams; details live in git history.
+
+- **Core platform & admin** — public site (home, article, category, video, doctors, transfers, search, about, contact); admin dashboard (content, categories, comments, doctors, departments, transfers, homepage, users, ingest, radar, synthesize, editorial-feedback); content statuses draft/pending/approved/published/rejected; human review workflow (AI badge, source-first review panel, admin-only preview, explicit Reject **with 10-code reason taxonomy** — the earlier silently-broken Reject constraint was fixed in the Feedback Loop work).
+- **Roles** — `user`/`admin`/`super_admin`/`owner` ("manager" = super_admin+owner concept). Server-side enforcement is solid: every admin server action calls `requireAdmin()` first; no unguarded API routes; service-role key is `server-only` (no client-bundle exposure); all 30 tables have RLS; owner tier protected at DB level (last-owner demote/disable/delete blocked). Known holes are P0-1/P0-3 and P1-3 items. RLS gap window on ESL sidecars (created 08-20 without RLS, fixed 08-21) — production now verified blocked to anon.
+- **Legacy ingestion foundation** — `ingest-news` v27-era pipeline, source registry, dedupe, trusted-source enforcement, writer audits; strongest failure handling in the stack (mandatory audit, rollback of orphaned drafts).
+- **SEO & sharing core** — sitemap, robots, OG images (article+video), ShareBar, JSON-LD NewsArticle/VideoObject with citations. Gaps → P1-12.
+- **Doctor transfers** — public page + admin CRUD + secured private source (manager-only).
+- **In Brief «باختصار»** — authored summary field → rendered box. Intact.
+- **Breaking ticker** — `is_breaking` → homepage marquee. Intact.
+- **Video** — `/video/[slug]`, homepage lane, VideoObject JSON-LD. Intact.
+- **Comments** — full moderation loop. Intact (anti-spam → P1-7).
+- **Design system** — Tailwind v4 tokens, Apple-design browser-platform polish phase CLOSED (commit `67c3c7e`).
+- **AI stack** — Writer (+ profile routing, factual validator), Editorial Director, Fidelity + constrained repair (CLOSED); Radar; ESL V1; cross-language clustering; Source Escalation; Evidence Intelligence; Feedback Loop (see §1.1).
+
+---
+
+# 8. Preserved Decisions (do not remove or silently override)
+
+1. **Never auto-publish AI content** — all AI output stays `pending` for explicit human review. (Enforced; keep the P1-9 default-flip for structural safety.)
+2. **Feedback Loop is observational only** — no automated tuning of ESL/weights/prompts/ranking/publishing without a new explicit decision.
+3. **Medical Profiles postponed** until 2–3 real stories validate the format.
+4. **Social Q&A UI postponed** (schema exists).
+5. **Doctor ratings require legal + commercial sign-off** before public reliance.
+6. **Final authentication hardening postponed to the end** — now due (P0-1/P0-3/P1-3).
+7. **PITR intentionally disabled for now** — revisit at launch (P0-6).
+8. **Do not remove postponed ideas** from this roadmap.
+9. **Writer/Editorial Director/Fidelity implementation phase CLOSED** — reopen only for a repeated critical defect; tuning driven by real review findings only.
+10. **ESL daily cap = 8, 3 runs/day, stateful, one development = one opportunity** — operating contract of ESL V1.
+11. **Historical (SUPERSEDED by ESL, kept for the record):** Priority Score v1 formula (0.60 IMPACT + 0.15 AUTHORITY + 0.15 RELEVANCE + 0.10 BREADTH − PR penalty; unrankable = never selected; recency tie-break only) and the Source Universe classification task — both replaced by ESL's editorial scoring, story-type taxonomy, and story-type-aware source selection (commits `cd08e40`, `fa0bf68`). The "one Writer slot, fetch-failure doesn't consume it" principle carried into ESL promotion design.
+12. **Rollback references:** tag `stable/pre-editorial-pilot` → `c69d7f5` exists locally and on origin; `ingest-news` v26 = commit `0ee4ca7`.
+
+---
+
+# 9. Changelog
+
+| Date | Change |
 |---|---|
-| Edge Function `ingest-news` | **v27, ACTIVE** |
-| Deployed commit | `8b60487ee6bd547b3d1e2c002c4dfa1465459433` (fix(ingestion): enforce full fidelity repair schema) |
-| Production web (Vercel) commit | `67c3c7e415128627129c3d2b0ff5bb977a529333` (feat(design): Apple‑design browser defaults, ≥44px hit targets, subtle card feedback) — **Vercel Production deployment `success` on `main`, 2026‑08‑19** (supersedes `556965b`; intervening Radar commits up to `31f8f3a` were already deployed) |
-| Editorial AI pipeline | trusted‑source → writer → Editorial Director → fidelity validation → constrained repair (≤1 LLM call) → final validation → **pending** |
-| BBC end‑to‑end production pilot | **Completed successfully** on v27 — accepted article ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8` |
-| `verify_jwt` | **false** (function does its own auth) |
-| Cron | **Unchanged** — jobid 1, `0 */6 * * *`, `salma-news-ingest` → `select public.run_news_ingestion();`, active |
-| AI‑created content | **pending‑only** (`registry.ts` `DRAFT_STATUS = "pending"`) |
-| Automatic publishing | **Disabled** |
-| Migrations applied since deploy | **None** |
-
-**Rollback (ingest-news):** previous version **v26** = commit `0ee4ca71f652c9d2a0105aacc5795cdf4df9fd85` (parent of `8b60487`); redeploy from that source to roll back. Cron, secrets, and schema need no change — none were altered. The earlier pre‑editorial rollback tag `stable/pre-editorial-pilot` → `c69d7f5` remains available locally and on `origin`.
-
-**Rollback procedure (documented, not executed):**
-1. `git checkout c69d7f5 -- supabase/functions/ingest-news` (or check out tag `stable/pre-editorial-pilot`).
-2. Redeploy `ingest-news` from that source (creates a new version built from v22 source), preserving `verify_jwt=false`.
-3. Cron, secrets, and schema need no change — none were altered.
-> The rollback tag `stable/pre-editorial-pilot` → `c69d7f5` has been **pushed to GitHub** and is available both **locally and on `origin`** as a durable remote reference.
+| 2026-08-05 | Roadmap created; Editorial Director deployed (v23); comments/In-Brief/breaking/video revalidated DONE. |
+| 2026-08-10 | Pipeline v27 live; BBC end-to-end pilot success closed the implementation-validation phase; human review workflow shipped (`556965b`); Priority Score v1 + Source Universe designs approved (later superseded by ESL). |
+| 2026-08-19 | Apple-design browser-platform polish phase CLOSED (`67c3c7e`). |
+| 2026-08-20 | **ESL V1 shipped** (`cd08e40`), editorial tuning (`fa0bf68`), cross-language canonical clustering (`cb5fe48`); shadow-validated on real 581-article pool; one live cap=1 test → Content PENDING. |
+| 2026-08-21 | **Healthy-Life intake** (`06609cb`), **Primary Source Escalation V1** (`424b54b`), **Editorial Feedback Loop V1** (`abf279d`, incl. Reject-constraint fix + ESL sidecar RLS fix), **Evidence Intelligence V1** (`578963d`) + provenance fix (`291ced7`). **ESL flipped SHADOW → LIVE** (~14:50 UTC, production cron change, out-of-band of repo). |
+| 2026-08-21 | **Full launch-readiness audit** (this update): verified production state read-only (content counts, anon RLS behavior, auth settings, live-mode ESL rows); rewrote roadmap around P0–P3; recorded security findings (admin self-promotion hole, anon-invokable ESL/radar functions, public signup enabled), legal-pages absence, backup/monitoring absence, `NEXT_PUBLIC_SITE_URL` risk. Old WS10/WS5 designs marked SUPERSEDED. **No fixes applied in the audit session.** |
 
 ---
 
-## Preserved Decisions (do not remove or silently override)
+# 10. Open Items — NEEDS CONFIRMATION
 
-1. **Controlled 10‑article review** of real *pending* articles before permanent cron integration.
-2. **Staged review:** start with **3** articles, review them, then continue with the remaining **7**.
-3. **Never auto‑publish AI content** — all AI output stays `pending` for admin approval.
-4. **Medical Profiles postponed** until 2–3 real stories validate the format.
-5. **Social Q&A UI postponed** (schema exists; no public UI).
-6. **Doctor ratings** require a later **legal + commercial** decision before public reliance.
-7. **Final authentication hardening** is intentionally postponed to the end.
-8. **PITR (Point‑in‑Time Recovery) intentionally disabled for now.**
-9. **Storage/configuration backup + restore drill remain unfinished.**
-10. **Do not remove postponed ideas** from this roadmap.
-
----
-
-## Workstreams
-
-### 1. Core platform and admin
-- **Status:** DONE (core) / IN PROGRESS (ongoing polish) — **before launch**
-- **Completed:** Next.js 16 App Router app; public site (home, article, category, video, doctors, transfers, search, about, contact); admin dashboard under `src/app/admin/(dashboard)` with content, categories, comments, doctors, departments, transfers, homepage, users, ingest, synthesize; content model with `draft/pending/approved/published/rejected` statuses; role hierarchy (`role_hierarchy`, `promote_owner`, manager update policy).
-- **Human editorial‑review workflow (COMPLETE, 2026-08-10 — production web commit `556965b`, Vercel deployment Ready on `main`):** UI‑only additions on top of the existing content model so an admin can review AI‑generated pending articles quickly and safely — an **AI badge** in the Admin content list (driven by the existing `content.origin` field), a **source‑first review panel** on the edit screen showing provenance/status/created date with a verified **original source link** (opens in a new tab), an **admin‑only unpublished preview** (`/admin/preview/[id]`, `requireAdmin` + `noindex`, verified in production) rendered with the real article layout, and an **explicit Reject action** (`status = "rejected"`, non‑destructive, non‑public). Publication remains an explicit human‑admin action; no auto‑publish path was introduced; no schema/migration change.
-- **Remaining:** Ongoing UX polish; admin ergonomics as features grow.
-- **Next action:** None blocking; address per‑feature items in their workstreams.
-- **Dependencies:** None.
-- **Refs:** migrations `create_profiles`, `create_content_schema`, `content_rls_policies`, `role_hierarchy`, `promote_owner`, `profiles_manager_update_policy`; commit `556965b` (human editorial‑review workflow).
-
-### 2. SEO and sharing
-- **Status:** DONE (core) — **before launch**
-- **Completed:** `src/app/sitemap.ts`, `src/app/robots.ts`, OpenGraph images for articles (`article/[slug]/opengraph-image.tsx`) and video (`video/[slug]/opengraph-image.tsx`); `ShareBar` component (WhatsApp/email/native share) wired into `ArticleView`.
-- **Remaining:** Verify structured data (JSON‑LD article schema), canonical URLs, per‑page metadata completeness. **NEEDS CONFIRMATION** whether JSON‑LD is present.
-- **Next action:** Audit metadata/JSON‑LD coverage across page types.
-- **Dependencies:** Domain (WS 21) for absolute URLs.
-- **Priority:** before launch.
-
-### 3. Doctor Transfers
-- **Status:** DONE — **before launch**
-- **Completed:** Public `transfers` page + admin transfers CRUD; enrichment; secured private source (`secure_transfer_private_source`), minimal transfer RPC (`a2_minimal_transfer_rpc`); redesigned transfer cards.
-- **Remaining:** None known.
-- **Next action:** None.
-- **Dependencies:** None.
-- **Refs:** migrations `doctors_departments_transfers_ratings`, `transfers_enrichment`, `secure_transfer_private_source`, `a2_minimal_transfer_rpc`; commits `53d0b31`, `8629950`, `243150d`.
-
-### 4. Supabase and code hardening
-- **Status:** IN PROGRESS — **before launch**
-- **Completed:** Privilege‑escalation guard on profiles; revoked trigger‑fn EXECUTE; blocked anon media listing; hardened execute + media listing; AI image usage rate limits; RLS policies on content.
-- **Remaining:** Final security pass (see WS 27); confirm advisors (security/perf) are clean. **NEEDS CONFIRMATION** of latest `get_advisors` results.
-- **Next action:** Run Supabase security + performance advisors and triage.
-- **Dependencies:** Feature freeze for launch.
-- **Refs:** migrations `guard_profile_privilege_escalation`, `revoke_trigger_fn_execute`, `harden_execute_and_media_listing`, `ai_image_usage_rate_limits`; commit `aed3da4`.
-
-### 5. News sources and ingestion
-- **Status:** DONE (foundation) / IN PROGRESS (expansion) — **before launch**
-- **Completed:** `ingest-news` Edge Function (Deno) doing its own auth (cron `x-ingest-secret`; manual admin JWT); source registry (`news_source_registry`), WAM source registered (`register_wam_source`); admin sources manager, ingest runs view, ingest policy page; live extraction (`fetchSourceText.ts`); semantic dedupe (`dedupe.ts`, `ingestion_decisions_dedupe_audit`); trusted‑source enforcement; targeted single‑article pilot provenance (`ingestion_runs.pilot_source_domain`).
-- **Remaining:** Broaden the registered/verified source set; source‑quality monitoring (WS 11).
-- **NEXT IMMEDIATE DESIGN TASK — SALMA SOURCE UNIVERSE / SOURCE STRATEGY (2026-08-10):** expand and classify the source network into three roles — (1) **Discovery sources**, (2) **Primary / authoritative sources**, (3) **Final‑source‑allowed media** (all three already expressible via `discovery_enabled` / `source_type`+`tier` / `final_source_allowed`). Design/classification only — **do not add or modify any sources yet**. This is the prerequisite for wiring Priority Score v1 (WS 10) into the cron path.
-- **Next action:** Design the Source Universe classification (discovery vs primary/authoritative vs final‑allowed media); no source changes yet.
-- **Dependencies:** Editorial policy (block/allow lists) in `editorial_policy`.
-- **Refs:** migrations `news_source_registry`, `register_wam_source`, `ingestion_decisions_source_extraction`, `ingestion_decisions_dedupe_audit`, `ingestion_runs_targeted_pilot`; commits `7b64c0d`, `e828c05`, `be31d7d`.
-
-### 6. AI writer
-- **Status:** DONE (verified) — **before launch**
-- **Completed:** `salmaWriter.ts` writer with profile‑aware routing (`writerRouter.ts`), factual validator (`validateArticle`), foreign‑name grounding, completion‑parsing hardening; writer audit persisted per candidate (`ingestion_decisions_writer_audit`). Unit tests green (`salmaWriter.test.ts`).
-- **Remaining:** None functional; behavior validated in eval.
-- **Next action:** None until pilot findings suggest tuning.
-- **Dependencies:** OpenRouter model config (env secrets).
-- **Refs:** commits `b65836f`, `e4a33fe`, `5bfaca3`, `0579c9d`.
-- **Note (verified enforcement boundary):** the factual validator rejects unsupported **numbers** but does not catch purely qualitative exaggeration — "no exaggeration" is a prompt‑level guarantee.
-
-### 7. AI Editorial Director
-- **Status:** DONE — **implementation phase CLOSED** (2026-08-10) — **before launch**
-- **Completed:** `salmaEditor.ts` (`runEditorPass`): English‑placement gate, factual re‑validation, safety‑alert risk retention (E1.9), bounded second call (formatting recovery **or** editorial repair), safe fallback to original writer draft with `needs_human_review`. Full editorial AI pipeline live in production **v27** (commit `8b60487`): trusted‑source → writer → Editorial Director → fidelity validation → constrained repair (max one LLM call, must return the complete valid article JSON) → final validation → **pending**. A successful real BBC end‑to‑end production pilot completed, accepted into pending as article ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8`. All AI content remains pending; automatic publishing remains disabled.
-- **Remaining:** None for the Writer + Editorial Director + fidelity‑repair implementation — this phase is **closed**. Do **not** add new editorial rules unasked. Any future work is tuning driven by real review findings, not new implementation.
-- **Next action:** None (phase closed).
-- **Dependencies:** None.
-- **Refs:** commits `c69d7f5`, `e13fefb`, `0ee4ca7` (v26), `8b60487` (v27); memory `project_editor_eval.md`.
-
-### 8. Controlled editorial-pipeline pilot
-- **Status:** COMPLETE (2026-08-10) — implementation-validation phase closed
-- **Completed:** The controlled initial editorial-pipeline pilot is **complete**. Deployment prerequisites in place (v27 active; pending‑only; rollback ready). The successful BBC v27 end‑to‑end pending article (ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8`, ran the full pipeline and was accepted into pending — nothing published) is **sufficient to close the implementation-validation phase**. **No additional seven‑article pilot is required.**
-- **Remaining:** None as a mandatory pilot. Future real‑world monitoring happens during **normal controlled operations**, not as a required remaining pilot.
-- **Next action:** None. Writer + Editorial Director + fidelity pipeline remain **CLOSED** unless a repeated critical defect appears.
-- **Dependencies:** WS 6, WS 7 (done).
-- **Priority:** closed (implementation-validation).
-- **Preserved rule:** all AI‑generated content remains **pending** and requires **explicit human review before publication**; never auto‑publish.
-
-### 9. Editorial audit persistence
-- **Status:** LATER BACKLOG — **not required for the current basic human-review workflow** (2026-08-10). The human editorial-review workflow (WS 1) ships without persisted editorial/fidelity audit; full audit persistence stays a later observability enhancement, deferred until scaling.
-- **Completed:** Writer audit, source‑extraction audit, and dedupe audit are persisted on `ingestion_decisions`. Editorial audit (`EditorialAudit`) is currently **observability‑only** — computed and returned in the pilot report but **NOT persisted** (index.ts intentionally leaves the `ingestion_decisions` insert unchanged; no migration in v23).
-- **Remaining:** Design a non‑destructive column/table to persist editorial audit (verdict, `final_draft_source`, rejection reason, second‑attempt type, gate warnings) so pilot reviews are queryable.
-- **Next action:** Draft a nullable, additive migration for editorial audit fields (review‑only; do not apply without authorization).
-- **Dependencies:** Coordinate with WS 8 so pilot results are captured.
-- **Priority:** before launch (recommended before permanent cron).
-- **Note:** Local migration filename dates (`20260804…`, `20260805…`, `20260806…`) do **not** match applied remote versions (`20260802155824`, `20260802155833`, `20260802221414`); the remote is authoritative. **NEEDS CONFIRMATION** whether local migration filenames should be reconciled with applied versions.
-
-### 10. Cron integration
-- **Status:** IN PROGRESS (foundation live; permanent integration gated) — **before launch**
-- **Completed:** pg_cron job `salma-news-ingest` every 6h → `run_news_ingestion()` → POSTs to Edge Function with `x-ingest-secret`. Unchanged by v23 deploy.
-- **Approved design decision — SALMA NEWS PRIORITY SCORE v1 (2026-08-10, design only — not implemented):** the approved deterministic 0–100 ranking that WS10 integration will apply to story clusters **after** clustering/representative selection and **before** `pilot_limit=1` selects the single candidate. Editorial principle: **NEWS VALUE FIRST** — geography is a meaningful boost, not an overriding hierarchy.
-  - **Positive score (weights total 100):** `Priority_base = 0.60·IMPACT + 0.15·AUTHORITY + 0.15·RELEVANCE + 0.10·SAME-RUN BREADTH`, then **minus** the approved thresholded Institutional‑PR penalty; final result clamped to [0,100].
-    - **IMPACT (60%)** = `editorial_value_score` (0–100). News value dominant.
-    - **AUTHORITY (15%)** = bounded blend of representative source `tier` / `trust_score` / primary preference (`source_type != 'media'`), capped at 100.
-    - **RELEVANCE (15%)** = `relevance_score` (0–100 Kuwait/Gulf) — a bounded boost, never overriding the Impact band.
-    - **SAME-RUN BREADTH (10%)** = weak same-run Heat proxy over **distinct registered credible domains** in the cluster: `0–1 domains = 0`, `2 = 50`, `3 = 75`, `4+ = 100`. A single credible domain earns **no** breadth credit; counting distinct *registered* domains defeats syndication volume.
-    - **Institutional‑PR penalty (thresholded, subtractive, max −15):** `institutional_pr_score <= 40 → 0`; above 40 it rises linearly to a **−15** cap at PR=100 (`penalty = clamp(15·(pr−40)/60, 0, 15)`). Purpose: suppress ceremonial/promotional PR **without** penalizing legitimate major policy or medical announcements merely because they originate from an institution.
-  - **Missing/edge rules:** a **null/unusable `editorial_value_score` = UNRANKABLE** (sorts below every scored story and is never selected); **if all eligible stories are unrankable, select none** (prefer publishing nothing over arbitrary discovery‑order selection). **Recency remains tie‑break only** in v1 — `published_date` gets no numeric weight (it is unreliable/often null).
-  - **Extraction fallback (approved future behavior, not implemented):** a **source‑fetch failure must NOT consume the single Writer slot** — ranked candidates may continue through extraction failures (#1 → #2 → #3 …). The single cron AI slot is consumed **only once one story begins the Writer stage**; **no second story is attempted after Writer / Editorial Director / fidelity rejection**; **maximum one Writer pipeline attempt per cron run remains unchanged**. Smallest change: relocate the slot‑consumption point from source‑fetch start to Writer‑stage entry, `continue` to the next ranked plan on fetch failure, and `break` unconditionally after the Writer stage.
-  - **Preserved rule:** all accepted AI content remains **pending‑only** and requires **explicit human publication**; never auto‑publish.
-  - **v2 boundary:** true **News Heat / Coverage Velocity is explicitly v2**. Future Heat v2 should **replace/refine only the current 10% SAME‑RUN BREADTH component** where possible (swap its internals for cross‑run persistent‑story heat), leaving IMPACT/AUTHORITY/RELEVANCE weights, the PR penalty, the recency tie‑break, the missing‑Impact rule, and the clamp unchanged.
-- **Remaining:** Implement the approved Priority Score v1 + extraction‑fallback behavior as part of permanent cron integration (gated on the source‑strategy work below); keep pending‑only.
-- **Next action:** Proceed to the next immediate design task — **SALMA SOURCE UNIVERSE / SOURCE STRATEGY** (see WS 5) — before wiring Priority Score v1 into the cron path.
-- **Dependencies:** WS 5 (source universe/strategy), WS 9 (audit persistence).
-- **Refs:** migrations `news_agent_cron`, `ingest_call_edge_function`.
-
-### 11. Source quality and monitoring
-- **Status:** LATER — **after launch** (partial before launch)
-- **Completed:** Per‑candidate decision logging (`ingestion_decisions`), run‑level provenance, dedupe audit.
-- **Remaining:** Dashboards/alerts for source health (extraction failure rates, rejection reasons, dedupe rates); flag degraded sources.
-- **Next action:** Define key ingestion quality metrics to surface in admin.
-- **Dependencies:** WS 26 (analytics dashboard).
-- **Priority:** partial before launch (basic run visibility exists); richer monitoring after launch.
-
-### 12. Research and Studies
-- **Status:** NEEDS CONFIRMATION / LATER — **after launch**
-- **Completed:** No dedicated "Research/Studies" section found (references appear only in search/sources contexts).
-- **Remaining:** Confirm scope — is this a distinct content type/section or covered by categories?
-- **Next action:** Confirm product intent with owner before designing.
-- **Dependencies:** Content model (WS 1).
-- **Priority:** after launch (pending confirmation).
-
-### 13. Medical Profiles
-- **Status:** LATER (postponed by decision) — **after launch**
-- **Completed:** None (deliberately).
-- **Remaining:** Define and build once **2–3 real stories** validate the format.
-- **Next action:** Revisit only after real stories exist.
-- **Dependencies:** Real editorial content.
-- **Priority:** after launch. **Preserved postponement.**
-
-### 14. Social Q&A
-- **Status:** LATER (UI postponed by decision) — **after launch**
-- **Completed:** Schema exists (`social_qa` migration). No public/admin UI found.
-- **Remaining:** UI + moderation flow when prioritized.
-- **Next action:** None until un‑postponed.
-- **Dependencies:** Comments/moderation patterns (WS 15).
-- **Priority:** after launch. **Preserved postponement.**
-- **Refs:** migration `social_qa`.
-
-### 15. Comments and moderation
-- **Status:** DONE (revalidated 2026-08-05) — **before launch**
-- **Completed (verified end‑to‑end):** Public posting without login via `submitComment` server action (`src/app/actions/comments.ts`) with validation; DB trigger forces `status='pending'` so comments are held. Public UI `src/components/site/Comments.tsx` (form + list) wired into `ArticleView` (line 206); public fetch renders **approved‑only** (`src/lib/queries.ts` `.eq("status","approved")`). Admin moderation `src/app/admin/(dashboard)/comments/page.tsx` with pending/approved/rejected tabs and **approve/reject/delete** via `moderateComment` (`src/app/admin/actions.ts`). Admin dashboard shows pending count (`admin-queries.ts`). Backed by `comments` table with `status`.
-- **Remaining:** Spam/abuse controls at scale (rate‑limiting, honeypot/CAPTCHA). **NEEDS CONFIRMATION** of any anti‑spam measures — none found in repo.
-- **Next action:** Decide on anti‑spam controls before high‑traffic launch (non‑blocking for core workflow).
-- **Dependencies:** None.
-- **Refs:** `Comments.tsx`, `actions/comments.ts`, `admin/(dashboard)/comments/page.tsx`, `admin/actions.ts:moderateComment`, `queries.ts`.
-
-### 16. "In Brief" summaries
-- **Status:** DONE (revalidated 2026-08-05) — **before launch**
-- **Completed (verified end‑to‑end):** Admin authors a quick summary in `ContentForm` — labelled textarea «باختصار (ملخص سريع يظهر أعلى المقال)» (`name="ai_summary"`, `content/ContentForm.tsx`); persisted by `saveContent` (`admin/actions.ts`, field `ai_summary`); rendered as a distinct tinted «باختصار» box near the top of the article (`ArticleView.tsx` lines 77–84, conditional on `content.ai_summary`). This is an authored, editable, rendered field — not merely a bare DB column. (A separate homepage brief block was intentionally dropped — commit `709c634`.)
-- **Remaining:** None known for the summary‑box workflow.
-- **Next action:** None.
-- **Dependencies:** None.
-- **Refs:** `ContentForm.tsx` (ai_summary), `admin/actions.ts:saveContent`, `ArticleView.tsx`; commit `5a02316`.
-
-### 17. Breaking News
-- **Status:** DONE (revalidated 2026-08-05) — **before launch**
-- **Completed (verified end‑to‑end):** Admin «عاجل» toggle `is_breaking` checkbox in `ContentForm` (line 407); persisted by `saveContent` (`admin/actions.ts`, field `is_breaking`); homepage query `getHomepage` (`queries.ts`) selects `.eq("is_breaking", true)` (latest, limit 8) into `data.breaking`; rendered as the coral marquee `BreakingTicker.tsx` in `HomeView` (line 26), hidden when empty. Complete author→persist→render loop.
-- **Remaining:** None known.
-- **Next action:** None.
-- **Dependencies:** None.
-- **Refs:** `ContentForm.tsx` (is_breaking), `admin/actions.ts:saveContent`, `queries.ts:getHomepage`, `BreakingTicker.tsx`, `HomeView.tsx`; commit `ba61343`.
-
-### 18. Video support
-- **Status:** DONE (revalidated 2026-08-05) — **before launch**
-- **Completed (verified end‑to‑end):** Admin sets content type «فيديو», `video_url` (YouTube/Vimeo) and duration in `ContentForm` (lines 371–388); persisted by `saveContent` (`admin/actions.ts`, field `video_url`). Public rendering: dedicated `/video/[slug]` route (`app/video/[slug]/page.tsx`) using `ArticleView`, which embeds the video via `embedUrl` (`ArticleView.tsx` lines 95–125, both video‑type and in‑article cases); homepage «فيديو وتبسيط طبي» lane renders `data.videos` as `VideoCard` (`HomeView.tsx` lines 65–71); video OpenGraph image (`video/[slug]/opengraph-image.tsx`); auto YouTube thumbnail cover fallback.
-- **Remaining:** None known.
-- **Next action:** None.
-- **Dependencies:** None.
-- **Refs:** `ContentForm.tsx` (video_url), `admin/actions.ts:saveContent`, `app/video/[slug]/page.tsx`, `ArticleView.tsx`, `HomeView.tsx`; commits `7c78141`, `5a02316`.
-
-### 19. Homepage and article-page UX
-- **Status:** DONE (core) / IN PROGRESS (polish) — **before launch**
-- **Completed:** Rotating homepage hero; drag‑and‑drop section ordering (`@dnd-kit`); direct position control for sections; homepage section pages; article page with share, summary, video, read time, post‑save actions.
-- **Remaining:** Ongoing visual polish; responsive/mobile QA.
-- **Next action:** Mobile/RTL QA pass before launch (part of WS 31).
-- **Dependencies:** Design system (WS 20).
-- **Refs:** commits `ba61343`, `709c634`, `5a02316`.
-
-### 20. Branding and design system
-- **Status:** IN PROGRESS — **before launch**
-- **Completed:** Tailwind v4 design tokens; coral accent; form‑control background polish; RTL Arabic‑first layout.
-- **Completed — Apple Design / browser‑platform polish phase: DONE (2026‑08‑19, commit `67c3c7e`, Vercel Production `success`).** Audited against the `apple-design` skill (Emil Kowalski) and shipped, frontend‑only:
-  - Browser defaults owned in `globals.css` — overridable defaults in `@layer base` (touch‑action manipulation, pointer cursor / no text‑selection on buttons, press feedback on `a`/`button`, `color-scheme: light`, smooth in‑page anchor scroll + `data-scroll-behavior` for the Next 16 router, `scrollbar-gutter: stable`, `font-synthesis: none`, anchor `scroll-margin-top`, brand `::selection`, `text-wrap: balance` on h1–h3, `overflow-wrap`); deliberately unlayered platform guarantees (`:focus-visible` ring that beats `outline-none`, 16px form controls on coarse pointers to stop iOS focus zoom, `.salma-focus-inset`/`.salma-focus-halo`); `prefers-reduced-motion` handling (ticker/pulse stop, ticker rail becomes scrollable, anchors jump); ticker pause on hover (hover‑capable only) and `:focus-within`; `theme-color` viewport export.
-  - Hit targets ≈44px with visual size and layout unchanged: header search/subscribe/logo/nav links, hero dots, SectionTitle action, ShareBar, comment submit, article category chip/credit/sources, contact mailto, doctors filter chips, breaking‑ticker headlines, footer links.
-  - Subtle card feedback (hover‑capable + motion‑safe only): 3% image zoom via `Cover zoom` prop (image branches only), title colour → teal, `group`/`isolate` on ContentCard/ListRow/SearchResultRow/VideoCard/HeroCard/HomeSection lead/RotatingHero; hero cross‑fade moved to a wrapper so slides get instant press feedback.
-  - Verified: desktop/tablet/mobile geometry identical to the previous HEAD (only the intended 16px‑input growth on touch), RTL/mixed‑script intact, focus rings visible incl. inside clipped surfaces, no console errors; `tsc`, `eslint` (changed files), `next build` clean.
-- **Deliberately deferred (design recommendations, not started):** translucent/blurred header material; hero swipe/gesture navigation (Embla); RatingForm star hit targets (doctor ratings postponed, WS 24); replacing the BreakingTicker marquee with a rotating/cross‑fade headline (current ticker concept stays).
-- **Remaining:** Consolidate design tokens/components; confirm exact homepage match to the reference design (`Salma Mobile Homepage.dc.html`). **NEEDS CONFIRMATION** whether the reference design was exported into the repo.
-- **Next action:** Obtain/confirm the canonical design reference; reconcile.
-- **Dependencies:** Design source from owner.
-- **Refs:** commits `91b86ed`, `67c3c7e`; memory `project_salma.md`; skill `~/.claude/skills/apple-design/SKILL.md`.
-
-### 21. Domain and production launch
-- **Status:** NEEDS CONFIRMATION — **before launch**
-- **Completed:** App deployable (Next.js on Vercel per architecture notes). **NEEDS CONFIRMATION** of current hosting/domain status.
-- **Remaining:** Custom domain, DNS, TLS, production env/config, Vercel↔Supabase wiring.
-- **Next action:** Confirm hosting target and domain; finalize production configuration.
-- **Dependencies:** WS 27 (security), WS 31 (QA checklist).
-- **Priority:** before launch.
-
-### 22. Legal and editorial policy pages
-- **Status:** IN PROGRESS / NEEDS CONFIRMATION — **before launch**
-- **Completed:** `about` and `contact` pages exist; admin ingest **policy** page (`ingest/policy`) for editorial allow/block lists.
-- **Remaining:** Public Privacy Policy, Terms of Use, editorial standards / corrections policy, medical disclaimer. **NEEDS CONFIRMATION** whether privacy/terms pages exist.
-- **Next action:** Draft legal/policy pages (privacy, terms, medical disclaimer).
-- **Dependencies:** Legal review.
-- **Priority:** before launch.
-
-### 23. Newsletter and subscriptions
-- **Status:** IN PROGRESS — **after launch** (capture before launch)
-- **Completed:** `newsletter_subscribers` table; `NewsletterForm` + `actions/newsletter.ts`; signup entry points in header/home.
-- **Remaining:** Sending/delivery pipeline, double opt‑in, unsubscribe. **NEEDS CONFIRMATION** of any email delivery integration.
-- **Next action:** Decide delivery provider; implement confirmation + unsubscribe.
-- **Dependencies:** Email provider decision.
-- **Priority:** capture before launch; delivery after launch.
-
-### 24. Doctor ratings
-- **Status:** BLOCKED (pending legal/commercial decision) — **after launch**
-- **Completed:** Admin ratings page + public doctor ratings display + `actions/ratings.ts`; schema in `doctors_departments_transfers_ratings`.
-- **Remaining:** Public‑reliance policy; moderation; legal/commercial sign‑off before promoting ratings.
-- **Next action:** Obtain legal + commercial decision before public emphasis.
-- **Dependencies:** Legal/commercial.
-- **Priority:** after launch. **Preserved: requires later decision.**
-
-### 25. Advertising and monetization
-- **Status:** LATER — **after launch / optional**
-- **Completed:** None.
-- **Remaining:** Ad placements/sponsorship model or other monetization; policy alignment with editorial trust.
-- **Next action:** Defer until audience/traction exists.
-- **Dependencies:** Analytics (WS 26), legal (WS 22).
-- **Priority:** after launch / optional.
-
-### 26. Analytics and editorial dashboard
-- **Status:** LATER — **after launch** (basic before launch)
-- **Completed:** Admin landing dashboard (`admin/(dashboard)/page.tsx`) with content/comment overviews; ingest runs view.
-- **Remaining:** Traffic analytics, editorial KPIs (throughput, approval rates, source quality), ingestion health metrics.
-- **Next action:** Define minimal launch KPIs; choose privacy‑respecting analytics.
-- **Dependencies:** WS 11, WS 9.
-- **Priority:** basic before launch; richer after.
-
-### 27. Authentication and final security hardening
-- **Status:** LATER (intentionally postponed to the end) — **before launch (final gate)**
-- **Completed:** Admin‑only auth model (public site is anonymous); role hierarchy; RLS; execution/media hardening; privilege‑escalation guard.
-- **Remaining:** Final end‑to‑end security review (auth flows, session handling, RLS coverage, secret hygiene, advisor findings) as the last pre‑launch gate.
-- **Next action:** Schedule the final hardening pass at the end, before launch sign‑off.
-- **Dependencies:** Feature freeze.
-- **Priority:** before launch (final). **Preserved postponement to end.**
-
-### 28. Storage/configuration backups and restore drill
-- **Status:** BLOCKED / IN PROGRESS (unfinished) — **before launch**
-- **Completed:** None verified.
-- **Remaining:** Define backup strategy for storage + configuration; perform an actual **restore drill**. **PITR intentionally disabled for now** — revisit before/at launch.
-- **Next action:** Decide backup approach; run a restore drill; document.
-- **Dependencies:** Owner decision on PITR re‑enablement.
-- **Priority:** before launch. **Preserved: PITR off; backups/restore unfinished.**
-
-### 29. Monitoring and system health
-- **Status:** LATER — **after launch** (basic before launch)
-- **Completed:** Edge Function logs available via Supabase; ingestion run records.
-- **Remaining:** Uptime/error alerting for Edge Function + cron; failure notifications; log retention policy. **NEEDS CONFIRMATION** of any external monitoring.
-- **Next action:** Add basic cron/Edge failure alerting before launch.
-- **Dependencies:** None hard.
-- **Priority:** basic before launch; richer after.
-
-### 30. Editorial governance and team workflow
-- **Status:** IN PROGRESS — **before launch**
-- **Completed:** Role hierarchy (admin/manager/owner); pending‑approval workflow; editorial policy page; ingest runs review.
-- **Remaining:** Written editorial SOP (who reviews, approval SLAs, corrections handling); reviewer assignment for the 10‑article pilot.
-- **Next action:** Draft the reviewer workflow for the pilot (WS 8).
-- **Dependencies:** WS 8, WS 22.
-- **Priority:** before launch.
-
-### 31. Full QA and launch checklist
-- **Status:** NEXT — **before launch**
-- **Completed:** Automated tests for ingestion/writer/editor (Node `--test`); build/lint/typecheck pipeline verified during v23 release.
-- **Remaining:** End‑to‑end QA: RTL/mobile, SEO/OG, sharing, comments moderation, admin CRUD, ingestion pending flow, accessibility, cross‑browser; final launch checklist sign‑off.
-- **Next action:** Assemble the launch QA checklist and run a full pass.
-- **Dependencies:** WS 19, WS 20, WS 21, WS 27.
-- **Priority:** before launch.
-
-### 32. Post-launch growth features
-- **Status:** LATER — **after launch / optional**
-- **Completed:** None.
-- **Remaining:** Candidate ideas — Medical Profiles (WS 13), Social Q&A UI (WS 14), Research/Studies section (WS 12), richer personalization, newsletter delivery, monetization (WS 25). **Do not remove postponed ideas.**
-- **Next action:** Reprioritize after launch based on traction.
-- **Dependencies:** Launch complete.
-- **Priority:** after launch / optional.
-
----
-
-## Changelog
-
-| Date | Workstream | Previous status | New status | Reason |
-|---|---|---|---|---|
-| 2026-08-05 | (roadmap) | — | Created | Established canonical Salma roadmap as permanent source of truth. |
-| 2026-08-05 | 7. AI Editorial Director | IN PROGRESS (local, approved) | DONE (deployed) | Editorial Director wired into `ingest-news` and deployed in v23 (commit `e13fefb`); byte‑verified; approved for controlled pilot. |
-| 2026-08-05 | 10. Cron integration | (foundation live) | IN PROGRESS (gated) | Cron unchanged by v23; permanent Editorial‑Director cron behavior gated on the 10‑article pilot. |
-| 2026-08-05 | 8. Controlled ten-article pilot | (planned) | NEXT | Deployment prerequisites met; staged 3‑then‑7 review is the immediate next step, pending‑only. |
-| 2026-08-05 | 9. Editorial audit persistence | (implicit) | NEXT | Confirmed editorial audit is observability‑only, not persisted; additive persistence needed before scaling. |
-| 2026-08-05 | (production/rollback) | tag local‑only | tag local + on `origin` | Corrected rollback record: `stable/pre-editorial-pilot` → `c69d7f5` was pushed to GitHub and is now available locally and on `origin`. |
-| 2026-08-05 | 15. Comments and moderation | DONE | DONE (revalidated) | Verified full end‑to‑end workflow (public form + approved‑only render + admin approve/reject/delete + `comments.status`); status stands. |
-| 2026-08-05 | 16. "In Brief" summaries | DONE | DONE (revalidated) | Verified admin‑authored «باختصار» textarea → `saveContent` → rendered box in `ArticleView`; an editable/rendered field, not a bare column; status stands. |
-| 2026-08-05 | 17. Breaking News | DONE | DONE (revalidated) | Verified `is_breaking` toggle → `saveContent` → `getHomepage` `is_breaking=true` → `BreakingTicker` on homepage; status stands. |
-| 2026-08-05 | 18. Video support | DONE | DONE (revalidated) | Verified `video_url`/type admin controls → `saveContent` → `/video/[slug]` + in‑article embed + homepage video lane; status stands. |
-| 2026-08-10 | 7. AI Editorial Director | DONE (deployed v23) | DONE — implementation phase CLOSED | Full pipeline (trusted‑source → writer → Editorial Director → fidelity validation → constrained repair → final validation → pending) live in `ingest-news` v27 (commit `8b60487`); all AI content stays pending; auto‑publish remains disabled. |
-| 2026-08-10 | 8. Controlled ten-article pilot | NEXT | IN PROGRESS | First real end‑to‑end production pilot completed on v27 — one BBC article accepted (ID `e1138d51-6bea-4c9c-953a-f5a27a5b7ac8`); staged 3‑then‑7 review continues, pending‑only. |
-| 2026-08-10 | 8. Controlled editorial-pipeline pilot | IN PROGRESS | COMPLETE | Approved decision reversal: the successful BBC v27 pending article closes the implementation-validation phase; no additional seven‑article pilot required. Future monitoring happens during normal controlled operations. Writer + Editorial Director + fidelity pipeline remain CLOSED unless a repeated critical defect appears; all AI content stays pending, explicit human review required. |
-| 2026-08-10 | 1. Core platform and admin (human editorial-review workflow) | (not tracked) | COMPLETE | Human editorial-review workflow shipped — production web commit `556965b`, Vercel deployment Ready on main: AI badge, source‑first review panel, verified original source link, admin‑only unpublished preview (`/admin/preview/[id]`, `requireAdmin` + noindex), explicit Reject (`status="rejected"`, non‑destructive/non‑public); publication remains explicit human‑admin action; no schema/migration. |
-| 2026-08-10 | 9. Editorial audit persistence | NEXT | LATER BACKLOG | Full Editorial Director/fidelity audit persistence deferred; not required for the current basic human‑review workflow. |
-| 2026-08-10 | 10. Cron integration | IN PROGRESS (gated) | IN PROGRESS (design approved) | Approved **SALMA NEWS PRIORITY SCORE v1** (design only, not implemented): `0.60·IMPACT + 0.15·AUTHORITY + 0.15·RELEVANCE + 0.10·SAME‑RUN BREADTH` minus a thresholded Institutional‑PR penalty (0 at PR≤40, rising to −15 at PR=100); NEWS VALUE FIRST, geography a boost not a hierarchy; null‑Impact = UNRANKABLE (if all unrankable, select none); recency tie‑break only; breadth 0/50/75/100 for 1/2/3/4+ distinct registered credible domains; source‑fetch failure must not consume the single Writer slot (continue through extraction failures; slot consumed at Writer start; no second story after Writer/Editor/fidelity rejection; one Writer attempt/run); Heat/Coverage‑Velocity explicitly v2 replacing only the 10% breadth term; all AI content stays pending, explicit human publication required. |
-| 2026-08-10 | 5. News sources and ingestion | (expansion) | NEXT DESIGN TASK | Set **SALMA SOURCE UNIVERSE / SOURCE STRATEGY** as the next immediate design task: classify the source network into Discovery / Primary‑authoritative / Final‑source‑allowed media. Design only — no sources added or modified yet. |
-| 2026-08-19 | 20. Branding and design system (Apple Design / browser‑platform polish sub‑phase) | (local, uncommitted) | DONE — phase CLOSED | Apple‑design audit + fixes shipped in commit `67c3c7e` (Vercel Production `success`): browser defaults in `@layer base` + unlayered focus/iOS‑zoom guarantees, reduced‑motion support, ≥44px hit targets with zero layout shift, subtle motion‑safe card feedback. Radar/editorial/admin logic, schema, SEO, comments, transfers, auth untouched. Deferred: translucent header, hero swipe/Embla, rating‑star targets, ticker replacement. Categories work not started. |
-
----
-
-## Open Items Marked NEEDS CONFIRMATION
-- SEO JSON‑LD / structured data coverage (WS 2).
-- Latest Supabase security/performance advisor results (WS 4).
-- Research/Studies scope as a distinct section (WS 12).
-- Anti‑spam controls for comments at scale (WS 15).
-- Whether the reference homepage design was exported into the repo (WS 20).
-- Current hosting/domain/production configuration status (WS 21).
-- Existence of Privacy/Terms/medical‑disclaimer pages (WS 22).
-- Newsletter email delivery integration (WS 23).
-- External uptime/error monitoring (WS 29).
-- Reconciliation of local migration filenames vs applied remote versions (WS 9).
+- First scheduled **live** ESL run (2026-08-21 18:00 UTC) produced pending candidates as expected.
+- Whether any anon writes landed on `radar_editorial_selection` / `radar_source_escalation` during the 08-20 → 08-21 RLS gap window.
+- Vercel production env: is `NEXT_PUBLIC_SITE_URL` set at all today? Which Vercel project/domain serves production?
+- Supabase Auth plan features available on free tier (leaked-password protection, MFA options) for P1-3.
+- Owner decision: branded domain; PITR/paid tier; newsletter CTA keep-or-hide at launch.
+- Whether the reference homepage design export (`design/design_reference.html`) still matches the shipped homepage (low priority).
