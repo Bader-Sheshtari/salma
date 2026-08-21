@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { similarity, numericConflict } from "../ingest-news/dedupe.ts";
+import { resolveRowCap } from "./bounds.ts";
 
 // Fast News Radar — RANKING function (evaluation-only, isolated from collection).
 //
@@ -37,14 +38,41 @@ const POSSIBLE_DUPLICATE_FLOOR = 0.6; // 0.60..0.72 → possible_duplicate
 // anything still unresolved becomes UNRANKED_ERROR (never silently Low).
 const PRIMARY_BATCH = 12;
 const RETRY_BATCHES = [6, 3];
-// How many rows to rank per invocation (bounds cost/time; leftover rows stay
-// ranked_at IS NULL and are picked up next cycle).
-const MAX_PER_RUN = 240;
+
+// intEnv: positive-integer env override with a safe default.
+function intEnv(name: string, dflt: number): number {
+  const v = Number(Deno.env.get(name));
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : dflt;
+}
+
+// BOUNDED WORK PER RUN (reliability fix 2026-08-21). A single invocation must
+// finish comfortably under the pg_net/gateway timeout (120s) and the function
+// wall-clock limit. Two independent bounds enforce this:
+//   1) RADAR_RANK_MAX  — hard ceiling on rows pulled per run (default 90).
+//      Ranking (classify) runs FIRST, so all pulled rows get ranked; the cron
+//      runs hourly (see run_radar_rank), giving 90×24=2160 rows/day capacity
+//      vs ~1200/day average intake (~1550 peak) — margin to drain backlog.
+//   2) RADAR_RANK_BUDGET_MS — a soft wall-clock budget (default 75s). Once
+//      elapsed exceeds it, the run STOPS starting new LLM work, commits what it
+//      finished, and reports status 'partial'; the next scheduled run resumes
+//      the remaining rows. This is the real safety belt: it bounds runtime even
+//      when individual LLM calls are slow or the provider is degraded — the
+//      exact failure that produced the 504 storm (a 240-main-row run plus a
+//      translate-retry backfill that GREW with the backlog). Kept well under the
+//      120s pg_net timeout so budget + one in-flight batch + the persist loop
+//      still finish comfortably inside the request window. Note: translation
+//      (a reading aid) expands to fill spare budget, so the budget — not the row
+//      cap — is what bounds a run's duration; classify runs first and is never
+//      starved, so lowering the budget never drops ranking coverage.
+const MAX_PER_RUN = intEnv("RADAR_RANK_MAX", 90);
+const RUN_BUDGET_MS = intEnv("RADAR_RANK_BUDGET_MS", 75_000);
+// Hard ceiling on any caller-supplied `limit` (never unbounded).
+const MAX_CALLER_LIMIT = MAX_PER_RUN;
 // Translation-only retry budget per invocation. ANY row with title_ar IS NULL —
 // including fully ranked ones — is re-attempted here (headline reading aid only,
-// never a re-rank). Bounded so a large backlog is drained over successive cycles
-// instead of one slow/expensive run; leftovers stay NULL and retry next time.
-const TRANSLATE_RETRY_LIMIT = 240;
+// never a re-rank). Bounded SMALL and strictly budget-gated so an untranslated
+// backlog can never balloon a run again; leftovers stay NULL and retry next run.
+const TRANSLATE_RETRY_LIMIT = intEnv("RADAR_RANK_TRANSLATE_RETRY", 60);
 
 const VALID_CATEGORIES = [
   "kuwait", "gulf", "world", "health-economy", "lifestyle", "investigations", "dawi-news",
@@ -316,6 +344,26 @@ Deno.serve(async (req) => {
   const usage = { prompt: 0, completion: 0, total: 0, cost: 0 };
   let calls = 0;
 
+  // Bounded caller limit (never unbounded) + wall-clock budget guard.
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  const rowCap = resolveRowCap((body as { limit?: unknown }).limit, MAX_CALLER_LIMIT);
+  const startedMs = Date.now();
+  let budgetHit = false;
+  // overBudget(): true once the wall-clock budget is exceeded; latches budgetHit
+  // so the run finalizes as 'partial'. Every LLM stage checks it before starting
+  // new work, so runtime stays bounded regardless of per-call latency.
+  const overBudget = (): boolean => {
+    if (Date.now() - startedMs > RUN_BUDGET_MS) { budgetHit = true; return true; }
+    return false;
+  };
+  const countUnranked = async (): Promise<number> => {
+    const { count } = await supabase
+      .from("radar_shadow_articles")
+      .select("id", { count: "exact", head: true })
+      .is("ranked_at", null);
+    return count ?? 0;
+  };
+
   // Single batched OpenRouter classify with a short transient-retry loop.
   async function classify(items: RadarRow[]): Promise<Map<string, Rank>> {
     const lines = items.map((a, j) =>
@@ -522,9 +570,11 @@ Deno.serve(async (req) => {
       else needModel.push(a);
     }
     for (const size of [20, 5, 1]) {
+      if (overBudget()) break;
       const unresolved = needModel.filter((a) => !out.has(a.id));
       if (unresolved.length === 0) break;
       for (const batch of chunk(unresolved, size)) {
+        if (overBudget()) break;
         await translateBatch(batch, out);
         await sleep(200);
       }
@@ -587,6 +637,55 @@ Deno.serve(async (req) => {
   let translateRetryResolved = 0;
   let status = "success";
   let errorMsg: string | null = null;
+  let skippedCount = 0;   // backlog rows not pulled this run (cap-bounded), for the next run
+  let backlogBefore = 0;
+  let backlogAfter = 0;
+  let runRowId: string | null = null;
+
+  // OBSERVABILITY: create the run row as 'running' BEFORE any expensive work, so
+  // a crash/kill mid-run leaves a visible stale 'running' record (the previously
+  // silent failure mode). finalizeRun() below updates it to success/partial/failed.
+  backlogBefore = await countUnranked();
+  {
+    const { data: runIns } = await supabase
+      .from("radar_rank_runs")
+      .insert({ trigger, status: "running", started_at: startedAt.toISOString(), model, backlog_before: backlogBefore })
+      .select("id")
+      .single();
+    runRowId = (runIns?.id as string | null) ?? null;
+  }
+
+  // Finalize the pre-created run row (UPDATE), or INSERT as a fallback if the
+  // initial 'running' insert failed. Never throws — a run-log write must not
+  // break ranking.
+  const finalizeRun = async (finalStatus: string, err: string | null): Promise<void> => {
+    const payload = {
+      status: finalStatus,
+      finished_at: new Date().toISOString(),
+      attempted_count: attemptedCount,
+      ranked_count: rankedCount,
+      retry_count: retryCount,
+      unranked_error_count: unrankedErrorCount,
+      skipped_count: skippedCount,
+      duplicate_new_count: dupCounts.new,
+      duplicate_already_count: dupCounts.already,
+      duplicate_possible_count: dupCounts.possible,
+      model,
+      openrouter_calls: calls,
+      prompt_tokens: usage.prompt,
+      completion_tokens: usage.completion,
+      total_tokens: usage.total,
+      cost: usage.cost,
+      backlog_before: backlogBefore,
+      backlog_after: backlogAfter,
+      duration_ms: Date.now() - startedAt.getTime(),
+      error: err,
+    };
+    try {
+      if (runRowId) await supabase.from("radar_rank_runs").update(payload).eq("id", runRowId);
+      else await supabase.from("radar_rank_runs").insert({ trigger, started_at: startedAt.toISOString(), ...payload });
+    } catch { /* run-log write must never throw */ }
+  };
 
   try {
     // 1) Pull ONLY rows needing ranking (never-ranked or prior error), newest
@@ -596,25 +695,25 @@ Deno.serve(async (req) => {
       .select("id,title,url,source_title,source_domain,language,country,published_at,first_seen_at")
       .is("ranked_at", null)
       .order("first_seen_at", { ascending: false })
-      .limit(MAX_PER_RUN);
+      .limit(rowCap);
     if (radarErr) throw radarErr;
     const radar = (radarData ?? []) as RadarRow[];
     attemptedCount = radar.length;
 
     if (radar.length === 0) {
-      // No new rows to rank — but title_ar backfill must still run so that
-      // previously-ranked rows missing a translation stay eligible for retry.
-      const retry = await runTranslateRetry(new Set());
-      translateRetryAttempted = retry.attempted;
-      translateRetryResolved = retry.resolved;
-      await supabase.from("radar_rank_runs").insert({
-        trigger, status: "success", started_at: startedAt.toISOString(),
-        finished_at: new Date().toISOString(), attempted_count: 0, ranked_count: 0,
-        model, duration_ms: Date.now() - startedAt.getTime(),
-      });
+      // No new rows to rank — but a bounded, budget-gated title_ar backfill still
+      // runs so previously-ranked rows missing a translation stay eligible.
+      if (!overBudget()) {
+        const retry = await runTranslateRetry(new Set());
+        translateRetryAttempted = retry.attempted;
+        translateRetryResolved = retry.resolved;
+      }
+      backlogAfter = await countUnranked();
+      await finalizeRun(budgetHit ? "partial" : "success", null);
       return new Response(JSON.stringify({
-        ok: true, mode: "rank", attempted: 0, ranked: 0,
-        translate_retry: { attempted: retry.attempted, resolved: retry.resolved },
+        ok: true, mode: "rank", status: budgetHit ? "partial" : "success", attempted: 0, ranked: 0,
+        backlog_before: backlogBefore, backlog_after: backlogAfter, skipped: skippedCount, budget_hit: budgetHit,
+        translate_retry: { attempted: translateRetryAttempted, resolved: translateRetryResolved },
       }, null, 2), { headers: { "Content-Type": "application/json" } });
     }
 
@@ -668,12 +767,14 @@ Deno.serve(async (req) => {
     //    left as UNRANKED_ERROR — never silently demoted.
     const rankOf = new Map<string, Rank>();
     const apply = (m: Map<string, Rank>) => { for (const [id, r] of m) rankOf.set(id, r); };
-    for (const b of chunk(radar, PRIMARY_BATCH)) { apply(await classify(b)); await sleep(300); }
+    // Budget-guarded: rows not classified before the budget is spent are persisted
+    // as UNRANKED_ERROR (retryable) below and picked up next run — resumable.
+    for (const b of chunk(radar, PRIMARY_BATCH)) { if (overBudget()) break; apply(await classify(b)); await sleep(300); }
     let missing = radar.filter((a) => !rankOf.has(a.id));
     for (const size of RETRY_BATCHES) {
-      if (missing.length === 0) break;
+      if (missing.length === 0 || overBudget()) break;
       retryCount += missing.length;
-      for (const b of chunk(missing, size)) { apply(await classify(b)); await sleep(300); }
+      for (const b of chunk(missing, size)) { if (overBudget()) break; apply(await classify(b)); await sleep(300); }
       missing = radar.filter((a) => !rankOf.has(a.id));
     }
 
@@ -685,6 +786,9 @@ Deno.serve(async (req) => {
     const viVerdict = new Map<string, boolean | null>();
     for (const [id, r] of rankOf) {
       if (r.level !== "very_important") continue;
+      // Budget-guarded: an unverified very_important row is deferred (verdict null
+      // → UNRANKED/retry next run), never auto-confirmed. Preserves editorial meaning.
+      if (overBudget()) { viVerdict.set(id, null); continue; }
       const verdict = await verifyVeryImportant(byId.get(id)!);
       viVerdict.set(id, verdict);
       await sleep(200);
@@ -693,7 +797,9 @@ Deno.serve(async (req) => {
     // 3c) Faithful Arabic-headline translation (title_ar) for this batch. Fully
     //     independent of ranking: a translation failure never blocks ranking, and
     //     an unresolved title_ar simply stays NULL and is retried next cycle.
-    const titleArOf = await translateTitles(radar);
+    // Reading aid only, strictly budget-gated: if the run is out of budget, rows
+    // keep title_ar NULL and are retried next run (never blocks or delays ranking).
+    const titleArOf = overBudget() ? new Map<string, string>() : await translateTitles(radar);
 
     // 4) Persist per-article results. Success writes all fields + ranked_at and
     //    clears rank_error. Failure sets rank_error + increments rank_attempts
@@ -769,46 +875,38 @@ Deno.serve(async (req) => {
     //     (including ones ranked in earlier cycles). Rows just persisted above
     //     already had a translation attempt this run, so skip them. See
     //     runTranslateRetry for the full no-re-rank guarantees.
-    const retry = await runTranslateRetry(new Set(radar.map((a) => a.id)));
-    translateRetryAttempted = retry.attempted;
-    translateRetryResolved = retry.resolved;
+    // Budget-gated title_ar backfill over rows still missing it (never blocks).
+    if (!overBudget()) {
+      const retry = await runTranslateRetry(new Set(radar.map((a) => a.id)));
+      translateRetryAttempted = retry.attempted;
+      translateRetryResolved = retry.resolved;
+    }
   } catch (e) {
-    status = "failure";
+    status = "failed";
     errorMsg = e instanceof Error ? e.message : String(e);
   }
 
-  // 5) One diagnostics row per run.
-  await supabase.from("radar_rank_runs").insert({
-    trigger,
-    status,
-    started_at: startedAt.toISOString(),
-    finished_at: new Date().toISOString(),
-    attempted_count: attemptedCount,
-    ranked_count: rankedCount,
-    retry_count: retryCount,
-    unranked_error_count: unrankedErrorCount,
-    duplicate_new_count: dupCounts.new,
-    duplicate_already_count: dupCounts.already,
-    duplicate_possible_count: dupCounts.possible,
-    model,
-    openrouter_calls: calls,
-    prompt_tokens: usage.prompt,
-    completion_tokens: usage.completion,
-    total_tokens: usage.total,
-    cost: usage.cost,
-    duration_ms: Date.now() - startedAt.getTime(),
-    error: errorMsg,
-  });
+  // 5) Backlog + skipped accounting, then finalize the pre-created run row.
+  //    'partial' = the wall-clock budget was hit (some pulled rows deferred to a
+  //    later run); 'success' = clean; 'failed' = top-level exception.
+  backlogAfter = await countUnranked();
+  skippedCount = Math.max(0, backlogBefore - attemptedCount); // backlog not pulled this run
+  if (status !== "failed") status = budgetHit ? "partial" : "success";
+  await finalizeRun(status, errorMsg);
 
   return new Response(JSON.stringify({
-    ok: status === "success",
+    ok: status !== "failed",
     mode: "rank",
     status,
     attempted: attemptedCount,
     ranked: rankedCount,
     unranked_error: unrankedErrorCount,
     retry_count: retryCount,
+    skipped: skippedCount,
     vi_demoted: viDemotedCount,
+    backlog_before: backlogBefore,
+    backlog_after: backlogAfter,
+    budget_hit: budgetHit,
     duplicates: dupCounts,
     translate_retry: { attempted: translateRetryAttempted, resolved: translateRetryResolved },
     model,
