@@ -53,6 +53,17 @@ const POOL_HOURS = intEnv("ESL_POOL_HOURS", 30);
 const CLASSIFY_MAX = intEnv("ESL_CLASSIFY_MAX", 60);
 // How many days back to treat a cluster as "already handled by us".
 const HISTORY_DAYS = intEnv("ESL_HISTORY_DAYS", 3);
+// V1.1: Healthy-Life / Quality-of-Life material is not urgent — lifestyle-flagged
+// candidates get a LONGER (but bounded) freshness window than breaking medical
+// news, so an excellent useful story isn't lost merely for being a few days old.
+const L5_POOL_DAYS = intEnv("ESL_L5_POOL_DAYS", 14);
+// Bounds for the two pools (see the union in the handler). Lifestyle is capped
+// so the intake supply stays bounded and the pool never starves it.
+const BREAKING_POOL_MAX = intEnv("ESL_BREAKING_POOL_MAX", 600);
+const LIFE_POOL_MAX = intEnv("ESL_LIFE_POOL_MAX", 250);
+// Cap on headlines sent to the ONE canonical-merge LLM call (cost discipline;
+// generic health tokens can make the ambiguous set large).
+const MERGE_LLM_MAX = intEnv("ESL_MERGE_LLM_MAX", 45);
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -203,7 +214,7 @@ Respond with ONLY a JSON array [{"i":<index>,"dev":<integer>}], one object per i
 /** Bounded LLM confirmation over the ambiguous candidate set. Returns rowId →
  *  dev-group integer. Never throws; empty map on failure (→ no merges). */
 async function canonicalizeAmbiguous(groups: RadarRow[][]): Promise<Map<string, number>> {
-  const flat = groups.flat();
+  const flat = groups.flat().slice(0, MERGE_LLM_MAX); // cost cap on the single call
   const out = new Map<string, number>();
   if (flat.length < 2 || !OPENROUTER_KEY) return out;
   const lines = flat
@@ -433,19 +444,45 @@ Deno.serve(async (req) => {
   // Important+ OR flagged lifestyle (cheap proxy to also catch credible L5 that
   // ranked Low). publish_status IS NULL excludes rows already promoted/failed —
   // which also means a failed candidate is not retried every run.
-  const sinceISO = new Date(nowMs - POOL_HOURS * 3_600_000).toISOString();
-  const { data: poolRows } = await admin
+  // TWO bounded pools, unioned — because Healthy-Life material is far more
+  // numerous but LOW priority, a single priority-ordered query (capped by the
+  // server at 1000 rows) would starve it. So:
+  //   • breaking pool: important+ within the SHORT window, priority-ordered;
+  //   • lifestyle pool: lifestyle-flagged within the LONG (L5) window, FRESHEST
+  //     first, bounded to a modest size (keeps intake supply bounded, not a
+  //     firehose, and guarantees lifestyle is actually represented for the ESL).
+  const POOL_FIELDS = "id,provider,provider_uri,event_uri,title,title_ar,url,source_title,source_domain,language,country,published_at,first_seen_at,priority_score,priority_level,expected_category_slug,duplicate_status,matched_content_id,esl_lane,esl_story_type,esl_evidence_class,esl_gcc,esl_usefulness,publish_status";
+  const sinceBreakingISO = new Date(nowMs - POOL_HOURS * 3_600_000).toISOString();
+  const sinceL5ISO = new Date(nowMs - L5_POOL_DAYS * 86_400_000).toISOString();
+  const { data: breakingRows } = await admin
     .from("radar_shadow_articles")
-    .select("id,provider,provider_uri,event_uri,title,title_ar,url,source_title,source_domain,language,country,published_at,first_seen_at,priority_score,priority_level,expected_category_slug,duplicate_status,matched_content_id,esl_lane,esl_story_type,esl_evidence_class,esl_gcc,esl_usefulness,publish_status")
+    .select(POOL_FIELDS)
     .not("ranked_at", "is", null)
     .is("publish_status", null)
-    .gte("first_seen_at", sinceISO)
     .neq("duplicate_status", "already_in_salma")
-    .or("priority_level.in.(important,very_important),expected_category_slug.eq.lifestyle")
+    .in("priority_level", ["important", "very_important"])
+    .gte("first_seen_at", sinceBreakingISO)
     .order("priority_score", { ascending: false, nullsFirst: false })
-    .limit(1500);
+    .limit(BREAKING_POOL_MAX);
+  const { data: lifeRows } = await admin
+    .from("radar_shadow_articles")
+    .select(POOL_FIELDS)
+    .not("ranked_at", "is", null)
+    .is("publish_status", null)
+    .neq("duplicate_status", "already_in_salma")
+    .eq("expected_category_slug", "lifestyle")
+    .gte("first_seen_at", sinceL5ISO)
+    .order("first_seen_at", { ascending: false })
+    .limit(LIFE_POOL_MAX);
+  // Union, de-duplicated by id (a row can satisfy both).
+  const seenPoolIds = new Set<string>();
+  const poolRows: Record<string, unknown>[] = [];
+  for (const r of [...(breakingRows ?? []), ...(lifeRows ?? [])]) {
+    const id = String(r.id);
+    if (!seenPoolIds.has(id)) { seenPoolIds.add(id); poolRows.push(r); }
+  }
 
-  const rows: RadarRow[] = (poolRows ?? [])
+  const rows: RadarRow[] = poolRows
     .filter((r) => r.url)
     .map((r) => ({
       id: String(r.id),
@@ -535,7 +572,7 @@ Deno.serve(async (req) => {
   let canonLLMItems = 0;
   if (preGroups.length && preGroups.some((g) => g.some((r) => !r.esl_canonical_key))) {
     canonMap = await canonicalizeAmbiguous(preGroups);
-    canonLLMItems = preGroups.reduce((n, g) => n + g.length, 0);
+    canonLLMItems = Math.min(MERGE_LLM_MAX, preGroups.reduce((n, g) => n + g.length, 0));
   }
   const mergeKeyOf = (c: Cluster): string => {
     if (c.anchor.esl_canonical_key) return c.anchor.esl_canonical_key; // cached decision
@@ -688,6 +725,7 @@ Deno.serve(async (req) => {
       low_score: skipped.filter((s) => s.reason === "low_score").length,
       duplicate_topic: skipped.filter((s) => s.reason === "duplicate_topic").length,
       near_duplicate: skipped.filter((s) => s.reason === "near_duplicate").length,
+      l5_floor_displaced: skipped.filter((s) => s.reason === "l5_floor_displaced").length,
       lane_full: skipped.filter((s) => s.reason === "lane_full").length,
       cap_reached: skipped.filter((s) => s.reason === "cap_reached").length,
     },

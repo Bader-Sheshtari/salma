@@ -229,6 +229,59 @@ test("significantTokens bridges languages through the Arabic translation", () =>
   assert.ok(shared.includes("لقاح") && shared.includes("سرطان") && shared.includes("موديرنا"));
 });
 
+// Eight distinct medical stories across lanes (distinct titles → no topic collision).
+const MED8: [string, string][] = [
+  ["L1", "دواء جديد للسكري يظهر نتائج واعدة"],
+  ["L1", "علاج مناعي يطيل بقاء مرضى السرطان"],
+  ["L1", "لقاح ضد الالتهاب الرئوي يحصل موافقة"],
+  ["L2", "تفشي الحصبة في أوروبا يثير القلق"],
+  ["L2", "منظمة الصحة تحذر من موجة إنفلونزا"],
+  ["L2", "حملة تطعيم واسعة ضد شلل الأطفال"],
+  ["L3", "ذكاء اصطناعي يكشف أورام الثدي مبكرا"],
+  ["L3", "روبوت جراحي جديد يدخل المستشفيات"],
+];
+
+test("V1.1: soft L5 floor promotes credible Healthy-Life over the weakest medical pick", () => {
+  const medical = MED8.map(([ln, t], i) =>
+    scoreCandidate(row({ id: "m" + i, esl_lane: ln, source_domain: "reuters.com", priority_level: "important", esl_usefulness: 60, title: "m" + i, title_ar: t }), [], reg, emptyDayState(), NOW));
+  // Two credible L5 guidance stories: low priority + weak source (as real ones are),
+  // but fresh + useful enough to clear the min-score bar after the tier-5 penalty.
+  const l5Titles = ["عادة النوم المنتظم تحسن صحة القلب", "المشي بعد الوجبات يفيد الهضم والسكر"];
+  const l5 = l5Titles.map((t, i) =>
+    scoreCandidate(row({ id: "l" + i, esl_lane: "L5", esl_evidence_class: "guidance", esl_story_type: "guidance_explainer", source_domain: "regional-outlet.co", priority_level: "low", esl_usefulness: 90, title: "hl" + i, title_ar: t, published_at: "2026-08-20T11:30:00Z" }), [], reg, emptyDayState(), NOW));
+  const res = selectBalanced([...medical, ...l5], emptyDayState(), 8, defaultLaneConfig(8));
+  assert.equal(res.selected.length, 8);
+  assert.equal(res.selected.filter((c) => c.lane === "L5").length, 2); // floor met from credible supply
+  assert.ok(res.skipped.some((s) => s.reason === "l5_floor_displaced"));
+});
+
+test("V1.1: soft L5 floor never promotes a sub-quality (below-min-score) L5", () => {
+  const medical = MED8.map(([ln, t], i) =>
+    scoreCandidate(row({ id: "m" + i, esl_lane: ln, source_domain: "reuters.com", priority_level: "important", esl_usefulness: 60, title: "m" + i, title_ar: t }), [], reg, emptyDayState(), NOW));
+  // A weak L5: old + low usefulness + weak source → below min score. Must NOT be promoted.
+  const weakL5 = scoreCandidate(row({ id: "w", esl_lane: "L5", esl_evidence_class: "guidance", source_domain: "aggr.co", priority_level: "low", esl_usefulness: 10, title: "weak", title_ar: "نصيحة ضعيفة قديمة", published_at: "2026-08-12T00:00:00Z" }), [], reg, emptyDayState(), NOW);
+  const res = selectBalanced([...medical, weakL5], emptyDayState(), 8, defaultLaneConfig(8));
+  assert.equal(res.selected.filter((c) => c.lane === "L5").length, 0); // quality mandatory
+});
+
+test("V1.1: same Healthy-Life story in multiple languages → one cluster", () => {
+  // A "regular sleep timing & heart health" study surfacing via several languages,
+  // as radar-rank translated each to Arabic. They share نوم + منتظم (+ قلب/دراسة).
+  const sleep = [
+    row({ id: "s1", event_uri: "eng-1", source_domain: "reuters.com", title: "Regular sleep timing heart", title_ar: "دراسة جديدة: النوم المنتظم يقلل خطر أمراض القلب" }),
+    row({ id: "s2", event_uri: "spa-2", source_domain: "elpais.com", title: "Sueno regular corazon", title_ar: "النوم المنتظم وصحة القلب وفق بحث حديث" }),
+    row({ id: "s3", event_uri: "fra-3", source_domain: "lemonde.fr", title: "Sommeil regulier coeur", title_ar: "أهمية النوم المنتظم لصحة القلب - دراسة" }),
+  ];
+  const groups = candidateMergeGroups(sleep, WIN72, 2);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].length, 3);
+  // A different Healthy-Life development (walking after meals) must NOT join.
+  const walking = row({ id: "w", source_domain: "bbc.com", title: "Walking after meals", title_ar: "المشي بعد الوجبات يحسن سكر الدم وفق دراسة" });
+  const groups2 = candidateMergeGroups([...sleep, walking], WIN72, 2);
+  const big = groups2.find((g) => g.length > 1)!;
+  assert.ok(!big.some((r) => r.id === "w"));
+});
+
 test("near-duplicate backstop: a split-off same-development variant does not take a 2nd slot", () => {
   // Two Moderna/Merck variants the LLM merge left in separate clusters. Among a
   // set where "موديرنا"/"وميرك" are rare, they share ≥2 distinctive tokens.

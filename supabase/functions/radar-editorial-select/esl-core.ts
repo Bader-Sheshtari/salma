@@ -558,5 +558,49 @@ export function selectBalanced(
     const dom = normalizeDomain(c.rep.source_domain);
     if (dom) seenDomains.add(dom);
   }
+
+  // Soft Healthy-Life (L5) floor — aim for a couple of credible lifestyle stories
+  // a day WITHOUT forcing a quota. Healthy-Life material is almost always low
+  // priority and weak-source, so it rarely out-scores breaking medicine; but when
+  // credible L5 candidates exist (already past the evidence gate AND above the
+  // min-score bar) they should appear in the mix. This promotes the best such L5,
+  // displacing only the WEAKEST non-breaking, non-L5 pick, up to the floor. It
+  // never manufactures: if no eligible L5 exists, nothing changes (→ select fewer,
+  // or none). Quality stays mandatory — the evidence gate ran upstream.
+  const floorL5 = cfg.floors.L5 ?? 0;
+  if (floorL5 > 0) {
+    const isBreaking = (x: ScoredCandidate) => x.rep.priority_level === "very_important" && x.base >= cfg.breakingScore;
+    const selectedSet = new Set(selected);
+    let l5n = selected.filter((x) => x.lane === "L5").length;
+    const l5cands = ranked.filter((x) => x.lane === "L5" && x.score >= cfg.minScore && !selectedSet.has(x));
+    for (const cand of l5cands) {
+      if (l5n >= floorL5) break;
+      const cd = distinctive.get(cand)!;
+      const isDup = cd.size > 0 && selectedDistinctive.some((prev) => {
+        let s = 0;
+        for (const t of cd) if (prev.has(t) && ++s >= NEARDUP_MIN_SHARED) return true;
+        return false;
+      });
+      if (isDup) continue;
+      // Weakest displaceable pick: non-L5, non-breaking, lowest score.
+      let vi = -1;
+      for (let i = 0; i < selected.length; i++) {
+        const s = selected[i];
+        if (s.lane === "L5" || isBreaking(s)) continue;
+        if (vi < 0 || s.score < selected[vi].score) vi = i;
+      }
+      if (vi < 0) break; // nothing displaceable (all breaking / already L5)
+      const victim = selected[vi];
+      selected[vi] = cand;
+      selectedSet.delete(victim); selectedSet.add(cand);
+      // move victim → skipped; remove cand's earlier skip entry.
+      const ci = skipped.findIndex((sk) => sk.cand === cand);
+      if (ci >= 0) skipped.splice(ci, 1);
+      skipped.push({ cand: victim, reason: "l5_floor_displaced" });
+      if (cd.size) selectedDistinctive.push(cd);
+      l5n++;
+    }
+  }
+
   return { selected, skipped };
 }

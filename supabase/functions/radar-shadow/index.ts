@@ -17,18 +17,153 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const ER_HOST = "https://eventregistry.org";
 
-// Freshness guard: ignore articles published more than this many hours ago so
-// old items surfaced by a wide lookback don't flood the shadow store.
-const FRESHNESS_HOURS = 72;
-
-// First-run lookback when no checkpoint exists yet.
-const FIRST_RUN_LOOKBACK_MS = 6 * 60 * 60 * 1000; // 6h
-
 // Small overlap subtracted from the checkpoint so nothing slips between runs;
 // the unique index on (provider, provider_uri) absorbs the re-fetched overlap.
 const OVERLAP_MS = 5 * 60 * 1000; // 5min
 
+// Articles are ALWAYS stored under this provider (dedup + downstream ranking/ESL
+// treat every profile's rows uniformly); only the polling CHECKPOINT is per-profile.
 const PROVIDER = "eventregistry";
+
+// ---- Discovery profiles --------------------------------------------------
+// Two bounded intake profiles share this one function/table/pipeline:
+//   • "medical" (default): the original breaking-health topic page, 72h freshness,
+//     run every 2h. UNCHANGED.
+//   • "healthy_life" (V1.1): deliberately discovers credible Healthy-Life /
+//     Quality-of-Life material (sleep, activity, nutrition, prevention, wellbeing…).
+//     Because such stories are not urgent, it uses a LONGER freshness window
+//     (~14 days) and its OWN checkpoint, and is scheduled a few times a day. It
+//     does NOT lower any editorial standard — the ESL evidence gate + source-tier
+//     scoring still decide what is eligible; this only improves the SUPPLY.
+// Concepts are canonical English Wikipedia URIs (ER maps them language-agnostically,
+// so non-English lifestyle articles surface and cross-language canonical merging
+// in the ESL collapses duplicates).
+
+const c = (uri: string, wgt = 40) => ({ uri, wgt, required: false, excluded: false });
+
+type Profile = {
+  checkpointKey: string;      // radar_shadow_state row (per-profile polling cursor)
+  freshnessHours: number;     // store articles no older than this
+  firstRunLookbackMs: number; // lookback when no checkpoint exists yet
+  topicPage: Record<string, unknown>;
+};
+
+const MEDICAL_TOPIC_PAGE = {
+  autoAddArticles: true,
+  articleHasDuplicate: "keepAll",
+  articleHasEvent: "keepAll",
+  articleIsDuplicate: "skipDuplicates",
+  maxDaysBack: 7,
+  articleTreshWgt: 0,
+  eventTreshWgt: 0,
+  concepts: [
+    c("http://en.wikipedia.org/wiki/Health"),
+    c("http://en.wikipedia.org/wiki/Medicine"),
+    c("http://en.wikipedia.org/wiki/Public_health"),
+    c("http://en.wikipedia.org/wiki/Outbreak"),
+    c("http://en.wikipedia.org/wiki/Epidemic"),
+    c("http://en.wikipedia.org/wiki/Vaccine"),
+    c("http://en.wikipedia.org/wiki/Clinical_trial"),
+    c("http://en.wikipedia.org/wiki/Medication"),
+    c("http://en.wikipedia.org/wiki/Pharmaceutical_industry"),
+    c("http://en.wikipedia.org/wiki/Biotechnology"),
+    c("http://en.wikipedia.org/wiki/Medical_device"),
+    c("http://en.wikipedia.org/wiki/Hospital"),
+    c("http://en.wikipedia.org/wiki/Health_policy"),
+    c("http://en.wikipedia.org/wiki/EHealth"),
+    c("http://en.wikipedia.org/wiki/Artificial_intelligence_in_healthcare"),
+    c("http://en.wikipedia.org/wiki/Food_and_Drug_Administration", 30),
+    c("http://en.wikipedia.org/wiki/World_Health_Organization", 30),
+  ],
+  keywords: [],
+  categories: [
+    { uri: "news/Health", wgt: 30 },
+    { uri: "news/Science", wgt: 10 },
+  ],
+  sources: [],
+  sourceGroups: [],
+  sourceLocations: [],
+  locations: [],
+  langs: [], // empty = ALL languages (global/multilingual)
+  restrictToSetConcepts: false,
+  restrictToSetCategories: false,
+  restrictToSetSources: false,
+  restrictToSetLocations: false,
+  dataType: ["news"],
+};
+
+// Healthy-Life: health-anchored lifestyle concepts. Health anchors + a small
+// article weight threshold keep it health-focused (not e.g. coffee-market news);
+// the ESL evidence gate does the final quality control.
+const HEALTHY_LIFE_TOPIC_PAGE = {
+  autoAddArticles: true,
+  articleHasDuplicate: "keepAll",
+  articleHasEvent: "keepAll",
+  articleIsDuplicate: "skipDuplicates",
+  maxDaysBack: 14,
+  articleTreshWgt: 12, // require some topical weight → less off-topic noise
+  eventTreshWgt: 0,
+  concepts: [
+    // health anchors
+    c("http://en.wikipedia.org/wiki/Preventive_healthcare", 45),
+    c("http://en.wikipedia.org/wiki/Lifestyle_medicine", 45),
+    c("http://en.wikipedia.org/wiki/Health_promotion", 40),
+    // sleep
+    c("http://en.wikipedia.org/wiki/Sleep", 40),
+    c("http://en.wikipedia.org/wiki/Sleep_hygiene", 40),
+    c("http://en.wikipedia.org/wiki/Insomnia", 30),
+    // activity
+    c("http://en.wikipedia.org/wiki/Exercise", 40),
+    c("http://en.wikipedia.org/wiki/Walking", 35),
+    c("http://en.wikipedia.org/wiki/Physical_activity", 40),
+    c("http://en.wikipedia.org/wiki/Physical_fitness", 35),
+    c("http://en.wikipedia.org/wiki/Sedentary_lifestyle", 40),
+    // nutrition
+    c("http://en.wikipedia.org/wiki/Nutrition", 40),
+    c("http://en.wikipedia.org/wiki/Healthy_diet", 45),
+    c("http://en.wikipedia.org/wiki/Mediterranean_diet", 35),
+    c("http://en.wikipedia.org/wiki/Health_effects_of_coffee", 30),
+    // aging / prevention / mind / everyday health
+    c("http://en.wikipedia.org/wiki/Ageing", 30),
+    c("http://en.wikipedia.org/wiki/Longevity", 30),
+    c("http://en.wikipedia.org/wiki/Psychological_stress", 35),
+    c("http://en.wikipedia.org/wiki/Well-being", 35),
+    c("http://en.wikipedia.org/wiki/Mental_health", 35),
+    c("http://en.wikipedia.org/wiki/Women%27s_health", 30),
+    c("http://en.wikipedia.org/wiki/Men%27s_health", 30),
+    c("http://en.wikipedia.org/wiki/Travel_medicine", 25),
+  ],
+  keywords: [],
+  categories: [
+    { uri: "news/Health", wgt: 30 },
+    { uri: "news/Science", wgt: 15 },
+  ],
+  sources: [],
+  sourceGroups: [],
+  sourceLocations: [],
+  locations: [],
+  langs: [],
+  restrictToSetConcepts: false,
+  restrictToSetCategories: false,
+  restrictToSetSources: false,
+  restrictToSetLocations: false,
+  dataType: ["news"],
+};
+
+const PROFILES: Record<string, Profile> = {
+  medical: {
+    checkpointKey: "eventregistry",
+    freshnessHours: 72,
+    firstRunLookbackMs: 6 * 60 * 60 * 1000, // 6h
+    topicPage: MEDICAL_TOPIC_PAGE,
+  },
+  healthy_life: {
+    checkpointKey: "eventregistry:healthy_life",
+    freshnessHours: 14 * 24, // ~14 days — lifestyle is not urgent, but bounded
+    firstRunLookbackMs: 10 * 24 * 60 * 60 * 1000, // 10d seed on first run
+    topicPage: HEALTHY_LIFE_TOPIC_PAGE,
+  },
+};
 
 async function erPost(path: string, body: Record<string, unknown>, apiKey: string) {
   const res = await fetch(ER_HOST + path, {
@@ -63,66 +198,24 @@ Deno.serve(async (req) => {
   const trigger = req.method === "POST" ? "manual" : "manual";
   const supabase = createClient(supabaseUrl, serviceKey);
 
-  // 1) Read polling checkpoint (UTC). Advance only after a successful run.
+  // 0) Select the discovery profile (default 'medical' → unchanged behavior).
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  const profileName = (body as { profile?: unknown }).profile === "healthy_life" ? "healthy_life" : "medical";
+  const profile = PROFILES[profileName];
+  const topicPage = profile.topicPage;
+
+  // 1) Read this profile's polling checkpoint (UTC). Advance only on success.
   const { data: stateRow } = await supabase
     .from("radar_shadow_state")
     .select("last_poll_tm")
-    .eq("provider", PROVIDER)
+    .eq("provider", profile.checkpointKey)
     .maybeSingle();
 
   const checkpointBefore: string | null = stateRow?.last_poll_tm ?? null;
   const lookbackFrom = checkpointBefore
     ? new Date(new Date(checkpointBefore).getTime() - OVERLAP_MS)
-    : new Date(startedAt.getTime() - FIRST_RUN_LOOKBACK_MS);
+    : new Date(startedAt.getTime() - profile.firstRunLookbackMs);
   const onlyAfterTm = toErTm(lookbackFrom);
-
-  // Broad, global, multilingual healthcare topic-page (inline; identical shape
-  // to the tested preflight probe). Concepts use canonical English Wikipedia
-  // URIs, which ER maps language-agnostically so non-English articles surface.
-  const c = (uri: string, wgt = 40) => ({ uri, wgt, required: false, excluded: false });
-  const topicPage = {
-    autoAddArticles: true,
-    articleHasDuplicate: "keepAll",
-    articleHasEvent: "keepAll",
-    articleIsDuplicate: "skipDuplicates",
-    maxDaysBack: 7,
-    articleTreshWgt: 0,
-    eventTreshWgt: 0,
-    concepts: [
-      c("http://en.wikipedia.org/wiki/Health"),
-      c("http://en.wikipedia.org/wiki/Medicine"),
-      c("http://en.wikipedia.org/wiki/Public_health"),
-      c("http://en.wikipedia.org/wiki/Outbreak"),
-      c("http://en.wikipedia.org/wiki/Epidemic"),
-      c("http://en.wikipedia.org/wiki/Vaccine"),
-      c("http://en.wikipedia.org/wiki/Clinical_trial"),
-      c("http://en.wikipedia.org/wiki/Medication"),
-      c("http://en.wikipedia.org/wiki/Pharmaceutical_industry"),
-      c("http://en.wikipedia.org/wiki/Biotechnology"),
-      c("http://en.wikipedia.org/wiki/Medical_device"),
-      c("http://en.wikipedia.org/wiki/Hospital"),
-      c("http://en.wikipedia.org/wiki/Health_policy"),
-      c("http://en.wikipedia.org/wiki/EHealth"),
-      c("http://en.wikipedia.org/wiki/Artificial_intelligence_in_healthcare"),
-      c("http://en.wikipedia.org/wiki/Food_and_Drug_Administration", 30),
-      c("http://en.wikipedia.org/wiki/World_Health_Organization", 30),
-    ],
-    keywords: [],
-    categories: [
-      { uri: "news/Health", wgt: 30 },
-      { uri: "news/Science", wgt: 10 },
-    ],
-    sources: [],
-    sourceGroups: [],
-    sourceLocations: [],
-    locations: [],
-    langs: [], // empty = ALL languages (global/multilingual)
-    restrictToSetConcepts: false,
-    restrictToSetCategories: false,
-    restrictToSetSources: false,
-    restrictToSetLocations: false,
-    dataType: ["news"],
-  };
 
   let usageInfo: unknown = null;
   let returnedCount = 0;
@@ -156,15 +249,19 @@ Deno.serve(async (req) => {
     const usageAfter = await erPost("/api/v1/usage", {}, apiKey);
     usageInfo = { before: usageBefore.json ?? null, after: usageAfter.json ?? null };
 
-    const results: any[] = (artRes.json as any)?.articles?.results ?? [];
-    errorMsg = (artRes.json as any)?.error ?? (artRes.json as any)?.articles?.error ?? null;
+    const artJson = (artRes.json ?? {}) as Record<string, unknown>;
+    const articlesObj = (artJson.articles ?? {}) as Record<string, unknown>;
+    const results: Record<string, unknown>[] = Array.isArray(articlesObj.results)
+      ? (articlesObj.results as Record<string, unknown>[])
+      : [];
+    errorMsg = (artJson.error as string | null) ?? (articlesObj.error as string | null) ?? null;
     returnedCount = results.length;
 
     if (!artRes.ok || errorMsg) {
       status = "failure";
       if (!errorMsg) errorMsg = `provider HTTP ${artRes.status}`;
     } else {
-      const freshnessCutoff = Date.now() - FRESHNESS_HOURS * 60 * 60 * 1000;
+      const freshnessCutoff = Date.now() - profile.freshnessHours * 60 * 60 * 1000;
 
       // Normalize + freshness-filter the returned set.
       type Norm = {
@@ -222,7 +319,7 @@ Deno.serve(async (req) => {
           .select("provider_uri")
           .eq("provider", PROVIDER)
           .in("provider_uri", candidateUris);
-        existing = new Set((existingRows ?? []).map((e: any) => e.provider_uri));
+        existing = new Set((existingRows ?? []).map((e) => (e as { provider_uri: string }).provider_uri));
       }
 
       // Create the run row first so inserted articles can reference it.
@@ -260,10 +357,10 @@ Deno.serve(async (req) => {
         insertedCount = count ?? toInsert.length;
       }
 
-      // Advance the checkpoint only after a successful run, to run start (UTC).
+      // Advance this profile's checkpoint only after a successful run.
       const checkpointAfter = startedAt.toISOString();
       await supabase.from("radar_shadow_state").upsert(
-        { provider: PROVIDER, last_poll_tm: checkpointAfter, updated_at: new Date().toISOString() },
+        { provider: profile.checkpointKey, last_poll_tm: checkpointAfter, updated_at: new Date().toISOString() },
         { onConflict: "provider" },
       );
 
@@ -282,6 +379,7 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({
         ok: true,
         mode: "shadow",
+        profile: profileName,
         run_id: runId,
         checkpoint_before: checkpointBefore,
         checkpoint_after: checkpointAfter,
