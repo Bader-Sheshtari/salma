@@ -14,6 +14,7 @@ import {
   setCategory,
   type BulkActionResult,
 } from "../../actions";
+import { REJECT_REASONS } from "@/lib/editorial-feedback";
 
 const STATUS_LABEL: Record<string, string> = {
   published: "منشور",
@@ -45,6 +46,65 @@ function dayInfo(iso: string): { key: number; label: string } {
 }
 
 type Group = { key: string; label: string; accent?: string; items: Content[] };
+
+/**
+ * Reject button with an optional one-click structured reason. First click
+ * opens a small menu (quick reject with no reason stays one extra click);
+ * picking a reason submits immediately. The reason feeds the observational
+ * editorial-feedback loop — it never changes ranking or selection.
+ */
+function RejectButton({ id, onDone }: { id: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, startReject] = useTransition();
+
+  function submit(reason: string | null) {
+    setOpen(false);
+    startReject(async () => {
+      const fd = new FormData();
+      fd.set("id", id);
+      if (reason) fd.set("reason", reason);
+      await rejectContent(fd);
+      onDone();
+    });
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => setOpen((v) => !v)}
+        className="rounded-lg border border-coral/50 px-3 py-1.5 text-[12.5px] font-semibold text-coral hover:bg-cream disabled:opacity-50"
+      >
+        رفض
+      </button>
+      {open ? (
+        <div className="absolute end-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-xl border border-line bg-white shadow-lg">
+          <button
+            type="button"
+            onClick={() => submit(null)}
+            className="block w-full px-3 py-2 text-start text-[12.5px] font-bold text-coral hover:bg-cream"
+          >
+            رفض بدون سبب
+          </button>
+          <div className="border-t border-line px-3 py-1.5 text-[10.5px] font-semibold text-gray">
+            أو اختر سبب الرفض:
+          </div>
+          {REJECT_REASONS.map((r) => (
+            <button
+              key={r.code}
+              type="button"
+              onClick={() => submit(r.code)}
+              className="block w-full px-3 py-1.5 text-start text-[12.5px] hover:bg-cream"
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export default function ContentInbox({
   items,
@@ -407,12 +467,7 @@ export default function ContentInbox({
                           </form>
                         ) : null}
                         {c.status === "pending" ? (
-                          <form action={rejectContent}>
-                            <input type="hidden" name="id" value={c.id} />
-                            <button className="rounded-lg border border-coral/50 px-3 py-1.5 text-[12.5px] font-semibold text-coral hover:bg-cream">
-                              رفض
-                            </button>
-                          </form>
+                          <RejectButton id={c.id} onDone={() => router.refresh()} />
                         ) : null}
                         <form action={softDeleteContent}>
                           <input type="hidden" name="id" value={c.id} />

@@ -7,6 +7,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAdmin, isManagerRole, type Profile } from "@/lib/auth";
 import { slugify } from "@/lib/slug";
 import type { TablesInsert, TablesUpdate } from "@/lib/supabase/database.types";
+import { normalizeRejectReason } from "@/lib/editorial-feedback";
+import {
+  SNAPSHOT_FIELDS,
+  ensureAiBaseline,
+  logFeedbackEvents,
+  recordPublishFeedback,
+  saveChangeEvents,
+  type ContentSnapshot,
+} from "./feedback-log";
 
 export type SaveResult = { error: string } | null;
 
@@ -22,7 +31,7 @@ export async function saveContent(
   _prev: ContentSaveResult,
   formData: FormData,
 ): Promise<ContentSaveResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const supabase = await createClient();
 
   const id = String(formData.get("id") ?? "").trim();
@@ -73,8 +82,18 @@ export async function saveContent(
   } satisfies Partial<TablesInsert<"content">>;
 
   let contentId = id;
+  // Pre-edit snapshot for the editorial feedback loop (observational only):
+  // captured BEFORE the update so the AI-original baseline and change events
+  // can be derived. Feedback capture is best-effort and never blocks saving.
+  let prevRow: ContentSnapshot | null = null;
 
   if (id) {
+    const { data: prevData } = await supabase
+      .from("content")
+      .select(SNAPSHOT_FIELDS)
+      .eq("id", id)
+      .maybeSingle();
+    prevRow = (prevData as unknown as ContentSnapshot) ?? null;
     const { error } = await supabase
       .from("content")
       .update(payload as unknown as never)
@@ -139,6 +158,35 @@ export async function saveContent(
     await supabase.from("content_media").insert(mediaRows as unknown as never);
   }
 
+  // Editorial feedback (observational): baseline + change events. Best-effort;
+  // a feedback failure never affects the save that already succeeded.
+  if (prevRow) {
+    try {
+      await ensureAiBaseline(prevRow);
+      const events = saveChangeEvents(
+        prevRow,
+        { category_slug, source_url, source_name, cover_image_url },
+        admin.id,
+      );
+      if (prevRow.status === "published" && status !== "published") {
+        events.push({
+          content_id: contentId,
+          action: "unpublish",
+          actor_id: admin.id,
+          origin: prevRow.origin,
+          before_value: "published",
+          after_value: status,
+        });
+      }
+      await logFeedbackEvents(events);
+      if (prevRow.status !== "published" && status === "published") {
+        await recordPublishFeedback(contentId, admin.id, prevRow.status);
+      }
+    } catch (e) {
+      console.error("[feedback] saveContent capture failed:", e);
+    }
+  }
+
   revalidatePath("/admin/content");
   revalidatePath("/");
   // Stay on the editor and surface next-action buttons (return to list / publish
@@ -148,27 +196,45 @@ export async function saveContent(
 }
 
 export async function setStatus(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const supabase = await createClient();
   const id = String(formData.get("id"));
   const status = String(formData.get("status"));
+  const { data } = await supabase
+    .from("content")
+    .select("status,origin,deleted_at")
+    .eq("id", id)
+    .maybeSingle();
+  const row = data as { status: string; origin: string; deleted_at: string | null } | null;
   // Publication is only ever permitted from `pending` — the intended flow is
   // Writer → Editorial Director → Fidelity → pending → human review → publish.
   // A draft/rejected/published/deleted row can never be published here.
-  if (status === "published") {
-    const { data } = await supabase
-      .from("content")
-      .select("status,deleted_at")
-      .eq("id", id)
-      .maybeSingle();
-    const row = data as { status: string; deleted_at: string | null } | null;
-    if (!row || row.deleted_at || row.status !== "pending") return;
-  }
+  if (status === "published" && (!row || row.deleted_at || row.status !== "pending")) return;
   const patch =
     status === "published"
       ? { status, published_at: new Date().toISOString() }
       : { status };
-  await supabase.from("content").update(patch as unknown as never).eq("id", id);
+  const { error } = await supabase
+    .from("content")
+    .update(patch as unknown as never)
+    .eq("id", id);
+  // Editorial feedback (observational, best-effort — never affects the flip).
+  if (!error && row) {
+    if (status === "published") {
+      await recordPublishFeedback(id, admin.id, row.status);
+    } else if (row.status === "published" && status !== "published") {
+      await logFeedbackEvents([
+        {
+          content_id: id,
+          action: "unpublish",
+          actor_id: admin.id,
+          origin: row.origin,
+          before_value: "published",
+          after_value: status,
+        },
+      ]);
+    }
+  }
   revalidatePath("/admin/content");
   revalidatePath("/");
 }
@@ -193,13 +259,37 @@ export async function softDeleteContent(formData: FormData) {
  * stamps `published_at` — publishing remains a separate, explicit action.
  */
 export async function rejectContent(formData: FormData) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const supabase = await createClient();
   const id = String(formData.get("id"));
-  await supabase
+  // Optional lightweight structured reason (clamped to the small taxonomy —
+  // anything else is treated as "no reason given").
+  const reason = normalizeRejectReason(formData.get("reason"));
+  const { data } = await supabase
+    .from("content")
+    .select("status,origin,deleted_at")
+    .eq("id", id)
+    .maybeSingle();
+  const row = data as { status: string; origin: string; deleted_at: string | null } | null;
+  if (!row || row.deleted_at) return;
+  const { error } = await supabase
     .from("content")
     .update({ status: "rejected" } as unknown as never)
     .eq("id", id);
+  // Editorial feedback (observational, best-effort — never affects the reject).
+  if (!error) {
+    await logFeedbackEvents([
+      {
+        content_id: id,
+        action: "reject",
+        actor_id: admin.id,
+        origin: row.origin,
+        reason,
+        before_value: row.status,
+        after_value: "rejected",
+      },
+    ]);
+  }
   revalidatePath("/admin/content");
   revalidatePath("/");
 }
@@ -249,7 +339,7 @@ async function contentRows(
  * published / deleted rows are skipped with an exact reason, never force-published.
  */
 export async function bulkSetStatus(ids: string[], status: string): Promise<BulkActionResult> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const supabase = await createClient();
   const clean = [...new Set((ids ?? []).map(String))].filter(Boolean);
   const rows = await contentRows(supabase, clean);
@@ -276,7 +366,11 @@ export async function bulkSetStatus(ids: string[], status: string): Promise<Bulk
     }
     const { error } = await supabase.from("content").update(patch as unknown as never).eq("id", id);
     if (error) failed.push({ id, title: row.title, reason: error.message });
-    else succeeded++;
+    else {
+      succeeded++;
+      // Editorial feedback (observational, best-effort per row).
+      if (status === "published") await recordPublishFeedback(id, admin.id, row.status);
+    }
   }
   revalidatePath("/admin/content");
   revalidatePath("/");
@@ -323,7 +417,7 @@ export async function setCategory(
   id: string,
   slug: string,
 ): Promise<{ error: string } | { ok: true }> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const supabase = await createClient();
   const category_slug = String(slug ?? "").trim() || null;
   if (category_slug) {
@@ -334,11 +428,30 @@ export async function setCategory(
       .maybeSingle();
     if (!data) return { error: "قسم غير معروف." };
   }
+  const { data: prevData } = await supabase
+    .from("content")
+    .select("category_slug,origin")
+    .eq("id", String(id))
+    .maybeSingle();
+  const prev = prevData as { category_slug: string | null; origin: string } | null;
   const { error } = await supabase
     .from("content")
     .update({ category_slug } as unknown as never)
     .eq("id", String(id));
   if (error) return { error: "تعذّر تحديث القسم." };
+  // Editorial feedback (observational): AI-predicted category → editor choice.
+  if (prev && (prev.category_slug ?? "") !== (category_slug ?? "")) {
+    await logFeedbackEvents([
+      {
+        content_id: String(id),
+        action: "category_change",
+        actor_id: admin.id,
+        origin: prev.origin,
+        before_value: prev.category_slug,
+        after_value: category_slug,
+      },
+    ]);
+  }
   revalidatePath("/admin/content");
   revalidatePath("/");
   return { ok: true };
