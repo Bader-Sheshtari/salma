@@ -90,6 +90,32 @@ type Card = {
   regulatory_action?: string | null;
 };
 
+/** Provenance note: the card was derived from a fallback source because the
+ *  identified editorial primary could not be fetched by the sanctioned
+ *  extractor. Rendered on both complete and non-complete cards so the reviewer
+ *  never assumes the analysis covered the inaccessible primary. */
+function SourceProvenanceNote({ evidence }: { evidence: EvidenceIntelligenceRow }) {
+  const s = evidence.evidence_source_status;
+  if (s !== "discovery_source_fallback" && s !== "supporting_source_analyzed") return null;
+  const analyzedLabel = s === "supporting_source_analyzed" ? "مصدر داعم" : "مصدر ثانوي (مصدر الاكتشاف)";
+  return (
+    <div className="mt-2 rounded-lg border border-line bg-cream px-3 py-2 text-[12px] leading-6 text-ink">
+      <span className="font-semibold">مصدر التحليل:</span> {analyzedLabel}
+      {evidence.analyzed_domain ? (
+        <span dir="ltr" className="font-sans"> ({evidence.analyzed_domain})</span>
+      ) : null}
+      {evidence.editorial_primary_domain ? (
+        <>
+          {" — "}
+          <span className="font-semibold">المصدر الأولي المحدد:</span>{" "}
+          <span dir="ltr" className="font-sans">{evidence.editorial_primary_domain}</span>{" "}
+          (تعذّر جلبه آليًا؛ البطاقة لا تعكس محتواه)
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
   if (!value) return null;
   return (
@@ -123,6 +149,7 @@ export function EvidencePanel({ evidence }: { evidence: EvidenceIntelligenceRow 
       <div className="mb-5 max-w-2xl rounded-2xl border border-line bg-white p-4">
         {heading}
         <div className="text-[12.5px] text-gray">{notice}</div>
+        <SourceProvenanceNote evidence={evidence} />
       </div>
     );
   }
@@ -198,6 +225,8 @@ export function EvidencePanel({ evidence }: { evidence: EvidenceIntelligenceRow 
           ⚠ {card.editorial_caution}
         </div>
       ) : null}
+
+      <SourceProvenanceNote evidence={evidence} />
 
       {evidence.analyzed_url ? (
         <div className="mt-2 font-sans text-[10.5px] text-gray" dir="ltr">

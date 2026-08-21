@@ -142,6 +142,16 @@ export type EvidenceIntelligenceRow = {
   analyzed_url: string | null;
   analyzed_domain: string | null;
   evidence_strength: string | null;
+  // Provenance: which source the card was actually derived from, and the
+  // escalation-identified editorial primary when it could not be analyzed.
+  evidence_source_status:
+    | "primary_source_analyzed"
+    | "supporting_source_analyzed"
+    | "discovery_source_fallback"
+    | "insufficient_source"
+    | null;
+  editorial_primary_url: string | null;
+  editorial_primary_domain: string | null;
   card: Record<string, unknown> | null;
   model: string | null;
   updated_at: string;
@@ -157,7 +167,8 @@ export type EvidenceIntelligenceRow = {
 export async function getEvidenceForContent(id: string): Promise<EvidenceIntelligenceRow | null> {
   const supabase = await createClient();
   const client = supabase as unknown as SupabaseClient;
-  const cols = "analysis_status,analyzed_url,analyzed_domain,evidence_strength,card,model,updated_at";
+  const cols =
+    "analysis_status,analyzed_url,analyzed_domain,evidence_strength,evidence_source_status,editorial_primary_url,editorial_primary_domain,card,model,updated_at";
   const { data: direct } = await client
     .from("radar_evidence_intelligence")
     .select(cols)

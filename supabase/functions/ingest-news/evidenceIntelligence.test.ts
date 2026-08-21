@@ -13,6 +13,7 @@ import {
   type EvidenceDeps,
   type EvidenceInput,
   EVIDENCE_MAX_SOURCE_CHARS,
+  evidenceSourceStatus,
   evidenceWriterGuidance,
   parseEvidenceOutput,
   renderEvidenceGuidanceBlock,
@@ -353,4 +354,82 @@ test("source text is capped in the extraction messages", () => {
   const messages = buildEvidenceMessages({ ...BASE_INPUT, sourceText: long });
   const user = messages[1].content;
   assert.ok(user.length < EVIDENCE_MAX_SOURCE_CHARS + 1000);
+});
+
+// ---- evidence-analysis source provenance -----------------------------------
+
+test("evidenceSourceStatus maps source kind, insufficient overrides", () => {
+  assert.equal(evidenceSourceStatus("primary", "complete"), "primary_source_analyzed");
+  assert.equal(evidenceSourceStatus("supporting", "complete"), "supporting_source_analyzed");
+  assert.equal(evidenceSourceStatus("discovery_fallback", "complete"), "discovery_source_fallback");
+  assert.equal(evidenceSourceStatus("discovery_fallback", "not_applicable"), "discovery_source_fallback");
+  assert.equal(evidenceSourceStatus("primary", "insufficient_source"), "insufficient_source");
+  assert.equal(evidenceSourceStatus("discovery_fallback", "insufficient_source"), "insufficient_source");
+});
+
+test("fallback analyses carry the provenance note; primary analyses do not", () => {
+  const primaryMsg = buildEvidenceMessages(BASE_INPUT)[1].content;
+  assert.ok(!primaryMsg.includes("analysis_source_note"));
+  const fallbackMsg = buildEvidenceMessages({
+    ...BASE_INPUT,
+    sourceKind: "discovery_fallback",
+    editorialPrimaryUrl: "https://www.science.org/content/article/x",
+  })[1].content;
+  assert.ok(fallbackMsg.includes("analysis_source_note"));
+  assert.ok(fallbackMsg.includes("could NOT be retrieved"));
+  assert.ok(fallbackMsg.includes("science.org"));
+  const supportingMsg = buildEvidenceMessages({ ...BASE_INPUT, sourceKind: "supporting" })[1].content;
+  assert.ok(supportingMsg.includes("SUPPORTING"));
+});
+
+test("fallback-source cards are confidence-confined (high → medium)", async () => {
+  const deps = depsWith(); // chat returns confidence "high"
+  const fallback = await analyzeEvidence(
+    { ...BASE_INPUT, sourceKind: "discovery_fallback", editorialPrimaryUrl: "https://www.science.org/x" },
+    deps,
+  );
+  assert.equal(fallback.status, "complete");
+  assert.equal(fallback.card?.confidence, "medium");
+  assert.equal(fallback.source_status, "discovery_source_fallback");
+  // The primary path keeps the model's own confidence untouched.
+  const primary = await analyzeEvidence(BASE_INPUT, depsWith());
+  assert.equal(primary.card?.confidence, "high");
+  assert.equal(primary.source_status, "primary_source_analyzed");
+});
+
+test("persisted outcomes carry the source status", async () => {
+  const deps = depsWith();
+  await analyzeEvidence({ ...BASE_INPUT, sourceKind: "supporting", editorialPrimaryUrl: "https://x.org/p" }, deps);
+  const put = deps.calls.put[0] as { sourceStatus: string };
+  assert.equal(put.sourceStatus, "supporting_source_analyzed");
+});
+
+test("model-insufficient outcome records insufficient_source provenance even on fallback", async () => {
+  const deps = depsWith({ chat: async () => ({ ok: true, content: rctResponse({ source_sufficiency: "insufficient" }) }) });
+  const out = await analyzeEvidence({ ...BASE_INPUT, sourceKind: "discovery_fallback" }, deps);
+  assert.equal(out.status, "insufficient_source");
+  assert.equal(out.source_status, "insufficient_source");
+});
+
+test("cached outcome falls back to kind-derived source status when column is absent", async () => {
+  const cachedCard = cardOf(rctResponse());
+  const deps = depsWith({ cacheGet: async () => ({ status: "complete", card: cachedCard }) });
+  const out = await analyzeEvidence({ ...BASE_INPUT, sourceKind: "discovery_fallback" }, deps);
+  assert.equal(out.cached, true);
+  assert.equal(out.source_status, "discovery_source_fallback");
+});
+
+test("writer guidance never carries numbers — card details cannot masquerade as source facts", () => {
+  const card = cardOf(rctResponse({
+    evidence_type: "cohort",
+    claim_relationship: "association_only",
+    peer_review_status: "preprint",
+    source_independence: "company_only",
+    evidence_strength: "limited",
+    sample_size: 85321,
+    trial: null,
+  }));
+  const block = renderEvidenceGuidanceBlock(card);
+  assert.ok(block.length > 0);
+  assert.ok(!/[0-9٠-٩]/.test(block), "guidance must contain no digits");
 });

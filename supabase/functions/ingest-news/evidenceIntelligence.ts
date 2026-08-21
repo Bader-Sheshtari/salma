@@ -109,11 +109,35 @@ export type EvidenceCard = {
 
 export type EvidenceStatus = "complete" | "not_applicable" | "insufficient_source" | "analysis_failed";
 
+// Which source the analysis actually ran over, relative to the editorial
+// primary Primary Source Escalation identified. The escalated primary may be
+// unfetchable by the sanctioned extractor (e.g. a hard bot-block); the analysis
+// then falls back to an already-validated fetchable source and must SAY SO —
+// the card must never imply it was derived from the inaccessible primary.
+export type EvidenceSourceKind = "primary" | "supporting" | "discovery_fallback";
+
+export type EvidenceSourceStatus =
+  | "primary_source_analyzed"     // analyzed the editorial primary itself
+  | "supporting_source_analyzed"  // primary unfetchable → analyzed the validated supporting source
+  | "discovery_source_fallback"   // primary unfetchable → analyzed the discovery article
+  | "insufficient_source";        // no analyzed source yielded usable evidence text
+
+/** Provenance status for the audit row: the source kind that was analyzed,
+ *  overridden by insufficient_source when the analysis found nothing usable. */
+export function evidenceSourceStatus(kind: EvidenceSourceKind, status: EvidenceStatus): EvidenceSourceStatus {
+  if (status === "insufficient_source") return "insufficient_source";
+  if (kind === "supporting") return "supporting_source_analyzed";
+  if (kind === "discovery_fallback") return "discovery_source_fallback";
+  return "primary_source_analyzed";
+}
+
 export type EvidenceOutcome = {
   status: EvidenceStatus;
   card: EvidenceCard | null; // present only for complete / not_applicable(with card)
   cached: boolean;
   reason: string | null;     // compact gate/failure reason for the audit row
+  // Provenance of what was analyzed (see EvidenceSourceStatus above).
+  source_status: EvidenceSourceStatus;
 };
 
 // Bumped when the analysis prompt/schema changes; part of the cache identity.
@@ -360,12 +384,21 @@ export function buildEvidenceMessages(input: {
   sourceDomain: string;
   sourceTitle: string | null;
   sourceText: string;
+  sourceKind?: EvidenceSourceKind;
+  editorialPrimaryUrl?: string | null;
 }): { role: string; content: string }[] {
+  const kind = input.sourceKind ?? "primary";
+  // Fallback provenance note: the model must attribute details to THIS text
+  // only, never fill gaps as if it had read the inaccessible primary.
+  const fallbackNote = kind !== "primary"
+    ? `analysis_source_note: this text is a ${kind === "supporting" ? "SUPPORTING" : "SECONDARY (discovery)"} account of the development. The identified primary source${input.editorialPrimaryUrl ? ` (${input.editorialPrimaryUrl})` : ""} could NOT be retrieved. Extract ONLY what this text itself supports; where it is vaguer than the primary would be, return null/unknown rather than inferring.`
+    : "";
   const user = [
     `story_type: ${input.storyType}`,
     `source_domain: ${input.sourceDomain}`,
     `source_url: ${input.sourceUrl}`,
     input.sourceTitle ? `source_title: ${input.sourceTitle}` : "",
+    fallbackNote,
     "",
     "SOURCE TEXT:",
     input.sourceText.slice(0, EVIDENCE_MAX_SOURCE_CHARS),
@@ -450,13 +483,22 @@ export type EvidenceInput = {
   sourceDomain: string;
   sourceTitle: string | null;
   sourceText: string;
+  // Which source this text came from relative to the editorial primary
+  // (default "primary": the analyzed source IS the editorial primary).
+  sourceKind?: EvidenceSourceKind;
+  // The escalation-identified editorial primary when it is NOT the analyzed
+  // source (unfetchable primary); null when the analyzed source is the primary.
+  editorialPrimaryUrl?: string | null;
 };
 
 export type EvidenceDeps = {
   /** Cached outcome for this canonical cluster, or null. */
-  cacheGet: (clusterKey: string) => Promise<{ status: EvidenceStatus; card: EvidenceCard | null } | null>;
+  cacheGet: (clusterKey: string) => Promise<{ status: EvidenceStatus; card: EvidenceCard | null; sourceStatus?: EvidenceSourceStatus | null } | null>;
   /** Persist the outcome (audit + cache). Best-effort upstream; may throw here. */
-  cachePut: (outcome: { status: EvidenceStatus; card: EvidenceCard | null; reason: string | null }, input: EvidenceInput) => Promise<void>;
+  cachePut: (
+    outcome: { status: EvidenceStatus; card: EvidenceCard | null; reason: string | null; sourceStatus: EvidenceSourceStatus },
+    input: EvidenceInput,
+  ) => Promise<void>;
   /** The ONE bounded structured extraction call. */
   chat: (messages: { role: string; content: string }[]) => Promise<{ ok: true; content: string } | { ok: false; reason: string }>;
 };
@@ -465,13 +507,23 @@ export type EvidenceDeps = {
  *  cache → ONE LLM extraction → strict validation. Never throws; every failure
  *  becomes a safe analysis_failed outcome (no fallback conclusions). */
 export async function analyzeEvidence(input: EvidenceInput, deps: EvidenceDeps): Promise<EvidenceOutcome> {
+  const kind: EvidenceSourceKind = input.sourceKind ?? "primary";
   try {
     const cached = await deps.cacheGet(input.clusterKey).catch(() => null);
-    if (cached) return { status: cached.status, card: cached.card, cached: true, reason: null };
+    if (cached) {
+      return {
+        status: cached.status,
+        card: cached.card,
+        cached: true,
+        reason: null,
+        source_status: cached.sourceStatus ?? evidenceSourceStatus(kind, cached.status),
+      };
+    }
 
     const persist = async (o: { status: EvidenceStatus; card: EvidenceCard | null; reason: string | null }): Promise<EvidenceOutcome> => {
-      try { await deps.cachePut(o, input); } catch { /* audit best-effort */ }
-      return { ...o, cached: false };
+      const sourceStatus = evidenceSourceStatus(kind, o.status);
+      try { await deps.cachePut({ ...o, sourceStatus }, input); } catch { /* audit best-effort */ }
+      return { ...o, cached: false, source_status: sourceStatus };
     };
 
     // Deterministic gate 1 — story types where evidence analysis never applies.
@@ -491,16 +543,22 @@ export async function analyzeEvidence(input: EvidenceInput, deps: EvidenceDeps):
     if (parsed.sourceSufficiency === "insufficient") {
       return await persist({ status: "insufficient_source", card: null, reason: "model_reported_insufficient_source" });
     }
-    if (parsed.card.applicability === "not_applicable") {
-      return await persist({ status: "not_applicable", card: parsed.card, reason: "model_not_applicable" });
+    // Fallback provenance confinement: a card built from a supporting/discovery
+    // account of an unfetchable primary can never carry HIGH extraction
+    // confidence — the analyzed text is one step removed from the evidence.
+    const card = parsed.card;
+    if (kind !== "primary" && card.confidence === "high") card.confidence = "medium";
+    if (card.applicability === "not_applicable") {
+      return await persist({ status: "not_applicable", card, reason: "model_not_applicable" });
     }
-    return await persist({ status: "complete", card: parsed.card, reason: null });
+    return await persist({ status: "complete", card, reason: null });
   } catch (e) {
     return {
       status: "analysis_failed",
       card: null,
       cached: false,
       reason: e instanceof Error ? `unexpected:${e.message.slice(0, 120)}` : "unexpected_error",
+      source_status: evidenceSourceStatus(kind, "analysis_failed"),
     };
   }
 }

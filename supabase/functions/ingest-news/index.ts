@@ -77,6 +77,7 @@ import { type ErPost, fetchErArticleSource } from "./erSourceFallback.ts";
 import {
   escalate,
   domainOf as escDomainOf,
+  roleTier as escRoleTier,
   type EscalationInput,
   type EscalationResult,
   type RegistryEntry as EscRegistryEntry,
@@ -94,6 +95,8 @@ import {
   type EvidenceCard,
   type EvidenceInput,
   type EvidenceOutcome,
+  type EvidenceSourceKind,
+  type EvidenceSourceStatus,
   type EvidenceStatus,
   EVIDENCE_PROMPT_VERSION,
   EVIDENCE_RESPONSE_FORMAT,
@@ -1340,33 +1343,80 @@ async function runEscalation(
 
 // ---- Evidence Intelligence (bounded, ≤ selected/day) ----------------------
 
+/** The source Evidence Intelligence (and the Writer) can actually work from.
+ *  Escalation may pick a primary the sanctioned extractor cannot fetch (e.g. a
+ *  hard bot-block); this resolves, with at most two bounded probe fetches, the
+ *  strongest FETCHABLE source in the order primary → validated supporting →
+ *  discovery — while preserving the identified primary for provenance. */
+type ResolvedEvidenceSource = {
+  kind: EvidenceSourceKind;
+  url: string;                // the source the Writer/analysis will fetch
+  primaryUrl: string | null;  // identified primary when it is NOT `url`
+};
+
+async function resolveAnalysisSource(
+  esc: EscalationResult,
+  discoveryUrl: string,
+): Promise<ResolvedEvidenceSource> {
+  const primary = esc.selected_editorial_source.url;
+  const probe = async (url: string): Promise<boolean> => {
+    try {
+      const r = await fetchSourceText({
+        url,
+        registeredDomain: escDomainOf(url),
+        sourceName: null,
+        rawFetch: denoRawFetch,
+        resolveDns: denoResolveDns,
+      });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  };
+  if (await probe(primary)) return { kind: "primary", url: primary, primaryUrl: null };
+  const supporting = esc.supporting_url;
+  if (supporting && /^https?:\/\//i.test(supporting) && await probe(supporting)) {
+    return { kind: "supporting", url: supporting, primaryUrl: primary };
+  }
+  return { kind: "discovery_fallback", url: discoveryUrl, primaryUrl: primary };
+}
+
 /** Real DB deps for analyzeEvidence: per-cluster cache + audit row in the
  *  radar_evidence_intelligence sidecar. Rows are keyed by canonical cluster so
  *  the same development is analyzed exactly once. */
 function evidenceDbDeps(admin: SupabaseClient): {
-  cacheGet: (clusterKey: string) => Promise<{ status: EvidenceStatus; card: EvidenceCard | null } | null>;
-  cachePut: (o: { status: EvidenceStatus; card: EvidenceCard | null; reason: string | null }, input: EvidenceInput) => Promise<void>;
+  cacheGet: (clusterKey: string) => Promise<{ status: EvidenceStatus; card: EvidenceCard | null; sourceStatus?: EvidenceSourceStatus | null } | null>;
+  cachePut: (o: { status: EvidenceStatus; card: EvidenceCard | null; reason: string | null; sourceStatus: EvidenceSourceStatus }, input: EvidenceInput) => Promise<void>;
 } {
   return {
     cacheGet: async (clusterKey) => {
       const { data } = await admin
         .from("radar_evidence_intelligence")
-        .select("analysis_status,card")
+        .select("analysis_status,card,evidence_source_status")
         .eq("cluster_key", clusterKey)
         .maybeSingle();
       if (!data) return null;
       return {
         status: data.analysis_status as EvidenceStatus,
         card: (data.card ?? null) as EvidenceCard | null,
+        sourceStatus: (data.evidence_source_status ?? null) as EvidenceSourceStatus | null,
       };
     },
     cachePut: async (o, input) => {
+      // Heuristic role/tier of the analyzed domain (registry-independent — the
+      // audit column is informational, mirroring the escalation heuristics).
+      const rt = escRoleTier(input.sourceDomain, new Map());
       await admin.from("radar_evidence_intelligence").upsert({
         cluster_key: input.clusterKey,
         story_type: input.storyType,
         analyzed_url: input.sourceUrl,
         analyzed_domain: input.sourceDomain,
         analysis_status: o.status,
+        evidence_source_status: o.sourceStatus,
+        evidence_source_role: rt.role,
+        evidence_source_tier: rt.tier,
+        editorial_primary_url: input.editorialPrimaryUrl ?? null,
+        editorial_primary_domain: input.editorialPrimaryUrl ? escDomainOf(input.editorialPrimaryUrl) : null,
         applicability: o.card?.applicability ?? null,
         evidence_type: o.card?.evidence_type ?? null,
         peer_review_status: o.card?.peer_review_status ?? null,
@@ -1391,7 +1441,7 @@ function evidenceDbDeps(admin: SupabaseClient): {
  *  failed outcome leaves the pipeline exactly as before this feature. */
 function makeEvidenceAnalyzer(
   admin: SupabaseClient,
-  ctx: { clusterKey: string; storyType: string },
+  ctx: { clusterKey: string; storyType: string; sourceKind: EvidenceSourceKind; editorialPrimaryUrl: string | null },
 ): (verified: SourceText) => Promise<EvidenceOutcome | null> {
   return async (verified) => {
     try {
@@ -1403,6 +1453,8 @@ function makeEvidenceAnalyzer(
           sourceDomain: escDomainOf(verified.finalUrl),
           sourceTitle: verified.title || null,
           sourceText: verified.text,
+          sourceKind: ctx.sourceKind,
+          editorialPrimaryUrl: ctx.editorialPrimaryUrl,
         },
         { ...evidenceDbDeps(admin), chat: chatEvidence },
       );
@@ -2740,25 +2792,48 @@ Deno.serve(async (req: Request) => {
       return Response.json({ ok: false, error: "cluster_key and url required" }, { status: 400 });
     }
     const persist = b.persist === true;
+    const storyType = asTrimmedTop(b.story_type) ?? "general";
+
+    // use_escalation:true mirrors the LIVE promotion path: run/reuse the cached
+    // escalation for this cluster (url = the discovery URL), then resolve the
+    // strongest FETCHABLE source (primary → supporting → discovery) exactly as
+    // a real promotion would, recording the fallback provenance.
+    let resolved: ResolvedEvidenceSource = { kind: "primary", url, primaryUrl: null };
+    if (b.use_escalation === true) {
+      const esc = await runEscalation(admin, {
+        clusterKey,
+        storyType,
+        discoveryUrl: url,
+        discoveryDomain: escDomainOf(url),
+        title: asTrimmedTop(b.title),
+        titleAr: asTrimmedTop(b.title_ar),
+      });
+      if (esc.status === "upgraded" && /^https?:\/\//i.test(esc.selected_editorial_source.url)) {
+        resolved = await resolveAnalysisSource(esc, url);
+      }
+    }
+
     const fetched = await fetchSourceText({
-      url,
-      registeredDomain: escDomainOf(url),
+      url: resolved.url,
+      registeredDomain: escDomainOf(resolved.url),
       sourceName: null,
       rawFetch: denoRawFetch,
       resolveDns: denoResolveDns,
     });
     if (!fetched.ok) {
-      return Response.json({ ok: false, error: fetched.reason }, { status: 422 });
+      return Response.json({ ok: false, error: fetched.reason, analysis_source: resolved }, { status: 422 });
     }
     const db = evidenceDbDeps(admin);
     const outcome = await analyzeEvidence(
       {
         clusterKey,
-        storyType: asTrimmedTop(b.story_type) ?? "general",
+        storyType,
         sourceUrl: fetched.finalUrl,
         sourceDomain: escDomainOf(fetched.finalUrl),
         sourceTitle: fetched.title || null,
         sourceText: fetched.text,
+        sourceKind: resolved.kind,
+        editorialPrimaryUrl: resolved.primaryUrl,
       },
       {
         cacheGet: persist ? db.cacheGet : async () => null,
@@ -2766,7 +2841,7 @@ Deno.serve(async (req: Request) => {
         chat: chatEvidence,
       },
     );
-    return Response.json({ ok: true, evidence: outcome, source_chars: fetched.charCount });
+    return Response.json({ ok: true, evidence: outcome, analysis_source: resolved, source_chars: fetched.charCount });
   }
 
   const gate = resolvePilotGate({
@@ -2857,6 +2932,7 @@ Deno.serve(async (req: Request) => {
   let escalation: EscalationResult | null = null;
   let evidenceOutcome: EvidenceOutcome | null = null;
   let evidenceClusterKey: string | null = null;
+  let evidenceResolved: ResolvedEvidenceSource | null = null;
   let evidenceAnalyzer: ((verified: SourceText) => Promise<EvidenceOutcome | null>) | null = null;
   let effSourceUrl = targetedSourceUrl;
   let effAuthorizedUrl = radarAuthorizedUrl;
@@ -2873,27 +2949,45 @@ Deno.serve(async (req: Request) => {
       title: asTrimmed(bodyRec.esl_title),
       titleAr: asTrimmed(bodyRec.esl_title_ar),
     });
+    // The analyzed/written source relative to the editorial primary. Default:
+    // no upgrade → the discovery article IS the editorial primary.
+    evidenceResolved = { kind: "primary", url: radarAuthorizedUrl, primaryUrl: null };
     if (escalation.status === "upgraded") {
       const up = escalation.selected_editorial_source.url;
       if (/^https?:\/\//i.test(up)) {
-        // The Writer now fetches the upgraded primary (SSRF-safe fetch re-validates).
-        effSourceUrl = up;
-        effAuthorizedUrl = up;
-        effErProvider = null;        // upgraded URL is NOT the discovery ER article
-        effErProviderUri = null;
-        effSourceTitle = escalation.selected_editorial_source.domain;
-        effSourceLang = null;        // likely a different language → let it be inferred
+        // Fetchability-aware: the upgraded primary may be unreachable for the
+        // sanctioned extractor (bot-block/paywall). Probe primary → validated
+        // supporting → discovery, and hand the Writer the strongest FETCHABLE
+        // one. The identified primary is preserved as provenance either way;
+        // it is never silently presented as the analyzed/written source.
+        evidenceResolved = await resolveAnalysisSource(escalation, radarAuthorizedUrl);
+        if (evidenceResolved.kind !== "discovery_fallback") {
+          // Writer fetches the resolved primary/supporting source (SSRF-safe
+          // fetch re-validates).
+          effSourceUrl = evidenceResolved.url;
+          effAuthorizedUrl = evidenceResolved.url;
+          effErProvider = null;      // resolved URL is NOT the discovery ER article
+          effErProviderUri = null;
+          effSourceTitle = escDomainOf(evidenceResolved.url);
+          effSourceLang = null;      // likely a different language → let it be inferred
+        }
+        // discovery_fallback: keep every original discovery parameter (exact
+        // URL, ER exact-article recovery, source title/lang) — the pipeline
+        // behaves exactly as before the upgrade existed.
       }
     }
 
-    // Evidence Intelligence: analyze the strongest editorial source (post-
-    // escalation) for THIS selected cluster, over the same verified text the
-    // Writer will be grounded in. The analyzer runs inside the pipeline (single
-    // fetch); the outcome is captured here for the content link + response.
+    // Evidence Intelligence: analyze the strongest FETCHABLE editorial source
+    // (post-escalation) for THIS selected cluster, over the same verified text
+    // the Writer will be grounded in. The analyzer runs inside the pipeline
+    // (single fetch); the outcome is captured here for the content link +
+    // response, and its provenance records which source kind was analyzed.
     evidenceClusterKey = asTrimmed(bodyRec.esl_cluster_key) ?? radarArticleId;
     const inner = makeEvidenceAnalyzer(admin, {
       clusterKey: evidenceClusterKey,
       storyType: asTrimmed(bodyRec.esl_story_type) ?? "general",
+      sourceKind: evidenceResolved.kind,
+      editorialPrimaryUrl: evidenceResolved.primaryUrl,
     });
     evidenceAnalyzer = async (verified) => {
       evidenceOutcome = await inner(verified);
@@ -2927,18 +3021,32 @@ Deno.serve(async (req: Request) => {
       radarPublish = await finalizeRadarPublish(admin, radarArticleId, pilot, radarCategorySlug, radarPublishMode);
     }
 
-    // Provenance: when escalation upgraded the source, preserve WHERE the story
-    // was originally discovered as a supporting reference on the created Content
-    // (the upgraded primary is already recorded by the writer as the main source).
+    // Provenance: when escalation upgraded the source, record every source that
+    // is NOT the Writer's main source. Which rows apply depends on which source
+    // the pipeline could actually fetch (evidenceResolved.kind):
+    //  - primary written        → discovery "اكتُشِف عبر" (+ supporting context)
+    //  - supporting written     → discovery + the identified-but-unfetchable primary
+    //  - discovery written      → the identified primary (+ supporting context)
+    // The identified primary is preserved even when unfetchable — never dropped,
+    // never presented as the source the article/card was derived from.
     if (escalation && escalation.status === "upgraded" && pilot?.created_content_id) {
       try {
-        const rows: { content_id: string; label: string; url: string }[] = [
-          { content_id: pilot.created_content_id, label: "اكتُشِف عبر", url: escalation.discovery_source.url },
-        ];
-        if (escalation.supporting_url) {
+        const kind = evidenceResolved?.kind ?? "primary";
+        const rows: { content_id: string; label: string; url: string }[] = [];
+        if (kind !== "discovery_fallback") {
+          rows.push({ content_id: pilot.created_content_id, label: "اكتُشِف عبر", url: escalation.discovery_source.url });
+        }
+        if (kind !== "primary" && evidenceResolved?.primaryUrl) {
+          rows.push({
+            content_id: pilot.created_content_id,
+            label: "المصدر الأولي المحدد (تعذّر الجلب الآلي)",
+            url: evidenceResolved.primaryUrl,
+          });
+        }
+        if (escalation.supporting_url && kind !== "supporting") {
           rows.push({ content_id: pilot.created_content_id, label: "سياق مستقل", url: escalation.supporting_url });
         }
-        await admin.from("content_sources").insert(rows);
+        if (rows.length) await admin.from("content_sources").insert(rows);
       } catch { /* provenance best-effort */ }
     }
 
@@ -2958,6 +3066,8 @@ Deno.serve(async (req: Request) => {
       ? {
         status: (evidenceOutcome as EvidenceOutcome).status,
         cached: (evidenceOutcome as EvidenceOutcome).cached,
+        source_status: (evidenceOutcome as EvidenceOutcome).source_status,
+        editorial_primary_url: evidenceResolved?.primaryUrl ?? null,
         evidence_type: (evidenceOutcome as EvidenceOutcome).card?.evidence_type ?? null,
         evidence_strength: (evidenceOutcome as EvidenceOutcome).card?.evidence_strength ?? null,
         claim_relationship: (evidenceOutcome as EvidenceOutcome).card?.claim_relationship ?? null,
