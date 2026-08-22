@@ -216,6 +216,20 @@ Deno.serve(async (req) => {
   const profile = PROFILES[profileName];
   const topicPage = profile.topicPage;
 
+  // OBSERVABILITY (health monitoring): write a run-log row 'running' BEFORE any
+  // work, tagged with the profile (medical | healthy_life). A crash leaves a
+  // visible stale record (pipeline_health). Best-effort — run_id is nullable, so
+  // even if this insert fails the collection still proceeds; the row is finalized
+  // at both the success and failure exits below.
+  let shadowRunId: string | null = null;
+  try {
+    const { data: runIns } = await supabase
+      .from("radar_shadow_runs")
+      .insert({ trigger, profile: profileName, status: "running", started_at: startedAt.toISOString() })
+      .select("id").single();
+    shadowRunId = (runIns?.id as string | null) ?? null;
+  } catch { /* monitoring must not break collection */ }
+
   // 1) Read this profile's polling checkpoint (UTC). Advance only on success.
   const { data: stateRow } = await supabase
     .from("radar_shadow_state")
@@ -334,20 +348,8 @@ Deno.serve(async (req) => {
         existing = new Set((existingRows ?? []).map((e) => (e as { provider_uri: string }).provider_uri));
       }
 
-      // Create the run row first so inserted articles can reference it.
-      const { data: runInsert, error: runErr } = await supabase
-        .from("radar_shadow_runs")
-        .insert({
-          trigger,
-          status: "success", // provisional; corrected below if insert fails
-          started_at: startedAt.toISOString(),
-          checkpoint_before: checkpointBefore,
-          returned_count: returnedCount,
-        })
-        .select("id")
-        .single();
-      if (runErr) throw runErr;
-      const runId: string = runInsert.id;
+      // Run row was created 'running' before work; reuse its id for articles.
+      const runId: string | null = shadowRunId;
 
       const seenInBatch = new Set<string>();
       const toInsert = fresh
@@ -376,17 +378,21 @@ Deno.serve(async (req) => {
         { onConflict: "provider" },
       );
 
-      // Finalize the run row.
-      await supabase.from("radar_shadow_runs").update({
-        status: "success",
-        finished_at: new Date().toISOString(),
-        checkpoint_after: checkpointAfter,
-        inserted_count: insertedCount,
-        duplicate_count: duplicateCount,
-        stale_skipped_count: staleSkipped,
-        languages: [...languagesSet],
-        usage_info: usageInfo,
-      }).eq("id", runId);
+      // Finalize the run row (best-effort; skip if the running-insert failed).
+      if (runId) {
+        await supabase.from("radar_shadow_runs").update({
+          status: "success",
+          finished_at: new Date().toISOString(),
+          checkpoint_before: checkpointBefore,
+          checkpoint_after: checkpointAfter,
+          returned_count: returnedCount,
+          inserted_count: insertedCount,
+          duplicate_count: duplicateCount,
+          stale_skipped_count: staleSkipped,
+          languages: [...languagesSet],
+          usage_info: usageInfo,
+        }).eq("id", runId);
+      }
 
       return new Response(JSON.stringify({
         ok: true,
@@ -408,22 +414,27 @@ Deno.serve(async (req) => {
     errorMsg = e instanceof Error ? e.message : String(e);
   }
 
-  // Failure path: record a run row WITHOUT advancing the checkpoint.
-  await supabase.from("radar_shadow_runs").insert({
-    trigger,
-    status,
-    started_at: startedAt.toISOString(),
-    finished_at: new Date().toISOString(),
-    checkpoint_before: checkpointBefore,
-    checkpoint_after: null,
-    returned_count: returnedCount,
-    inserted_count: insertedCount,
-    duplicate_count: duplicateCount,
-    stale_skipped_count: staleSkipped,
-    languages: [...languagesSet],
-    usage_info: usageInfo,
-    error: errorMsg,
-  });
+  // Failure path: finalize the pre-created run row WITHOUT advancing the
+  // checkpoint (best-effort; insert a fallback row if the running-insert failed).
+  {
+    const failPayload = {
+      trigger,
+      profile: profileName,
+      status,
+      finished_at: new Date().toISOString(),
+      checkpoint_before: checkpointBefore,
+      checkpoint_after: null,
+      returned_count: returnedCount,
+      inserted_count: insertedCount,
+      duplicate_count: duplicateCount,
+      stale_skipped_count: staleSkipped,
+      languages: [...languagesSet],
+      usage_info: usageInfo,
+      error: errorMsg,
+    };
+    if (shadowRunId) await supabase.from("radar_shadow_runs").update(failPayload).eq("id", shadowRunId);
+    else await supabase.from("radar_shadow_runs").insert({ ...failPayload, started_at: startedAt.toISOString() });
+  }
 
   return new Response(JSON.stringify({
     ok: false,

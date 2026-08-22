@@ -411,6 +411,28 @@ Deno.serve(async (req) => {
   const runId = now.toISOString();
   const nowMs = now.getTime();
 
+  // OBSERVABILITY (health monitoring): write a run-log row 'running' BEFORE any
+  // work, so a crash mid-run leaves a visible stale record (pipeline_health
+  // flags it). Best-effort: a monitoring-write failure must NEVER change ESL
+  // behaviour (no auto-publish, no corrupted selection). Finalized below.
+  let eslRunId: string | null = null;
+  try {
+    const { data: runIns } = await admin
+      .from("radar_esl_runs")
+      .insert({ job: "radar-editorial-select", mode, editorial_day: editorialDay, status: "running", cap, started_at: now.toISOString() })
+      .select("id").single();
+    eslRunId = (runIns?.id as string | null) ?? null;
+  } catch { /* monitoring must not break the run */ }
+  const finalizeEsl = async (status: string, f: Record<string, unknown>): Promise<void> => {
+    if (!eslRunId) return;
+    try {
+      await admin.from("radar_esl_runs")
+        .update({ status, finished_at: new Date().toISOString(), duration_ms: Date.now() - now.getTime(), ...f })
+        .eq("id", eslRunId);
+    } catch { /* monitoring must not break the run */ }
+  };
+
+  try {
   // --- 1) Day state: what THIS MODE already selected/promoted today ---------
   // MODE-ISOLATED: a shadow run reads prior SHADOW selections for the editorial
   // day (so the 3 daily shadow runs simulate live's stateful fill-remaining
@@ -451,6 +473,8 @@ Deno.serve(async (req) => {
   const seenClusters = new Set<string>((recentRows ?? []).map((r) => String(r.cluster_key ?? "")).filter(Boolean));
 
   if (remainingCap <= 0) {
+    // Healthy no-op: today's cap is already met. Record it as a clean run.
+    await finalizeEsl("success", { remaining_cap: 0, pool_size: 0, clusters: 0, selected: 0, promoted: 0, promotion_failed: 0 });
     return Response.json({ ok: true, mode, editorial_day: editorialDay, run_id: runId, cap, remaining_cap: 0, note: "cap_reached_for_today", promoted_today: promotedToday });
   }
 
@@ -724,6 +748,15 @@ Deno.serve(async (req) => {
   const laneMix: Record<string, number> = {};
   for (const c of selected) laneMix[c.lane] = (laneMix[c.lane] ?? 0) + 1;
 
+  // Finalize the run-log. 'partial' when a live run had promotion failures
+  // (some selected stories didn't reach PENDING Content); else 'success'.
+  const promotedN = mode === "live" ? promotions.filter((p) => p.status === "promoted").length : 0;
+  const promoFailedN = mode === "live" ? promotions.filter((p) => p.status !== "promoted").length : 0;
+  await finalizeEsl(promoFailedN > 0 ? "partial" : "success", {
+    remaining_cap: remainingCap, pool_size: rows.length, clusters: clusters.size,
+    selected: selected.length, promoted: promotedN, promotion_failed: promoFailedN,
+  });
+
   return Response.json({
     ok: true,
     mode,
@@ -762,6 +795,14 @@ Deno.serve(async (req) => {
       cap_reached: skipped.filter((s) => s.reason === "cap_reached").length,
     },
   });
+  } catch (eslErr) {
+    // Top-level guard: any uncaught error finalizes the run-log as 'failed' with
+    // a concise message (previously the ESL had NO top-level try/catch, so a
+    // crash was invisible). Editorial safety is unchanged — a failed run simply
+    // created no Content; nothing is auto-published.
+    await finalizeEsl("failed", { error: (eslErr instanceof Error ? eslErr.message : String(eslErr)).slice(0, 500) });
+    return Response.json({ ok: false, error: "esl_run_failed" }, { status: 500 });
+  }
 });
 
 // ---- row builders ---------------------------------------------------------
