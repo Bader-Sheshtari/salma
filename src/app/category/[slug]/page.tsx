@@ -5,6 +5,7 @@ import { Footer } from "@/components/site/Footer";
 import { ContentCard } from "@/components/site/cards";
 import { SearchBox } from "@/components/site/SearchBox";
 import { getCategories, getContentByCategory } from "@/lib/queries";
+import { absoluteUrl } from "@/lib/site";
 
 export const revalidate = 60;
 
@@ -30,7 +31,17 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const slug = decodeSlug((await params).slug);
   const categories = await getCategories();
   const cat = categories.find((c) => c.slug === slug);
-  return { title: cat ? `${cat.name_ar} · سلمى` : "سلمى" };
+  const path = `/category/${slug}`;
+  const title = cat ? `${cat.name_ar} · سلمى` : "سلمى";
+  const description = cat
+    ? `أحدث أخبار ومقالات قسم ${cat.name_ar} على سلمى — منصّة الأخبار الصحية للكويت والخليج.`
+    : undefined;
+  return {
+    title,
+    description,
+    alternates: { canonical: path },
+    openGraph: { title, description, url: absoluteUrl(path) },
+  };
 }
 
 export default async function CategoryPage({ params }: Props) {

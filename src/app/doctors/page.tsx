@@ -3,10 +3,15 @@ import type { Metadata } from "next";
 import { Header } from "@/components/site/Header";
 import { Footer } from "@/components/site/Footer";
 import { getCategories, getDepartments, getDoctors } from "@/lib/queries";
+import { absoluteUrl } from "@/lib/site";
 
 export const revalidate = 60;
 
-export const metadata: Metadata = { title: "الأطباء · سلمى" };
+export const metadata: Metadata = {
+  title: "الأطباء · سلمى",
+  alternates: { canonical: "/doctors" },
+  openGraph: { title: "الأطباء · سلمى", url: absoluteUrl("/doctors") },
+};
 
 function stars(n: number): string {
   const r = Math.round(n);

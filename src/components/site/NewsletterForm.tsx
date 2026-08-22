@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import { subscribeNewsletter, type NewsletterResult } from "@/app/actions/newsletter";
 
 export function NewsletterForm() {
@@ -12,7 +13,7 @@ export function NewsletterForm() {
   if (state?.ok) {
     return (
       <div className="mt-4 rounded-lg bg-cream px-4 py-3 text-[13px] text-teal">
-        تم اشتراكك بنجاح — سنرسل لك الأهم في الصحة.
+        تم تسجيل بريدك بنجاح.
       </div>
     );
   }
@@ -39,6 +40,12 @@ export function NewsletterForm() {
       {state && !state.ok ? (
         <div className="mt-2 text-[12.5px] text-coral">{state.error}</div>
       ) : null}
+      <p className="mt-2 text-[11px] text-gray/70">
+        بتسجيل بريدك فإنك توافق على{" "}
+        <Link href="/privacy" className="underline underline-offset-2 hover:text-gray">
+          سياسة الخصوصية
+        </Link>
+      </p>
     </>
   );
 }

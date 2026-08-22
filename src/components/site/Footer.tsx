@@ -30,8 +30,22 @@ export function Footer({ categories }: { categories: Category[] }) {
           </Link>
         </div>
         <div className="border-t border-white/15 pt-3.5 font-sans text-[11px] leading-relaxed text-white/50">
-          المعايير التحريرية · مصادرنا: WHO · CDC · Mayo Clinic
-          <br />© 2026 سلمى — جميع الحقوق محفوظة
+          <Link href="/editorial-policy" className="-my-[7px] inline-block py-[7px] hover:text-white/75">
+            المعايير التحريرية
+          </Link>{" "}
+          · مصادرنا: WHO · CDC · Mayo Clinic
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+            <Link href="/corrections" className="-my-[7px] py-[7px] hover:text-white/75">
+              سياسة التصحيح
+            </Link>
+            <Link href="/privacy" className="-my-[7px] py-[7px] hover:text-white/75">
+              سياسة الخصوصية
+            </Link>
+            <Link href="/terms" className="-my-[7px] py-[7px] hover:text-white/75">
+              شروط الاستخدام
+            </Link>
+          </div>
+          <div className="mt-1.5">© 2026 سلمى — جميع الحقوق محفوظة</div>
         </div>
       </div>
     </footer>

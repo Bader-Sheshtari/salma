@@ -75,6 +75,15 @@ export function ArticleView({
         {content.read_minutes ? <span>· {content.read_minutes} دقائق قراءة</span> : null}
       </div>
 
+      {content.published_at &&
+      content.updated_at &&
+      new Date(content.updated_at).getTime() - new Date(content.published_at).getTime() >
+        24 * 60 * 60 * 1000 ? (
+        <div className="mt-1 font-sans text-[11px] text-gray/70">
+          آخر تحديث: {formatDateTimeAr(content.updated_at)}
+        </div>
+      ) : null}
+
       {/* "باختصار" — quick summary box, shown near the top with a distinct tint */}
       {content.ai_summary ? (
         <aside className="mt-5 rounded-2xl border border-teal/25 bg-gradient-to-br from-teal/[0.08] to-green/[0.06] p-4 sm:p-5">
@@ -205,6 +214,17 @@ export function ArticleView({
           </ul>
         </section>
       ) : null}
+
+      {/* medical disclaimer */}
+      <p className="mt-4 text-[11px] leading-relaxed text-gray/70">
+        هذا المحتوى لأغراض التوعية والمعلومات الصحية العامة ولا يُغني عن استشارة الطبيب.{" "}
+        <Link
+          href="/editorial-policy"
+          className="py-3 underline underline-offset-2 hover:text-gray"
+        >
+          السياسة التحريرية
+        </Link>
+      </p>
 
       <Comments contentId={content.id} comments={comments} />
 

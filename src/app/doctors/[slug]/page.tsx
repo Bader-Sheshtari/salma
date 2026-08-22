@@ -5,15 +5,34 @@ import { Footer } from "@/components/site/Footer";
 import { RatingForm } from "@/components/site/RatingForm";
 import { getCategories, getDoctorBySlug } from "@/lib/queries";
 import { timeAgoAr } from "@/lib/format";
+import { absoluteUrl } from "@/lib/site";
 
 export const revalidate = 60;
 
 type Props = { params: Promise<{ slug: string }> };
 
+function decodeSlug(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { slug } = await params;
+  const slug = decodeSlug((await params).slug);
   const detail = await getDoctorBySlug(slug);
-  return { title: detail ? `${detail.doctor.name_ar} · سلمى` : "سلمى" };
+  const path = `/doctors/${slug}`;
+  const title = detail ? `${detail.doctor.name_ar} · سلمى` : "سلمى";
+  const description = detail?.doctor.title_ar
+    ? `${detail.doctor.name_ar} — ${detail.doctor.title_ar} على سلمى.`
+    : undefined;
+  return {
+    title,
+    description,
+    alternates: { canonical: path },
+    openGraph: { title, description, url: absoluteUrl(path) },
+  };
 }
 
 function stars(n: number): string {
@@ -22,7 +41,7 @@ function stars(n: number): string {
 }
 
 export default async function DoctorPage({ params }: Props) {
-  const { slug } = await params;
+  const slug = decodeSlug((await params).slug);
   const [categories, detail] = await Promise.all([getCategories(), getDoctorBySlug(slug)]);
   if (!detail) notFound();
   const { doctor, department, ratings } = detail;

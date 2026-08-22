@@ -2,12 +2,17 @@ import type { Metadata } from "next";
 import { Header } from "@/components/site/Header";
 import { Footer } from "@/components/site/Footer";
 import { getCategories } from "@/lib/queries";
+import { absoluteUrl } from "@/lib/site";
 
 export const revalidate = 3600;
 
+const CONTACT_DESCRIPTION = "تواصل مع فريق سلمى — نستقبل ملاحظاتكم واقتراحاتكم وأخبار القطاع الصحي.";
+
 export const metadata: Metadata = {
   title: "اتصل بنا · سلمى",
-  description: "تواصل مع فريق سلمى — نستقبل ملاحظاتكم واقتراحاتكم وأخبار القطاع الصحي.",
+  description: CONTACT_DESCRIPTION,
+  alternates: { canonical: "/contact" },
+  openGraph: { title: "اتصل بنا · سلمى", description: CONTACT_DESCRIPTION, url: absoluteUrl("/contact") },
 };
 
 const CONTACT_EMAIL = "info@salma.news";

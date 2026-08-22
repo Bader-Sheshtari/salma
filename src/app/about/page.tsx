@@ -2,13 +2,18 @@ import type { Metadata } from "next";
 import { Header } from "@/components/site/Header";
 import { Footer } from "@/components/site/Footer";
 import { getCategories } from "@/lib/queries";
+import { absoluteUrl } from "@/lib/site";
 
 export const revalidate = 3600;
 
+const ABOUT_DESCRIPTION =
+  "سلمى منصّة عربية موثوقة للأخبار الصحية في الكويت ودول الخليج، تبسّط المعلومة الطبية وتحافظ على مصادرها.";
+
 export const metadata: Metadata = {
   title: "من نحن · سلمى",
-  description:
-    "سلمى منصّة عربية موثوقة للأخبار الصحية في الكويت ودول الخليج، تبسّط المعلومة الطبية وتحافظ على مصادرها.",
+  description: ABOUT_DESCRIPTION,
+  alternates: { canonical: "/about" },
+  openGraph: { title: "من نحن · سلمى", description: ABOUT_DESCRIPTION, url: absoluteUrl("/about") },
 };
 
 export default async function AboutPage() {

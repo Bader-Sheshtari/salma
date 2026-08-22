@@ -97,7 +97,7 @@ export function HomeView({ data }: { data: HomepageData }) {
         <div className="mx-auto max-w-xl text-center">
           <div className="text-lg font-bold">اشترك بنشرة سلمى</div>
           <p className="mt-1.5 text-[12.5px] leading-relaxed text-gray">
-            نُرسل لك الأهم في الصحة — أنت تتحكم بما يصلك.
+            سجّل بريدك — وستصلك نشرة سلمى الصحية عند انطلاقها.
           </p>
           <NewsletterForm />
         </div>

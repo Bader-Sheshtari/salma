@@ -3,10 +3,15 @@ import { Header } from "@/components/site/Header";
 import { Footer } from "@/components/site/Footer";
 import { TransfersBrowser } from "@/components/site/TransfersBrowser";
 import { getCategories, getTransfers } from "@/lib/queries";
+import { absoluteUrl } from "@/lib/site";
 
 export const revalidate = 60;
 
-export const metadata: Metadata = { title: "انتقال الأطباء · سلمى" };
+export const metadata: Metadata = {
+  title: "انتقال الأطباء · سلمى",
+  alternates: { canonical: "/transfers" },
+  openGraph: { title: "انتقال الأطباء · سلمى", url: absoluteUrl("/transfers") },
+};
 
 export default async function TransfersPage() {
   const [categories, transfers] = await Promise.all([getCategories(), getTransfers()]);

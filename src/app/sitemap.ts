@@ -9,6 +9,14 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   const staticPages: MetadataRoute.Sitemap = [
     { url: absoluteUrl("/"), lastModified: new Date(), changeFrequency: "hourly", priority: 1 },
+    { url: absoluteUrl("/about"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.5 },
+    { url: absoluteUrl("/contact"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.4 },
+    { url: absoluteUrl("/doctors"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.5 },
+    { url: absoluteUrl("/transfers"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.5 },
+    { url: absoluteUrl("/privacy"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.3 },
+    { url: absoluteUrl("/terms"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.3 },
+    { url: absoluteUrl("/editorial-policy"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.3 },
+    { url: absoluteUrl("/corrections"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.3 },
   ];
 
   const categoryPages: MetadataRoute.Sitemap = categories.map((c) => ({

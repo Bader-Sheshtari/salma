@@ -4,8 +4,13 @@ import { Footer } from "@/components/site/Footer";
 import { SearchResultRow } from "@/components/site/cards";
 import { SearchBox } from "@/components/site/SearchBox";
 import { getCategories, searchAll } from "@/lib/queries";
+import { absoluteUrl } from "@/lib/site";
 
-export const metadata: Metadata = { title: "بحث · سلمى" };
+export const metadata: Metadata = {
+  title: "بحث · سلمى",
+  alternates: { canonical: "/search" },
+  openGraph: { title: "بحث · سلمى", url: absoluteUrl("/search") },
+};
 
 type Props = { searchParams: Promise<{ q?: string }> };
 
