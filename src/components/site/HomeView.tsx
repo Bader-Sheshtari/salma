@@ -54,7 +54,7 @@ export function HomeView({ data }: { data: HomepageData }) {
         >
           <div className="text-lg font-bold">خلاصتك تبدأ من هنا</div>
           <div className="mt-1.5 text-[13px] leading-relaxed opacity-90">
-            اشترك بنشرة سلمى ويصلك الأهم في الصحة — أخبار، فيديو، تحقيقات.
+            سجّل بريدك الآن — وستصلك نشرة سلمى عند انطلاقها: أخبار، فيديو، تحقيقات.
           </div>
           <span className="mt-4 inline-block rounded-lg bg-white px-4 py-2.5 text-[13.5px] font-bold text-teal">
             اشترك بالنشرة ←
