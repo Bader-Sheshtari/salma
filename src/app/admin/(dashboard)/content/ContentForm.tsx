@@ -367,7 +367,7 @@ export function ContentForm({
         <label className={label}>
           الحالة
           <select name="status" defaultValue={content?.status ?? "draft"} onChange={(e) => setStatusVal(e.target.value)} className={field}>
-            {STATUSES.map((s) => (
+            {(content ? STATUSES : STATUSES.filter((s) => s.v === "draft")).map((s) => (
               <option key={s.v} value={s.v}>{s.l}</option>
             ))}
           </select>

@@ -113,8 +113,10 @@ export async function saveContent(
       if ("error" in next) return { error: next.error };
       status = next.status;
     }
-  } else if (!CONTENT_STATUSES.includes(status) || status === "unpublished") {
-    return { error: "حالة غير صالحة." };
+  } else {
+    // New manual articles always begin as drafts — publishing goes through the
+    // normal lifecycle (draft → pending → published), never directly on create.
+    status = "draft";
   }
 
   const payload = {
