@@ -13,6 +13,13 @@ import type {
   DoctorRating,
 } from "@/lib/queries";
 import type { Tables } from "@/lib/supabase/database.types";
+import {
+  CONTENT_TABS,
+  PAGE_SIZE,
+  type ContentCountRow,
+  type ContentSearchRow,
+  type SearchContentParams,
+} from "@/lib/content-search";
 
 export type IngestionRun = Tables<"ingestion_runs">;
 export type RunArticle = { id: string; title: string; status: string };
@@ -63,16 +70,115 @@ export async function getAdminCounts(): Promise<AdminCounts> {
   };
 }
 
+/**
+ * Explicit admin `content` column list: every column EXCEPT the derived search
+ * columns (`search_norm`, `body_tsv`, added by the Phase 2 search migration),
+ * which are large and only used server-side by search_content.
+ */
+const CONTENT_COLUMNS =
+  "ai_summary,author_id,body,category_slug,cover_credit_name,cover_credit_url,cover_image_url,created_at,created_by,dedupe_key,deleted_at,deleted_by,excerpt,first_published_at,id,is_breaking,is_featured,last_edited_at,last_edited_by,last_published_at,origin,original_title,original_url,published_at,published_by,read_minutes,relevance_score,reviewed_at,reviewed_by,slug,source_image_url,source_lang,source_name,source_url,status,title,type,unpublished_at,unpublished_by,updated_at,version,video_duration,video_url";
+
 export async function listContent(status?: string): Promise<Content[]> {
   const supabase = await createClient();
   let q = supabase
     .from("content")
-    .select("*")
+    .select(CONTENT_COLUMNS)
     .is("deleted_at", null)
     .order("updated_at", { ascending: false });
   if (status) q = q.eq("status", status);
   const { data } = await q;
   return (data as Content[]) ?? [];
+}
+
+// ---- Content Management (Phase 2: server-side search) -------------------
+
+/**
+ * One page of the admin content list via the `search_content` RPC (keyset
+ * pagination, never returns body). Requests one extra row to know whether a
+ * next page exists. The RPC is not in the generated Database types yet, so the
+ * call goes through an untyped client and the rows are cast to the local shape.
+ * Errors are surfaced (not swallowed) so the page can say the list failed.
+ */
+export async function searchContent(
+  params: SearchContentParams,
+): Promise<{ rows: ContentSearchRow[]; hasMore: boolean; error: string | null }> {
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const limit = Math.min(100, Math.max(1, params.limit || PAGE_SIZE));
+  const { data, error } = await client.rpc("search_content", {
+    p_q: params.q,
+    p_status: params.status,
+    p_category: params.category,
+    p_from: params.from,
+    p_to: params.to,
+    p_author: params.author,
+    p_author_system: params.authorSystem,
+    p_reviewer: params.reviewer,
+    p_publisher: params.publisher,
+    // Omit p_sort unless the user explicitly chose one (RPC default is per tab).
+    ...(params.sort ? { p_sort: params.sort } : {}),
+    p_cursor_ts: params.cursorTs,
+    p_cursor_id: params.cursorId,
+    p_limit: limit + 1, // limit ≤ 100 → ≤ 101 (RPC clamps to 101)
+  });
+  if (error) {
+    console.error("[content] search_content failed:", error.message);
+    return { rows: [], hasMore: false, error: error.message };
+  }
+  const rows = (data ?? []) as ContentSearchRow[];
+  return { rows: rows.slice(0, limit), hasMore: rows.length > limit, error: null };
+}
+
+/** Tab totals + per-category counts for the content screen. */
+export type ContentCounts = {
+  /** status → total (non-deleted), plus 'all' and 'trash' (as emitted by the RPC). */
+  byStatus: Record<string, number>;
+  /** status (incl. 'all') → category_slug → count. */
+  byStatusCat: Record<string, Record<string, number>>;
+};
+
+export async function getContentCounts(): Promise<ContentCounts> {
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const { data, error } = await client.rpc("content_counts");
+  const byStatus: Record<string, number> = {};
+  const byStatusCat: Record<string, Record<string, number>> = {};
+  if (error) {
+    console.error("[content] content_counts failed:", error.message);
+    return { byStatus, byStatusCat };
+  }
+  // The RPC omits zero-count combinations: seed every tab with 0.
+  for (const t of CONTENT_TABS) {
+    byStatus[t.key] = 0;
+    byStatusCat[t.key] = {};
+  }
+  // Rows: scope 'status' → (status incl. 'all'/'trash', category NULL, n);
+  //       scope 'category' → (status incl. 'all', category_slug, n) — NULL slug
+  //       (uncategorised) has no strip chip and is skipped.
+  for (const r of (data ?? []) as ContentCountRow[]) {
+    const n = Number(r.n) || 0;
+    if (r.scope === "status") {
+      byStatus[r.status] = n;
+    } else if (r.scope === "category" && r.category_slug) {
+      (byStatusCat[r.status] ??= {})[r.category_slug] = n;
+    }
+  }
+  return { byStatus, byStatusCat };
+}
+
+export type AdminProfileOption = { id: string; name: string };
+
+/** Dashboard accounts for the author/reviewer/publisher filter dropdowns. */
+export async function listAdminProfiles(): Promise<AdminProfileOption[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("profiles")
+    .select("id,full_name,email")
+    .in("role", ["owner", "super_admin", "admin"])
+    .order("full_name", { ascending: true });
+  return ((data ?? []) as { id: string; full_name: string | null; email: string | null }[]).map(
+    (p) => ({ id: p.id, name: p.full_name || p.email || p.id.slice(0, 8) }),
+  );
 }
 
 /**
@@ -123,7 +229,7 @@ export async function getContentForEdit(
   id: string,
 ): Promise<{ content: Content; sources: ContentSource[]; media: ContentMedia[] } | null> {
   const supabase = await createClient();
-  const { data: content } = await supabase.from("content").select("*").eq("id", id).maybeSingle();
+  const { data: content } = await supabase.from("content").select(CONTENT_COLUMNS).eq("id", id).maybeSingle();
   if (!content) return null;
   const [{ data: sources }, { data: media }] = await Promise.all([
     supabase.from("content_sources").select("*").eq("content_id", id).order("created_at"),

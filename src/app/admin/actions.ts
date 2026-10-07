@@ -24,13 +24,26 @@ const CONTENT_STATUSES = ["draft", "pending", "published", "rejected", "unpublis
 const PUBLISHABLE_FROM = ["pending", "unpublished"];
 
 /**
- * The ONE publish/unpublish rule shared by saveContent, setStatus and
- * bulkSetStatus, so no path can bypass it:
+ * Legal status transitions for a human actor — the EXACT matrix the DB trigger
+ * content_lifecycle_before enforces (P0021 otherwise). Same-status is always OK.
+ */
+const LEGAL_TRANSITIONS: Record<string, readonly string[]> = {
+  draft: ["pending"],
+  pending: ["published", "draft", "rejected"],
+  published: ["unpublished"],
+  unpublished: ["published", "draft"],
+  rejected: ["draft"],
+};
+
+/**
+ * The ONE status-transition rule shared by saveContent, setStatus and
+ * bulkSetStatus, so no path can bypass it (and users get a clean Arabic error
+ * instead of a DB P0021 → HTTP 500):
  *  - publish only from `pending` or `unpublished` (republish), never from a
  *    deleted row;
  *  - taking a live article down (→ draft/pending/unpublished) always lands on
  *    `unpublished` (unpublish ≠ draft);
- *  - every other transition is passed through (the DB logs illegal ones).
+ *  - every other transition must be in LEGAL_TRANSITIONS, else an Arabic error.
  * Publication dates are NOT stamped here — the DB lifecycle trigger owns them.
  */
 function resolveStatusTransition(
@@ -48,7 +61,13 @@ function resolveStatusTransition(
   if (current?.status === "published" && ["draft", "pending", "unpublished"].includes(requested)) {
     return { status: "unpublished" };
   }
-  if (requested === "unpublished") return { error: "لا يمكن إلغاء نشر مادة غير منشورة." };
+  if (requested === "unpublished" && current?.status !== "published") {
+    return { error: "لا يمكن إلغاء نشر مادة غير منشورة." };
+  }
+  // New rows (no current) are not transitions; existing rows must follow the matrix.
+  if (current && !(LEGAL_TRANSITIONS[current.status] ?? []).includes(requested)) {
+    return { error: "انتقال غير مسموح بين حالات المحتوى." };
+  }
   return { status: requested };
 }
 
@@ -242,7 +261,7 @@ export async function saveContent(
   return { ok: true, id: contentId, status };
 }
 
-export async function setStatus(formData: FormData) {
+export async function setStatus(formData: FormData): Promise<{ ok: true } | { error: string }> {
   const admin = await requireAdmin();
   const supabase = await createClient();
   const id = String(formData.get("id"));
@@ -259,10 +278,10 @@ export async function setStatus(formData: FormData) {
   // draft/rejected/published/deleted row can never be published here.
   // Unpublishing a live article lands on `unpublished`.
   const next = resolveStatusTransition(row, requested);
-  if ("error" in next) return;
+  if ("error" in next) return { error: next.error };
   // Same-status request (e.g. publishing an already-published row): no write,
   // no feedback event.
-  if (row && row.status === next.status) return;
+  if (row && row.status === next.status) return { ok: true };
   const status = next.status;
   // Publication dates are stamped by the DB lifecycle trigger, not here.
   const patch = { status };
@@ -289,6 +308,13 @@ export async function setStatus(formData: FormData) {
   }
   revalidatePath("/admin/content");
   revalidatePath("/");
+  if (error) return { error: "تعذّر تحديث الحالة." };
+  return { ok: true };
+}
+
+/** `<form action>` adapter for `setStatus` (form actions must return void). */
+export async function setStatusForm(formData: FormData): Promise<void> {
+  await setStatus(formData);
 }
 
 export async function softDeleteContent(formData: FormData) {
@@ -301,6 +327,33 @@ export async function softDeleteContent(formData: FormData) {
     .eq("id", id);
   revalidatePath("/admin/content");
   revalidatePath("/");
+}
+
+/**
+ * Restore a soft-deleted content item from المحذوفات (clears deleted_at). The
+ * DB lifecycle trigger stamps the restore in the audit log and flips a
+ * previously-published row to `unpublished` — a restore never puts an article
+ * back on the public site by itself. Returns the post-restore status so the UI
+ * can offer an explicit «إعادة النشر».
+ */
+export async function restoreContent(
+  id: string,
+): Promise<{ error: string } | { ok: true; status: string; title: string }> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("content")
+    .update({ deleted_at: null } as unknown as never)
+    .eq("id", String(id))
+    .not("deleted_at", "is", null)
+    .select("status,title")
+    .maybeSingle();
+  if (error) return { error: "تعذّرت استعادة المادة." };
+  if (!data) return { error: "المادة غير موجودة في المحذوفات." };
+  revalidatePath("/admin/content");
+  revalidatePath("/");
+  const row = data as { status: string; title: string };
+  return { ok: true, status: row.status, title: row.title };
 }
 
 /**
@@ -324,6 +377,10 @@ export async function rejectContent(formData: FormData) {
     .maybeSingle();
   const row = data as { status: string; origin: string; deleted_at: string | null } | null;
   if (!row || row.deleted_at) return;
+  // Rejection is only legal from `pending` (DB matrix; anything else would hit
+  // P0021 → 500). Already rejected → silent no-op; any other status → refused
+  // without a write (form-action signature has no error channel, like setStatus).
+  if (row.status !== "pending") return;
   const { error } = await supabase
     .from("content")
     .update({ status: "rejected" } as unknown as never)
@@ -396,8 +453,6 @@ export async function bulkSetStatus(ids: string[], status: string): Promise<Bulk
   const supabase = await createClient();
   const clean = [...new Set((ids ?? []).map(String))].filter(Boolean);
   const rows = await contentRows(supabase, clean);
-  // Publication dates are stamped by the DB lifecycle trigger, not here.
-  const patch = { status };
   const skipped: BulkItemNote[] = [];
   const failed: BulkItemNote[] = [];
   let succeeded = 0;
@@ -423,12 +478,14 @@ export async function bulkSetStatus(ids: string[], status: string): Promise<Bulk
       });
       continue;
     }
+    // Publication dates are stamped by the DB lifecycle trigger, not here.
+    const patch = { status: next.status };
     const { error } = await supabase.from("content").update(patch as unknown as never).eq("id", id);
     if (error) failed.push({ id, title: row.title, reason: error.message });
     else {
       succeeded++;
       // Editorial feedback (observational, best-effort per row).
-      if (status === "published") await recordPublishFeedback(id, admin.id, row.status);
+      if (next.status === "published") await recordPublishFeedback(id, admin.id, row.status);
     }
   }
   revalidatePath("/admin/content");

@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import type { Content, Category } from "@/lib/queries";
 import { timeAgoAr, formatDateTimeAr } from "@/lib/format";
 import {
-  setStatus,
+  setStatusForm,
   softDeleteContent,
   rejectContent,
   bulkSetStatus,
@@ -451,7 +451,7 @@ export default function ContentInbox({
                           تحرير
                         </Link>
                         {c.status === "published" ? (
-                          <form action={setStatus}>
+                          <form action={setStatusForm}>
                             <input type="hidden" name="id" value={c.id} />
                             <input type="hidden" name="status" value="unpublished" />
                             <button className="rounded-lg border border-line px-3 py-1.5 text-[12.5px] font-semibold">
@@ -459,7 +459,7 @@ export default function ContentInbox({
                             </button>
                           </form>
                         ) : c.status === "pending" ? (
-                          <form action={setStatus}>
+                          <form action={setStatusForm}>
                             <input type="hidden" name="id" value={c.id} />
                             <input type="hidden" name="status" value="published" />
                             <button className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-semibold text-white">

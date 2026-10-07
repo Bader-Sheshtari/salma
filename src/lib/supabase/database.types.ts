@@ -142,6 +142,7 @@ export type Database = {
           ai_summary: string | null
           author_id: string | null
           body: string | null
+          body_tsv: unknown
           category_slug: string | null
           cover_credit_name: string | null
           cover_credit_url: string | null
@@ -168,6 +169,7 @@ export type Database = {
           relevance_score: number | null
           reviewed_at: string | null
           reviewed_by: string | null
+          search_norm: string | null
           slug: string
           source_image_url: string | null
           source_lang: string | null
@@ -187,6 +189,7 @@ export type Database = {
           ai_summary?: string | null
           author_id?: string | null
           body?: string | null
+          body_tsv?: unknown
           category_slug?: string | null
           cover_credit_name?: string | null
           cover_credit_url?: string | null
@@ -213,6 +216,7 @@ export type Database = {
           relevance_score?: number | null
           reviewed_at?: string | null
           reviewed_by?: string | null
+          search_norm?: string | null
           slug: string
           source_image_url?: string | null
           source_lang?: string | null
@@ -232,6 +236,7 @@ export type Database = {
           ai_summary?: string | null
           author_id?: string | null
           body?: string | null
+          body_tsv?: unknown
           category_slug?: string | null
           cover_credit_name?: string | null
           cover_credit_url?: string | null
@@ -258,6 +263,7 @@ export type Database = {
           relevance_score?: number | null
           reviewed_at?: string | null
           reviewed_by?: string | null
+          search_norm?: string | null
           slug?: string
           source_image_url?: string | null
           source_lang?: string | null
@@ -2022,6 +2028,7 @@ export type Database = {
       }
     }
     Functions: {
+      ar_normalize: { Args: { p_input: string }; Returns: string }
       complete_ai_image: {
         Args: {
           p_actual: number
@@ -2031,6 +2038,15 @@ export type Database = {
           p_user_id: string
         }
         Returns: undefined
+      }
+      content_counts: {
+        Args: never
+        Returns: {
+          category_slug: string
+          n: number
+          scope: string
+          status: string
+        }[]
       }
       create_transfer_with_private: {
         Args: {
@@ -2069,6 +2085,38 @@ export type Database = {
       run_radar_healthlife: { Args: never; Returns: undefined }
       run_radar_rank: { Args: never; Returns: undefined }
       run_radar_shadow: { Args: never; Returns: undefined }
+      search_content: {
+        Args: {
+          p_author?: string
+          p_author_system?: boolean
+          p_category?: string
+          p_cursor_id?: string
+          p_cursor_ts?: string
+          p_from?: string
+          p_limit?: number
+          p_publisher?: string
+          p_q?: string
+          p_reviewer?: string
+          p_sort?: string
+          p_status?: string
+          p_to?: string
+        }
+        Returns: {
+          author_name: string
+          category_name_ar: string
+          category_slug: string
+          deleted_at: string
+          deleted_by_name: string
+          id: string
+          last_edited_at: string
+          published_at: string
+          slug: string
+          status: string
+          title: string
+          type: string
+          version: number
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never

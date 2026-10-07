@@ -2,7 +2,7 @@
 
 import { useActionState, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { saveContent, setStatus, softDeleteContent, type ContentSaveResult } from "../../actions";
+import { saveContent, setStatusForm, softDeleteContent, type ContentSaveResult } from "../../actions";
 import {
   generateCoverImage,
   fetchOfficialAssets,
@@ -24,7 +24,19 @@ const STATUSES = [
   { v: "pending", l: "بانتظار المراجعة" },
   { v: "published", l: "منشور" },
   { v: "unpublished", l: "غير منشور" },
+  { v: "rejected", l: "مرفوض" },
 ];
+
+/** Legal targets per current status — mirrors the DB matrix (P0021) and
+ * resolveStatusTransition in actions.ts. «رفض» has its own button, so
+ * `rejected` is never offered as a target here (only as the current value). */
+const SELECTABLE_FROM: Record<string, string[]> = {
+  draft: ["pending"],
+  pending: ["published", "draft"],
+  published: ["unpublished"],
+  unpublished: ["published", "draft"],
+  rejected: ["draft"],
+};
 
 const field =
   "mt-1.5 w-full rounded-lg border border-gray/40 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-teal";
@@ -65,6 +77,9 @@ export function ContentForm({
   // created item keep editing the same row rather than inserting a duplicate.
   const saved = state && "ok" in state ? state : null;
   const savedId = saved?.id ?? content?.id ?? "";
+  // Status the row has in the DB right now (after a save it may differ from the
+  // `content` prop) — drives which status moves the select offers.
+  const curStatus = saved?.status ?? content?.status ?? "draft";
   const [dismissed, setDismissed] = useState(false);
   // Re-show the success panel whenever a new save result arrives. Tracking the
   // previous `state` and adjusting during render (instead of in an effect)
@@ -366,8 +381,17 @@ export function ContentForm({
         </label>
         <label className={label}>
           الحالة
-          <select name="status" defaultValue={content?.status ?? "draft"} onChange={(e) => setStatusVal(e.target.value)} className={field}>
-            {(content ? STATUSES : STATUSES.filter((s) => s.v === "draft")).map((s) => (
+          <select
+            key={curStatus}
+            name="status"
+            defaultValue={curStatus}
+            onChange={(e) => setStatusVal(e.target.value)}
+            className={field}
+          >
+            {(content
+              ? STATUSES.filter((s) => s.v === curStatus || (SELECTABLE_FROM[curStatus] ?? []).includes(s.v))
+              : STATUSES.filter((s) => s.v === "draft")
+            ).map((s) => (
               <option key={s.v} value={s.v}>{s.l}</option>
             ))}
           </select>
@@ -892,8 +916,8 @@ export function ContentForm({
           >
             العودة إلى قائمة المحتوى
           </Link>
-          {saved.status !== "published" ? (
-            <form action={setStatus} onSubmit={(e) => guardSubmit(e, true)}>
+          {saved.status === "pending" || saved.status === "unpublished" ? (
+            <form action={setStatusForm} onSubmit={(e) => guardSubmit(e, true)}>
               <input type="hidden" name="id" value={saved.id} />
               <input type="hidden" name="status" value="published" />
               <button className="rounded-lg bg-teal px-4 py-2 text-[13px] font-bold text-white hover:opacity-90">
