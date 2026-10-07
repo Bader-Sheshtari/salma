@@ -51,6 +51,12 @@ export function ArticleView({
   const isVideo = content.type === "video";
   const paragraphs = (content.body ?? "").split(/\n{2,}/).filter((p) => p.trim());
   const jsonLd = contentJsonLd(detail, category?.name_ar);
+  // «آخر تحديث» reflects the last CONTENT edit (last_edited_at, maintained by
+  // the DB lifecycle trigger), not status/flag flips that bump updated_at.
+  // Falls back to updated_at until generated types/rows carry the new column.
+  const lastEditedAt =
+    (content as Content & { last_edited_at?: string | null }).last_edited_at ??
+    content.updated_at;
 
   return (
     <article className="mx-auto max-w-3xl px-4 py-6 sm:px-6">
@@ -76,11 +82,11 @@ export function ArticleView({
       </div>
 
       {content.published_at &&
-      content.updated_at &&
-      new Date(content.updated_at).getTime() - new Date(content.published_at).getTime() >
+      lastEditedAt &&
+      new Date(lastEditedAt).getTime() - new Date(content.published_at).getTime() >
         24 * 60 * 60 * 1000 ? (
         <div className="mt-1 font-sans text-[11px] text-gray/70">
-          آخر تحديث: {formatDateTimeAr(content.updated_at)}
+          آخر تحديث: {formatDateTimeAr(lastEditedAt)}
         </div>
       ) : null}
 

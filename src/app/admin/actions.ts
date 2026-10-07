@@ -19,6 +19,39 @@ import {
 
 export type SaveResult = { error: string } | null;
 
+const CONTENT_STATUSES = ["draft", "pending", "published", "rejected", "unpublished"];
+/** Statuses an article may be (re)published from. */
+const PUBLISHABLE_FROM = ["pending", "unpublished"];
+
+/**
+ * The ONE publish/unpublish rule shared by saveContent, setStatus and
+ * bulkSetStatus, so no path can bypass it:
+ *  - publish only from `pending` or `unpublished` (republish), never from a
+ *    deleted row;
+ *  - taking a live article down (→ draft/pending/unpublished) always lands on
+ *    `unpublished` (unpublish ≠ draft);
+ *  - every other transition is passed through (the DB logs illegal ones).
+ * Publication dates are NOT stamped here — the DB lifecycle trigger owns them.
+ */
+function resolveStatusTransition(
+  current: { status: string; deleted_at?: string | null } | null,
+  requested: string,
+): { status: string } | { error: string } {
+  if (!CONTENT_STATUSES.includes(requested)) return { error: "حالة غير صالحة." };
+  if (current && current.status === requested) return { status: requested };
+  if (requested === "published") {
+    if (!current || current.deleted_at || !PUBLISHABLE_FROM.includes(current.status)) {
+      return { error: "النشر مسموح فقط من حالة (بانتظار المراجعة) أو (غير منشور)." };
+    }
+    return { status: requested };
+  }
+  if (current?.status === "published" && ["draft", "pending", "unpublished"].includes(requested)) {
+    return { status: "unpublished" };
+  }
+  if (requested === "unpublished") return { error: "لا يمكن إلغاء نشر مادة غير منشورة." };
+  return { status: requested };
+}
+
 /** Result of `saveContent`: on success it carries the saved id + status so the
  * editor can show next-action buttons instead of redirecting away. */
 export type ContentSaveResult =
@@ -39,11 +72,11 @@ export async function saveContent(
   if (title.length < 4) return { error: "العنوان قصير جداً." };
 
   const type = String(formData.get("type") ?? "news");
-  const status = String(formData.get("status") ?? "draft");
+  let status = String(formData.get("status") ?? "draft");
   const category_slug = String(formData.get("category_slug") ?? "") || null;
-  const excerpt = String(formData.get("excerpt") ?? "").trim() || null;
+  const excerpt = String(formData.get("excerpt") ?? "").replace(/\r\n/g, "\n").trim() || null;
   const ai_summary = String(formData.get("ai_summary") ?? "").trim() || null;
-  const body = String(formData.get("body") ?? "").trim() || null;
+  const body = String(formData.get("body") ?? "").replace(/\r\n/g, "\n").trim() || null;
   const cover_image_url = String(formData.get("cover_image_url") ?? "").trim() || null;
   const cover_credit_name = String(formData.get("cover_credit_name") ?? "").trim() || null;
   const cover_credit_url = String(formData.get("cover_credit_url") ?? "").trim() || null;
@@ -57,7 +90,32 @@ export async function saveContent(
   const is_featured = formData.get("is_featured") === "on";
 
   const slug = String(formData.get("slug") ?? "").trim() || slugify(title);
-  const published_at = status === "published" ? new Date().toISOString() : null;
+  // No published_at here: the DB lifecycle trigger owns publication dates (an
+  // edit of a live article must never move its original publication date).
+
+  let contentId = id;
+  // Pre-edit snapshot for the editorial feedback loop (observational only):
+  // captured BEFORE the update so the AI-original baseline and change events
+  // can be derived. Feedback capture is best-effort and never blocks saving.
+  let prevRow: ContentSnapshot | null = null;
+
+  if (id) {
+    const { data: prevData } = await supabase
+      .from("content")
+      .select(`${SNAPSHOT_FIELDS},deleted_at`)
+      .eq("id", id)
+      .maybeSingle();
+    prevRow = (prevData as unknown as ContentSnapshot) ?? null;
+    // Same publish rule as setStatus — the form's status select cannot bypass it.
+    const prev = prevData as unknown as { status: string; deleted_at: string | null } | null;
+    if (!prev || prev.status !== status) {
+      const next = resolveStatusTransition(prev, status);
+      if ("error" in next) return { error: next.error };
+      status = next.status;
+    }
+  } else if (!CONTENT_STATUSES.includes(status) || status === "unpublished") {
+    return { error: "حالة غير صالحة." };
+  }
 
   const payload = {
     title,
@@ -78,22 +136,9 @@ export async function saveContent(
     read_minutes: Number.isFinite(read_minutes as number) ? read_minutes : null,
     is_breaking,
     is_featured,
-    ...(published_at ? { published_at } : {}),
   } satisfies Partial<TablesInsert<"content">>;
 
-  let contentId = id;
-  // Pre-edit snapshot for the editorial feedback loop (observational only):
-  // captured BEFORE the update so the AI-original baseline and change events
-  // can be derived. Feedback capture is best-effort and never blocks saving.
-  let prevRow: ContentSnapshot | null = null;
-
   if (id) {
-    const { data: prevData } = await supabase
-      .from("content")
-      .select(SNAPSHOT_FIELDS)
-      .eq("id", id)
-      .maybeSingle();
-    prevRow = (prevData as unknown as ContentSnapshot) ?? null;
     const { error } = await supabase
       .from("content")
       .update(payload as unknown as never)
@@ -199,21 +244,26 @@ export async function setStatus(formData: FormData) {
   const admin = await requireAdmin();
   const supabase = await createClient();
   const id = String(formData.get("id"));
-  const status = String(formData.get("status"));
+  const requested = String(formData.get("status"));
   const { data } = await supabase
     .from("content")
     .select("status,origin,deleted_at")
     .eq("id", id)
     .maybeSingle();
   const row = data as { status: string; origin: string; deleted_at: string | null } | null;
-  // Publication is only ever permitted from `pending` — the intended flow is
-  // Writer → Editorial Director → Fidelity → pending → human review → publish.
-  // A draft/rejected/published/deleted row can never be published here.
-  if (status === "published" && (!row || row.deleted_at || row.status !== "pending")) return;
-  const patch =
-    status === "published"
-      ? { status, published_at: new Date().toISOString() }
-      : { status };
+  // Publication is only ever permitted from `pending` (the intended flow is
+  // Writer → Editorial Director → Fidelity → pending → human review → publish)
+  // or from `unpublished` (republish, original date restored by the DB). A
+  // draft/rejected/published/deleted row can never be published here.
+  // Unpublishing a live article lands on `unpublished`.
+  const next = resolveStatusTransition(row, requested);
+  if ("error" in next) return;
+  // Same-status request (e.g. publishing an already-published row): no write,
+  // no feedback event.
+  if (row && row.status === next.status) return;
+  const status = next.status;
+  // Publication dates are stamped by the DB lifecycle trigger, not here.
+  const patch = { status };
   const { error } = await supabase
     .from("content")
     .update(patch as unknown as never)
@@ -328,25 +378,24 @@ async function contentRows(
 
 /**
  * Bulk status change (e.g. publish selected). This is a HUMAN ADMIN action and
- * applies the SAME update `setStatus` uses for a single item — identical patch,
- * identical `published_at` stamping when publishing — one row at a time so a
- * single failure never aborts the rest. It does NOT run or bypass Writer /
- * Editorial Director / Fidelity: publishing is only ever a status flip.
+ * applies the SAME update `setStatus` uses for a single item — identical patch
+ * (publication dates are stamped by the DB lifecycle trigger) — one row at a
+ * time so a single failure never aborts the rest. It does NOT run or bypass
+ * Writer / Editorial Director / Fidelity: publishing is only ever a status flip.
  *
- * Eligibility: publication is only ever permitted from `pending` — matching the
- * single-item Publish button and the intended flow (Writer → Editorial Director
- * → Fidelity → pending → human review → publish). draft / rejected / already
- * published / deleted rows are skipped with an exact reason, never force-published.
+ * Eligibility: publication is only ever permitted from `pending` or
+ * `unpublished` (republish) — matching the single-item Publish rule and the
+ * intended flow (Writer → Editorial Director → Fidelity → pending → human
+ * review → publish). draft / rejected / already published / deleted rows are
+ * skipped with an exact reason, never force-published.
  */
 export async function bulkSetStatus(ids: string[], status: string): Promise<BulkActionResult> {
   const admin = await requireAdmin();
   const supabase = await createClient();
   const clean = [...new Set((ids ?? []).map(String))].filter(Boolean);
   const rows = await contentRows(supabase, clean);
-  const patch =
-    status === "published"
-      ? { status, published_at: new Date().toISOString() }
-      : { status };
+  // Publication dates are stamped by the DB lifecycle trigger, not here.
+  const patch = { status };
   const skipped: BulkItemNote[] = [];
   const failed: BulkItemNote[] = [];
   let succeeded = 0;
@@ -356,12 +405,20 @@ export async function bulkSetStatus(ids: string[], status: string): Promise<Bulk
       skipped.push({ id, title: row?.title ?? id, reason: "العنصر غير موجود أو محذوف." });
       continue;
     }
-    if (status === "published" && row.status !== "pending") {
-      const reason =
-        row.status === "published"
-          ? "منشور بالفعل — غير مؤهّل للنشر الجماعي."
-          : "النشر مسموح فقط من حالة (بانتظار المراجعة).";
-      skipped.push({ id, title: row.title, reason });
+    const next = resolveStatusTransition(row, status);
+    if ("error" in next) {
+      skipped.push({ id, title: row.title, reason: next.error });
+      continue;
+    }
+    if (row.status === next.status) {
+      skipped.push({
+        id,
+        title: row.title,
+        reason:
+          status === "published"
+            ? "منشور بالفعل — غير مؤهّل للنشر الجماعي."
+            : "الحالة الحالية مطابقة للمطلوبة.",
+      });
       continue;
     }
     const { error } = await supabase.from("content").update(patch as unknown as never).eq("id", id);

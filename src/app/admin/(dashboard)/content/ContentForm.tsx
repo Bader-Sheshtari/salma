@@ -23,6 +23,7 @@ const STATUSES = [
   { v: "draft", l: "مسودّة" },
   { v: "pending", l: "بانتظار المراجعة" },
   { v: "published", l: "منشور" },
+  { v: "unpublished", l: "غير منشور" },
 ];
 
 const field =

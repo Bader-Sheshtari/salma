@@ -128,6 +128,13 @@ export type Database = {
             referencedRelation: "content"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "comments_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
         ]
       }
       content: {
@@ -140,18 +147,27 @@ export type Database = {
           cover_credit_url: string | null
           cover_image_url: string | null
           created_at: string
+          created_by: string | null
           dedupe_key: string | null
           deleted_at: string | null
+          deleted_by: string | null
           excerpt: string | null
+          first_published_at: string | null
           id: string
           is_breaking: boolean
           is_featured: boolean
+          last_edited_at: string | null
+          last_edited_by: string | null
+          last_published_at: string | null
           origin: string
           original_title: string | null
           original_url: string | null
           published_at: string | null
+          published_by: string | null
           read_minutes: number | null
           relevance_score: number | null
+          reviewed_at: string | null
+          reviewed_by: string | null
           slug: string
           source_image_url: string | null
           source_lang: string | null
@@ -160,7 +176,10 @@ export type Database = {
           status: string
           title: string
           type: string
+          unpublished_at: string | null
+          unpublished_by: string | null
           updated_at: string
+          version: number
           video_duration: string | null
           video_url: string | null
         }
@@ -173,18 +192,27 @@ export type Database = {
           cover_credit_url?: string | null
           cover_image_url?: string | null
           created_at?: string
+          created_by?: string | null
           dedupe_key?: string | null
           deleted_at?: string | null
+          deleted_by?: string | null
           excerpt?: string | null
+          first_published_at?: string | null
           id?: string
           is_breaking?: boolean
           is_featured?: boolean
+          last_edited_at?: string | null
+          last_edited_by?: string | null
+          last_published_at?: string | null
           origin?: string
           original_title?: string | null
           original_url?: string | null
           published_at?: string | null
+          published_by?: string | null
           read_minutes?: number | null
           relevance_score?: number | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
           slug: string
           source_image_url?: string | null
           source_lang?: string | null
@@ -193,7 +221,10 @@ export type Database = {
           status?: string
           title: string
           type?: string
+          unpublished_at?: string | null
+          unpublished_by?: string | null
           updated_at?: string
+          version?: number
           video_duration?: string | null
           video_url?: string | null
         }
@@ -206,18 +237,27 @@ export type Database = {
           cover_credit_url?: string | null
           cover_image_url?: string | null
           created_at?: string
+          created_by?: string | null
           dedupe_key?: string | null
           deleted_at?: string | null
+          deleted_by?: string | null
           excerpt?: string | null
+          first_published_at?: string | null
           id?: string
           is_breaking?: boolean
           is_featured?: boolean
+          last_edited_at?: string | null
+          last_edited_by?: string | null
+          last_published_at?: string | null
           origin?: string
           original_title?: string | null
           original_url?: string | null
           published_at?: string | null
+          published_by?: string | null
           read_minutes?: number | null
           relevance_score?: number | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
           slug?: string
           source_image_url?: string | null
           source_lang?: string | null
@@ -226,7 +266,10 @@ export type Database = {
           status?: string
           title?: string
           type?: string
+          unpublished_at?: string | null
+          unpublished_by?: string | null
           updated_at?: string
+          version?: number
           video_duration?: string | null
           video_url?: string | null
         }
@@ -244,6 +287,95 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "categories"
             referencedColumns: ["slug"]
+          },
+          {
+            foreignKeyName: "content_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_deleted_by_fkey"
+            columns: ["deleted_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_last_edited_by_fkey"
+            columns: ["last_edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_published_by_fkey"
+            columns: ["published_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_unpublished_by_fkey"
+            columns: ["unpublished_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      content_audit_log: {
+        Row: {
+          actor_id: string | null
+          actor_kind: string
+          content_id: string
+          created_at: string
+          details: Json | null
+          event: string
+          from_status: string | null
+          id: number
+          to_status: string | null
+          version_no: number | null
+        }
+        Insert: {
+          actor_id?: string | null
+          actor_kind: string
+          content_id: string
+          created_at?: string
+          details?: Json | null
+          event: string
+          from_status?: string | null
+          id?: never
+          to_status?: string | null
+          version_no?: number | null
+        }
+        Update: {
+          actor_id?: string | null
+          actor_kind?: string
+          content_id?: string
+          created_at?: string
+          details?: Json | null
+          event?: string
+          from_status?: string | null
+          id?: never
+          to_status?: string | null
+          version_no?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "content_audit_log_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -292,6 +424,13 @@ export type Database = {
             referencedRelation: "content"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "content_media_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
         ]
       }
       content_sources: {
@@ -322,6 +461,98 @@ export type Database = {
             columns: ["content_id"]
             isOneToOne: false
             referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_sources_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
+        ]
+      }
+      content_versions: {
+        Row: {
+          ai_summary: string | null
+          body: string | null
+          category_slug: string | null
+          content_id: string
+          cover_credit_name: string | null
+          cover_credit_url: string | null
+          cover_image_url: string | null
+          created_at: string
+          edited_at: string
+          edited_by: string | null
+          excerpt: string | null
+          slug: string
+          source_name: string | null
+          source_url: string | null
+          title: string
+          type: string
+          version_no: number
+          video_url: string | null
+        }
+        Insert: {
+          ai_summary?: string | null
+          body?: string | null
+          category_slug?: string | null
+          content_id: string
+          cover_credit_name?: string | null
+          cover_credit_url?: string | null
+          cover_image_url?: string | null
+          created_at?: string
+          edited_at: string
+          edited_by?: string | null
+          excerpt?: string | null
+          slug: string
+          source_name?: string | null
+          source_url?: string | null
+          title: string
+          type: string
+          version_no: number
+          video_url?: string | null
+        }
+        Update: {
+          ai_summary?: string | null
+          body?: string | null
+          category_slug?: string | null
+          content_id?: string
+          cover_credit_name?: string | null
+          cover_credit_url?: string | null
+          cover_image_url?: string | null
+          created_at?: string
+          edited_at?: string
+          edited_by?: string | null
+          excerpt?: string | null
+          slug?: string
+          source_name?: string | null
+          source_url?: string | null
+          title?: string
+          type?: string
+          version_no?: number
+          video_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "content_versions_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_versions_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
+          {
+            foreignKeyName: "content_versions_edited_by_fkey"
+            columns: ["edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
         ]
@@ -544,6 +775,121 @@ export type Database = {
           },
         ]
       }
+      editorial_ai_baseline: {
+        Row: {
+          body: string | null
+          captured_at: string
+          category_slug: string | null
+          content_id: string
+          cover_image_url: string | null
+          source_name: string | null
+          source_url: string | null
+          title: string
+        }
+        Insert: {
+          body?: string | null
+          captured_at?: string
+          category_slug?: string | null
+          content_id: string
+          cover_image_url?: string | null
+          source_name?: string | null
+          source_url?: string | null
+          title: string
+        }
+        Update: {
+          body?: string | null
+          captured_at?: string
+          category_slug?: string | null
+          content_id?: string
+          cover_image_url?: string | null
+          source_name?: string | null
+          source_url?: string | null
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "editorial_ai_baseline_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: true
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "editorial_ai_baseline_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: true
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
+        ]
+      }
+      editorial_feedback_events: {
+        Row: {
+          action: string
+          actor_id: string | null
+          after_value: string | null
+          before_value: string | null
+          content_id: string
+          created_at: string
+          edit_magnitude: string | null
+          edit_ratio: number | null
+          id: number
+          meta: Json | null
+          origin: string | null
+          reason: string | null
+        }
+        Insert: {
+          action: string
+          actor_id?: string | null
+          after_value?: string | null
+          before_value?: string | null
+          content_id: string
+          created_at?: string
+          edit_magnitude?: string | null
+          edit_ratio?: number | null
+          id?: never
+          meta?: Json | null
+          origin?: string | null
+          reason?: string | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string | null
+          after_value?: string | null
+          before_value?: string | null
+          content_id?: string
+          created_at?: string
+          edit_magnitude?: string | null
+          edit_ratio?: number | null
+          id?: never
+          meta?: Json | null
+          origin?: string | null
+          reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "editorial_feedback_events_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "editorial_feedback_events_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "editorial_feedback_events_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
+        ]
+      }
       editorial_policy: {
         Row: {
           block_topics: string[]
@@ -643,11 +989,20 @@ export type Database = {
           run_id: string | null
           selected_final_domain: string | null
           similarity_score: number | null
+          source_char_count: number | null
           source_domain: string | null
+          source_extraction_method: string | null
           source_tier: string | null
           source_trust_score: number | null
           source_url: string | null
+          source_word_count: number | null
           title: string | null
+          writer_fallback_used: boolean | null
+          writer_model_used: string | null
+          writer_primary_model: string | null
+          writer_prompt_version: string | null
+          writer_validation_reason: string | null
+          writing_profile: string | null
         }
         Insert: {
           accepted?: boolean
@@ -664,11 +1019,20 @@ export type Database = {
           run_id?: string | null
           selected_final_domain?: string | null
           similarity_score?: number | null
+          source_char_count?: number | null
           source_domain?: string | null
+          source_extraction_method?: string | null
           source_tier?: string | null
           source_trust_score?: number | null
           source_url?: string | null
+          source_word_count?: number | null
           title?: string | null
+          writer_fallback_used?: boolean | null
+          writer_model_used?: string | null
+          writer_primary_model?: string | null
+          writer_prompt_version?: string | null
+          writer_validation_reason?: string | null
+          writing_profile?: string | null
         }
         Update: {
           accepted?: boolean
@@ -685,11 +1049,20 @@ export type Database = {
           run_id?: string | null
           selected_final_domain?: string | null
           similarity_score?: number | null
+          source_char_count?: number | null
           source_domain?: string | null
+          source_extraction_method?: string | null
           source_tier?: string | null
           source_trust_score?: number | null
           source_url?: string | null
+          source_word_count?: number | null
           title?: string | null
+          writer_fallback_used?: boolean | null
+          writer_model_used?: string | null
+          writer_primary_model?: string | null
+          writer_prompt_version?: string | null
+          writer_validation_reason?: string | null
+          writing_profile?: string | null
         }
         Relationships: [
           {
@@ -698,6 +1071,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "content"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ingestion_decisions_duplicate_of_content_id_fkey"
+            columns: ["duplicate_of_content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
           },
           {
             foreignKeyName: "ingestion_decisions_run_id_fkey"
@@ -872,6 +1252,593 @@ export type Database = {
           },
         ]
       }
+      radar_editorial_selection: {
+        Row: {
+          chosen_source_domain: string | null
+          chosen_source_title: string | null
+          cluster_key: string
+          composite_score: number | null
+          created_at: string
+          editorial_day: string
+          esc_editorial_domain: string | null
+          esc_editorial_tier: number | null
+          esc_method: string | null
+          esc_status: string | null
+          evidence_class: string | null
+          gcc: boolean | null
+          id: number
+          lane: string | null
+          lane_confidence: number | null
+          mode: string
+          promoted_content_id: string | null
+          promotion_status: string | null
+          radar_article_id: string
+          run_id: string
+          selected: boolean
+          selection_reason: string | null
+          skip_reason: string | null
+          source_role: string | null
+          source_tier: number | null
+          story_type: string | null
+        }
+        Insert: {
+          chosen_source_domain?: string | null
+          chosen_source_title?: string | null
+          cluster_key: string
+          composite_score?: number | null
+          created_at?: string
+          editorial_day: string
+          esc_editorial_domain?: string | null
+          esc_editorial_tier?: number | null
+          esc_method?: string | null
+          esc_status?: string | null
+          evidence_class?: string | null
+          gcc?: boolean | null
+          id?: never
+          lane?: string | null
+          lane_confidence?: number | null
+          mode?: string
+          promoted_content_id?: string | null
+          promotion_status?: string | null
+          radar_article_id: string
+          run_id: string
+          selected?: boolean
+          selection_reason?: string | null
+          skip_reason?: string | null
+          source_role?: string | null
+          source_tier?: number | null
+          story_type?: string | null
+        }
+        Update: {
+          chosen_source_domain?: string | null
+          chosen_source_title?: string | null
+          cluster_key?: string
+          composite_score?: number | null
+          created_at?: string
+          editorial_day?: string
+          esc_editorial_domain?: string | null
+          esc_editorial_tier?: number | null
+          esc_method?: string | null
+          esc_status?: string | null
+          evidence_class?: string | null
+          gcc?: boolean | null
+          id?: never
+          lane?: string | null
+          lane_confidence?: number | null
+          mode?: string
+          promoted_content_id?: string | null
+          promotion_status?: string | null
+          radar_article_id?: string
+          run_id?: string
+          selected?: boolean
+          selection_reason?: string | null
+          skip_reason?: string | null
+          source_role?: string | null
+          source_tier?: number | null
+          story_type?: string | null
+        }
+        Relationships: []
+      }
+      radar_esl_runs: {
+        Row: {
+          cap: number | null
+          clusters: number | null
+          duration_ms: number | null
+          editorial_day: string | null
+          error: string | null
+          finished_at: string | null
+          id: string
+          job: string
+          mode: string | null
+          pool_size: number | null
+          promoted: number | null
+          promotion_failed: number | null
+          remaining_cap: number | null
+          selected: number | null
+          started_at: string
+          status: string
+        }
+        Insert: {
+          cap?: number | null
+          clusters?: number | null
+          duration_ms?: number | null
+          editorial_day?: string | null
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          job?: string
+          mode?: string | null
+          pool_size?: number | null
+          promoted?: number | null
+          promotion_failed?: number | null
+          remaining_cap?: number | null
+          selected?: number | null
+          started_at?: string
+          status: string
+        }
+        Update: {
+          cap?: number | null
+          clusters?: number | null
+          duration_ms?: number | null
+          editorial_day?: string | null
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          job?: string
+          mode?: string | null
+          pool_size?: number | null
+          promoted?: number | null
+          promotion_failed?: number | null
+          remaining_cap?: number | null
+          selected?: number | null
+          started_at?: string
+          status?: string
+        }
+        Relationships: []
+      }
+      radar_evidence_intelligence: {
+        Row: {
+          analysis_status: string
+          analyzed_domain: string | null
+          analyzed_url: string | null
+          applicability: string | null
+          card: Json | null
+          claim_relationship: string | null
+          cluster_key: string
+          content_id: string | null
+          created_at: string
+          editorial_primary_domain: string | null
+          editorial_primary_url: string | null
+          evidence_source_role: string | null
+          evidence_source_status: string | null
+          evidence_source_tier: number | null
+          evidence_strength: string | null
+          evidence_type: string | null
+          id: string
+          model: string | null
+          peer_review_status: string | null
+          prompt_version: string | null
+          reason: string | null
+          sample_size: number | null
+          source_independence: string | null
+          story_type: string | null
+          subject_type: string | null
+          updated_at: string
+        }
+        Insert: {
+          analysis_status: string
+          analyzed_domain?: string | null
+          analyzed_url?: string | null
+          applicability?: string | null
+          card?: Json | null
+          claim_relationship?: string | null
+          cluster_key: string
+          content_id?: string | null
+          created_at?: string
+          editorial_primary_domain?: string | null
+          editorial_primary_url?: string | null
+          evidence_source_role?: string | null
+          evidence_source_status?: string | null
+          evidence_source_tier?: number | null
+          evidence_strength?: string | null
+          evidence_type?: string | null
+          id?: string
+          model?: string | null
+          peer_review_status?: string | null
+          prompt_version?: string | null
+          reason?: string | null
+          sample_size?: number | null
+          source_independence?: string | null
+          story_type?: string | null
+          subject_type?: string | null
+          updated_at?: string
+        }
+        Update: {
+          analysis_status?: string
+          analyzed_domain?: string | null
+          analyzed_url?: string | null
+          applicability?: string | null
+          card?: Json | null
+          claim_relationship?: string | null
+          cluster_key?: string
+          content_id?: string | null
+          created_at?: string
+          editorial_primary_domain?: string | null
+          editorial_primary_url?: string | null
+          evidence_source_role?: string | null
+          evidence_source_status?: string | null
+          evidence_source_tier?: number | null
+          evidence_strength?: string | null
+          evidence_type?: string | null
+          id?: string
+          model?: string | null
+          peer_review_status?: string | null
+          prompt_version?: string | null
+          reason?: string | null
+          sample_size?: number | null
+          source_independence?: string | null
+          story_type?: string | null
+          subject_type?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "radar_evidence_intelligence_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "radar_evidence_intelligence_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
+        ]
+      }
+      radar_rank_runs: {
+        Row: {
+          attempted_count: number
+          backlog_after: number | null
+          backlog_before: number | null
+          completion_tokens: number
+          cost: number | null
+          duplicate_already_count: number
+          duplicate_new_count: number
+          duplicate_possible_count: number
+          duration_ms: number | null
+          error: string | null
+          finished_at: string | null
+          id: string
+          model: string | null
+          openrouter_calls: number
+          prompt_tokens: number
+          ranked_count: number
+          retry_count: number
+          skipped_count: number | null
+          started_at: string
+          status: string
+          total_tokens: number
+          trigger: string
+          unranked_error_count: number
+        }
+        Insert: {
+          attempted_count?: number
+          backlog_after?: number | null
+          backlog_before?: number | null
+          completion_tokens?: number
+          cost?: number | null
+          duplicate_already_count?: number
+          duplicate_new_count?: number
+          duplicate_possible_count?: number
+          duration_ms?: number | null
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          model?: string | null
+          openrouter_calls?: number
+          prompt_tokens?: number
+          ranked_count?: number
+          retry_count?: number
+          skipped_count?: number | null
+          started_at?: string
+          status?: string
+          total_tokens?: number
+          trigger?: string
+          unranked_error_count?: number
+        }
+        Update: {
+          attempted_count?: number
+          backlog_after?: number | null
+          backlog_before?: number | null
+          completion_tokens?: number
+          cost?: number | null
+          duplicate_already_count?: number
+          duplicate_new_count?: number
+          duplicate_possible_count?: number
+          duration_ms?: number | null
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          model?: string | null
+          openrouter_calls?: number
+          prompt_tokens?: number
+          ranked_count?: number
+          retry_count?: number
+          skipped_count?: number | null
+          started_at?: string
+          status?: string
+          total_tokens?: number
+          trigger?: string
+          unranked_error_count?: number
+        }
+        Relationships: []
+      }
+      radar_shadow_articles: {
+        Row: {
+          country: string | null
+          duplicate_status: string | null
+          editorial_value: string | null
+          esl_canonical_key: string | null
+          esl_canonicalized_at: string | null
+          esl_classified_at: string | null
+          esl_evidence_class: string | null
+          esl_gcc: boolean | null
+          esl_lane: string | null
+          esl_story_type: string | null
+          esl_usefulness: number | null
+          event_uri: string | null
+          expected_category_slug: string | null
+          first_seen_at: string
+          id: string
+          language: string | null
+          matched_content_id: string | null
+          priority_level: string | null
+          priority_score: number | null
+          provider: string
+          provider_seen_at: string | null
+          provider_uri: string
+          publish_authorized_at: string | null
+          publish_authorized_by: string | null
+          publish_error: string | null
+          publish_status: string | null
+          published_at: string | null
+          published_content_id: string | null
+          rank_attempts: number
+          rank_error: string | null
+          ranked_at: string | null
+          run_id: string | null
+          source_domain: string | null
+          source_title: string | null
+          title: string | null
+          title_ar: string | null
+          url: string | null
+        }
+        Insert: {
+          country?: string | null
+          duplicate_status?: string | null
+          editorial_value?: string | null
+          esl_canonical_key?: string | null
+          esl_canonicalized_at?: string | null
+          esl_classified_at?: string | null
+          esl_evidence_class?: string | null
+          esl_gcc?: boolean | null
+          esl_lane?: string | null
+          esl_story_type?: string | null
+          esl_usefulness?: number | null
+          event_uri?: string | null
+          expected_category_slug?: string | null
+          first_seen_at?: string
+          id?: string
+          language?: string | null
+          matched_content_id?: string | null
+          priority_level?: string | null
+          priority_score?: number | null
+          provider?: string
+          provider_seen_at?: string | null
+          provider_uri: string
+          publish_authorized_at?: string | null
+          publish_authorized_by?: string | null
+          publish_error?: string | null
+          publish_status?: string | null
+          published_at?: string | null
+          published_content_id?: string | null
+          rank_attempts?: number
+          rank_error?: string | null
+          ranked_at?: string | null
+          run_id?: string | null
+          source_domain?: string | null
+          source_title?: string | null
+          title?: string | null
+          title_ar?: string | null
+          url?: string | null
+        }
+        Update: {
+          country?: string | null
+          duplicate_status?: string | null
+          editorial_value?: string | null
+          esl_canonical_key?: string | null
+          esl_canonicalized_at?: string | null
+          esl_classified_at?: string | null
+          esl_evidence_class?: string | null
+          esl_gcc?: boolean | null
+          esl_lane?: string | null
+          esl_story_type?: string | null
+          esl_usefulness?: number | null
+          event_uri?: string | null
+          expected_category_slug?: string | null
+          first_seen_at?: string
+          id?: string
+          language?: string | null
+          matched_content_id?: string | null
+          priority_level?: string | null
+          priority_score?: number | null
+          provider?: string
+          provider_seen_at?: string | null
+          provider_uri?: string
+          publish_authorized_at?: string | null
+          publish_authorized_by?: string | null
+          publish_error?: string | null
+          publish_status?: string | null
+          published_at?: string | null
+          published_content_id?: string | null
+          rank_attempts?: number
+          rank_error?: string | null
+          ranked_at?: string | null
+          run_id?: string | null
+          source_domain?: string | null
+          source_title?: string | null
+          title?: string | null
+          title_ar?: string | null
+          url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "radar_shadow_articles_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "radar_shadow_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      radar_shadow_runs: {
+        Row: {
+          checkpoint_after: string | null
+          checkpoint_before: string | null
+          duplicate_count: number
+          error: string | null
+          finished_at: string | null
+          hit_result_cap: boolean | null
+          id: string
+          inserted_count: number
+          languages: string[]
+          profile: string | null
+          returned_count: number
+          stale_skipped_count: number
+          started_at: string
+          status: string
+          trigger: string
+          usage_info: Json | null
+        }
+        Insert: {
+          checkpoint_after?: string | null
+          checkpoint_before?: string | null
+          duplicate_count?: number
+          error?: string | null
+          finished_at?: string | null
+          hit_result_cap?: boolean | null
+          id?: string
+          inserted_count?: number
+          languages?: string[]
+          profile?: string | null
+          returned_count?: number
+          stale_skipped_count?: number
+          started_at?: string
+          status?: string
+          trigger?: string
+          usage_info?: Json | null
+        }
+        Update: {
+          checkpoint_after?: string | null
+          checkpoint_before?: string | null
+          duplicate_count?: number
+          error?: string | null
+          finished_at?: string | null
+          hit_result_cap?: boolean | null
+          id?: string
+          inserted_count?: number
+          languages?: string[]
+          profile?: string | null
+          returned_count?: number
+          stale_skipped_count?: number
+          started_at?: string
+          status?: string
+          trigger?: string
+          usage_info?: Json | null
+        }
+        Relationships: []
+      }
+      radar_shadow_state: {
+        Row: {
+          last_poll_tm: string | null
+          provider: string
+          updated_at: string
+        }
+        Insert: {
+          last_poll_tm?: string | null
+          provider?: string
+          updated_at?: string
+        }
+        Update: {
+          last_poll_tm?: string | null
+          provider?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      radar_source_escalation: {
+        Row: {
+          cluster_key: string
+          created_at: string
+          discovery_domain: string | null
+          discovery_role: string | null
+          discovery_tier: number | null
+          discovery_url: string | null
+          editorial_domain: string | null
+          editorial_role: string | null
+          editorial_tier: number | null
+          editorial_url: string | null
+          id: number
+          method: string | null
+          status: string
+          story_type: string | null
+          supporting_url: string | null
+          updated_at: string
+          upgrade_reason: string | null
+        }
+        Insert: {
+          cluster_key: string
+          created_at?: string
+          discovery_domain?: string | null
+          discovery_role?: string | null
+          discovery_tier?: number | null
+          discovery_url?: string | null
+          editorial_domain?: string | null
+          editorial_role?: string | null
+          editorial_tier?: number | null
+          editorial_url?: string | null
+          id?: never
+          method?: string | null
+          status: string
+          story_type?: string | null
+          supporting_url?: string | null
+          updated_at?: string
+          upgrade_reason?: string | null
+        }
+        Update: {
+          cluster_key?: string
+          created_at?: string
+          discovery_domain?: string | null
+          discovery_role?: string | null
+          discovery_tier?: number | null
+          discovery_url?: string | null
+          editorial_domain?: string | null
+          editorial_role?: string | null
+          editorial_tier?: number | null
+          editorial_url?: string | null
+          id?: never
+          method?: string | null
+          status?: string
+          story_type?: string | null
+          supporting_url?: string | null
+          updated_at?: string
+          upgrade_reason?: string | null
+        }
+        Relationships: []
+      }
       social_answers: {
         Row: {
           answer: string
@@ -963,7 +1930,96 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      editorial_feedback_overview: {
+        Row: {
+          ai_title: string | null
+          body_edit_magnitude: string | null
+          body_edit_ratio: number | null
+          category_after: string | null
+          category_before: string | null
+          category_corrected: boolean | null
+          category_slug: string | null
+          chosen_source_domain: string | null
+          cluster_key: string | null
+          composite_score: number | null
+          content_id: string | null
+          created_at: string | null
+          ei_claim_relationship: string | null
+          ei_evidence_type: string | null
+          ei_peer_review: string | null
+          ei_source_independence: string | null
+          ei_status: string | null
+          ei_strength: string | null
+          ei_subject_type: string | null
+          esc_discovery_tier: number | null
+          esc_editorial_tier: number | null
+          esc_method: string | null
+          esc_status: string | null
+          esl_selected: boolean | null
+          evidence_class: string | null
+          final_title: string | null
+          gcc: boolean | null
+          image_changed: boolean | null
+          lane: string | null
+          published_at: string | null
+          reject_reason: string | null
+          selection_reason: string | null
+          source_after: string | null
+          source_before: string | null
+          source_changed: boolean | null
+          source_role: string | null
+          source_tier: number | null
+          status: string | null
+          story_type: string | null
+          title: string | null
+          title_edit_magnitude: string | null
+          title_edit_ratio: number | null
+          usefulness: number | null
+          was_edited: boolean | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "content_category_slug_fkey"
+            columns: ["category_slug"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["slug"]
+          },
+        ]
+      }
+      pipeline_health: {
+        Row: {
+          backlog: number | null
+          expected_cadence: string | null
+          failures_24h: number | null
+          last_ok_at: string | null
+          last_run_at: string | null
+          last_status: string | null
+          ok_tolerance: string | null
+          stage: string | null
+          stale_running: number | null
+        }
+        Relationships: []
+      }
+      pipeline_health_alerts: {
+        Row: {
+          alert: string | null
+          detail: string | null
+          stage: string | null
+        }
+        Relationships: []
+      }
+      radar_rank_health: {
+        Row: {
+          backlog_unranked: number | null
+          backlog_unranked_24h: number | null
+          last_run_started_at: string | null
+          last_run_status: string | null
+          last_success_at: string | null
+          stale_running_runs: number | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       complete_ai_image: {
@@ -990,6 +2046,7 @@ export type Database = {
       }
       is_admin: { Args: never; Returns: boolean }
       is_admin_manager: { Args: never; Returns: boolean }
+      normalize_host: { Args: { input: string }; Returns: string }
       reserve_ai_image: {
         Args: {
           p_max_images_global_24h: number
@@ -1007,7 +2064,11 @@ export type Database = {
           reservation_id: number
         }[]
       }
+      run_esl: { Args: { p_mode?: string }; Returns: undefined }
       run_news_ingestion: { Args: never; Returns: undefined }
+      run_radar_healthlife: { Args: never; Returns: undefined }
+      run_radar_rank: { Args: never; Returns: undefined }
+      run_radar_shadow: { Args: never; Returns: undefined }
     }
     Enums: {
       [_ in never]: never
@@ -1026,12 +2087,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1055,11 +2116,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1080,11 +2141,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1105,11 +2166,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1122,11 +2183,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }

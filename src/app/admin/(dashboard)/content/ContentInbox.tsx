@@ -21,6 +21,7 @@ const STATUS_LABEL: Record<string, string> = {
   pending: "مراجعة",
   draft: "مسودّة",
   rejected: "مرفوض",
+  unpublished: "غير منشور",
 };
 
 const NEEDS_REVIEW = "بحاجة مراجعة";
@@ -452,7 +453,7 @@ export default function ContentInbox({
                         {c.status === "published" ? (
                           <form action={setStatus}>
                             <input type="hidden" name="id" value={c.id} />
-                            <input type="hidden" name="status" value="draft" />
+                            <input type="hidden" name="status" value="unpublished" />
                             <button className="rounded-lg border border-line px-3 py-1.5 text-[12.5px] font-semibold">
                               إلغاء النشر
                             </button>

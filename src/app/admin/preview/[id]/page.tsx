@@ -19,6 +19,7 @@ const STATUS_LABEL: Record<string, string> = {
   pending: "بانتظار المراجعة",
   draft: "مسودّة",
   rejected: "مرفوض",
+  unpublished: "غير منشور",
 };
 
 type Props = { params: Promise<{ id: string }> };
