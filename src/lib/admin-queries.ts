@@ -20,6 +20,15 @@ import {
   type ContentSearchRow,
   type SearchContentParams,
 } from "@/lib/content-search";
+import {
+  HISTORY_PAGE_SIZE,
+  SYSTEM_ACTOR_LABEL,
+  type AuditCursor,
+  type AuditDetails,
+  type AuditEvent,
+  type VersionMeta,
+  type VersionSnapshot,
+} from "@/lib/content-history";
 
 export type IngestionRun = Tables<"ingestion_runs">;
 export type RunArticle = { id: string; title: string; status: string };
@@ -240,6 +249,179 @@ export async function getContentForEdit(
     sources: (sources as ContentSource[]) ?? [],
     media: (media as ContentMedia[]) ?? [],
   };
+}
+
+// ---- Article history (Phase 4: activity timeline + versions) -------------
+
+/**
+ * id → display name for a set of profile ids (full name, else email). One small
+ * query; unknown ids are simply absent (callers fall back to the system label).
+ */
+export async function getProfileNames(ids: (string | null | undefined)[]): Promise<Map<string, string>> {
+  const unique = [...new Set(ids.filter((x): x is string => !!x))];
+  const names = new Map<string, string>();
+  if (unique.length === 0) return names;
+  const supabase = await createClient();
+  const { data } = await supabase.from("profiles").select("id,full_name,email").in("id", unique);
+  for (const p of (data ?? []) as { id: string; full_name: string | null; email: string | null }[]) {
+    names.set(p.id, p.full_name || p.email || p.id.slice(0, 8));
+  }
+  return names;
+}
+
+/**
+ * One page of an article's activity timeline, newest first. Keyset on
+ * (created_at, id) desc; requests one extra row to know whether more exist.
+ * NULL actor → «سلمى (آلي)».
+ */
+export async function getContentAuditLog(
+  contentId: string,
+  cursor?: AuditCursor | null,
+  limit = HISTORY_PAGE_SIZE,
+): Promise<{ events: AuditEvent[]; hasMore: boolean; error: string | null }> {
+  const supabase = await createClient();
+  const n = Math.min(100, Math.max(1, limit));
+  let q = supabase
+    .from("content_audit_log")
+    .select("id,event,from_status,to_status,actor_id,actor_kind,version_no,details,created_at")
+    .eq("content_id", contentId)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(n + 1);
+  if (cursor) {
+    q = q.or(`created_at.lt."${cursor.ts}",and(created_at.eq."${cursor.ts}",id.lt.${cursor.id})`);
+  }
+  const { data, error } = await q;
+  if (error) {
+    console.error("[content] audit log read failed:", error.message);
+    return { events: [], hasMore: false, error: error.message };
+  }
+  type RawEvent = Omit<AuditEvent, "actor_name" | "details"> & { details: unknown };
+  const rows = (data ?? []) as RawEvent[];
+  const names = await getProfileNames(rows.map((r) => r.actor_id));
+  const events = rows.slice(0, n).map((r) => ({
+    ...r,
+    details: (r.details && typeof r.details === "object" ? r.details : null) as AuditDetails | null,
+    actor_name: (r.actor_id && names.get(r.actor_id)) || SYSTEM_ACTOR_LABEL,
+  }));
+  return { events, hasMore: rows.length > n, error: null };
+}
+
+type VersionMetaRaw = { version_no: number; edited_by: string | null; edited_at: string };
+
+/** Who produced version 1: the article's creation. */
+async function creationOf(contentId: string): Promise<{ by: string | null; at: string } | null> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("content")
+    .select("created_by,created_at")
+    .eq("id", contentId)
+    .maybeSingle();
+  const row = data as { created_by: string | null; created_at: string } | null;
+  return row ? { by: row.created_by, at: row.created_at } : null;
+}
+
+/**
+ * Attribute stored snapshots to their AUTHOR: snapshot N's edited_by/edited_at
+ * record the edit that superseded it (created version N+1), so version N was
+ * produced by snapshot N-1's edit — or by the article's creation for N = 1.
+ * `rows` are desc by version_no and may include one look-ahead row.
+ */
+async function attributeVersions(
+  contentId: string,
+  shown: VersionMetaRaw[],
+  all: VersionMetaRaw[],
+): Promise<VersionMeta[]> {
+  const byNo = new Map(all.map((r) => [r.version_no, r]));
+  const needsCreation = shown.some((r) => r.version_no === 1);
+  const created = needsCreation ? await creationOf(contentId) : null;
+  const authorIds = shown.map((r) =>
+    r.version_no === 1 ? (created?.by ?? null) : (byNo.get(r.version_no - 1)?.edited_by ?? null),
+  );
+  const names = await getProfileNames(authorIds);
+  return shown.map((r, i) => {
+    if (r.version_no === 1) {
+      return {
+        version_no: 1,
+        author_name: (created?.by && names.get(created.by)) || SYSTEM_ACTOR_LABEL,
+        authored_at: created?.at ?? null,
+      };
+    }
+    const prev = byNo.get(r.version_no - 1);
+    if (!prev) return { version_no: r.version_no, author_name: null, authored_at: null };
+    return {
+      version_no: r.version_no,
+      author_name: (authorIds[i] && names.get(authorIds[i]!)) || SYSTEM_ACTOR_LABEL,
+      authored_at: prev.edited_at,
+    };
+  });
+}
+
+/**
+ * One page of an article's stored versions (metadata only — never body),
+ * newest first, keyset on version_no. Fetches limit + 2 rows: one to know
+ * whether more exist, one more to attribute the page's last version.
+ */
+export async function getContentVersions(
+  contentId: string,
+  beforeVersionNo?: number | null,
+  limit = HISTORY_PAGE_SIZE,
+): Promise<{ versions: VersionMeta[]; hasMore: boolean; error: string | null }> {
+  const supabase = await createClient();
+  const n = Math.min(100, Math.max(1, limit));
+  let q = supabase
+    .from("content_versions")
+    .select("version_no,edited_by,edited_at")
+    .eq("content_id", contentId)
+    .order("version_no", { ascending: false })
+    .limit(n + 2);
+  if (beforeVersionNo != null) q = q.lt("version_no", beforeVersionNo);
+  const { data, error } = await q;
+  if (error) {
+    console.error("[content] versions read failed:", error.message);
+    return { versions: [], hasMore: false, error: error.message };
+  }
+  const rows = (data ?? []) as VersionMetaRaw[];
+  const shown = rows.slice(0, n);
+  return {
+    versions: await attributeVersions(contentId, shown, rows),
+    hasMore: rows.length > n,
+    error: null,
+  };
+}
+
+/** One full stored version (incl. body) + its author attribution, or null. */
+export async function getContentVersion(
+  contentId: string,
+  versionNo: number,
+): Promise<{ version: VersionSnapshot; meta: VersionMeta } | null> {
+  const supabase = await createClient();
+  const [{ data }, { data: prev }] = await Promise.all([
+    supabase
+      .from("content_versions")
+      .select(
+        "content_id,version_no,title,slug,excerpt,body,ai_summary,category_slug,type,cover_image_url,cover_credit_name,cover_credit_url,source_name,source_url,video_url,edited_by,edited_at",
+      )
+      .eq("content_id", contentId)
+      .eq("version_no", versionNo)
+      .maybeSingle(),
+    supabase
+      .from("content_versions")
+      .select("version_no,edited_by,edited_at")
+      .eq("content_id", contentId)
+      .eq("version_no", versionNo - 1)
+      .maybeSingle(),
+  ]);
+  if (!data) return null;
+  const version = data as VersionSnapshot;
+  const self: VersionMetaRaw = {
+    version_no: version.version_no,
+    edited_by: version.edited_by,
+    edited_at: version.edited_at,
+  };
+  const all = prev ? [self, prev as VersionMetaRaw] : [self];
+  const [meta] = await attributeVersions(contentId, [self], all);
+  return { version, meta };
 }
 
 /** Evidence Intelligence sidecar row for one content item (admin read-only). */

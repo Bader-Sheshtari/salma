@@ -2080,6 +2080,10 @@ export type Database = {
           reservation_id: number
         }[]
       }
+      restore_content_version: {
+        Args: { p_content_id: string; p_version_no: number }
+        Returns: Json
+      }
       run_esl: { Args: { p_mode?: string }; Returns: undefined }
       run_news_ingestion: { Args: never; Returns: undefined }
       run_radar_healthlife: { Args: never; Returns: undefined }

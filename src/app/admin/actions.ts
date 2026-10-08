@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -354,6 +355,70 @@ export async function restoreContent(
   revalidatePath("/");
   const row = data as { status: string; title: string };
   return { ok: true, status: row.status, title: row.title };
+}
+
+export type RestoreVersionResult =
+  | { ok: true; noChange: boolean; newVersion: number | null }
+  | { error: string };
+
+/** Arabic message for a `{ ok: false, reason }` from restore_content_version. */
+function restoreReasonAr(reason: unknown): string {
+  // The RPC returns ready-to-show Arabic reasons — pass them through verbatim.
+  if (typeof reason === "string" && /[؀-ۿ]/.test(reason)) return reason;
+  const r = String(reason ?? "").toLowerCase();
+  if (r.includes("delet") || r.includes("trash")) {
+    return "المادة في المحذوفات — استعدها من المحذوفات أولًا ثم أعد المحاولة.";
+  }
+  if (r.includes("version")) return "هذا الإصدار غير موجود.";
+  if (r.includes("not_found") || r.includes("not found") || r.includes("content")) {
+    return "المادة غير موجودة.";
+  }
+  return "تعذّرت استعادة الإصدار.";
+}
+
+/**
+ * Restore an article's editable content to a stored version via the
+ * `restore_content_version` RPC (CMS Phase 4). The RPC never changes status,
+ * flags, dates or slug; the DB trigger snapshots the current content as a new
+ * version and logs a single `version_restored` event. Current admin access
+ * only (requireAdmin + the RPC's own is_admin() check).
+ */
+export async function restoreContentVersion(
+  contentId: string,
+  versionNo: number,
+): Promise<RestoreVersionResult> {
+  await requireAdmin();
+  const id = String(contentId);
+  const v = Number(versionNo);
+  if (!Number.isSafeInteger(v) || v < 1) return { error: "رقم إصدار غير صالح." };
+  const supabase = await createClient();
+  const { data: before } = await supabase.from("content").select("slug").eq("id", id).maybeSingle();
+  // RPC is not in the generated Database types until regenerated post-migration.
+  const client = supabase as unknown as SupabaseClient;
+  const { data, error } = await client.rpc("restore_content_version", {
+    p_content_id: id,
+    p_version_no: v,
+  });
+  if (error) {
+    console.error("[content] restore_content_version failed:", error.message);
+    return {
+      error: error.code === "42501" ? "ليست لديك صلاحية لاستعادة الإصدارات." : "تعذّرت استعادة الإصدار.",
+    };
+  }
+  const res = (data ?? {}) as {
+    ok?: boolean;
+    no_change?: boolean;
+    new_version?: number;
+    reason?: string;
+    error?: string;
+  };
+  if (!res.ok) return { error: restoreReasonAr(res.reason ?? res.error) };
+  revalidatePath(`/admin/content/${id}`);
+  revalidatePath("/admin/content");
+  revalidatePath("/");
+  const slug = (before as { slug: string } | null)?.slug;
+  if (slug) revalidatePath(`/article/${slug}`);
+  return { ok: true, noChange: !!res.no_change, newVersion: res.new_version ?? null };
 }
 
 /**
