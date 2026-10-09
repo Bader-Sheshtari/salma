@@ -1,10 +1,13 @@
 import { notFound } from "next/navigation";
 import { getDoctorForEdit, listDepartments } from "@/lib/admin-queries";
 import { DoctorForm } from "../DoctorForm";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function EditDoctor({ params }: { params: Promise<{ id: string }> }) {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const { id } = await params;
   const [doctor, departments] = await Promise.all([getDoctorForEdit(id), listDepartments()]);
   if (!doctor) notFound();

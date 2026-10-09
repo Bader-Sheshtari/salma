@@ -1,38 +1,53 @@
 import Link from "next/link";
-import { requireAdmin } from "@/lib/auth";
+import { requireStaff, isAdminRole, isManagerRole } from "@/lib/auth";
 import { logout } from "../auth-actions";
 
-// `ownerOnly` links are only rendered for the owner (e.g. admin management).
-const NAV = [
-  { href: "/admin", label: "لوحة التحكم" },
-  { href: "/admin/homepage", label: "الصفحة الرئيسية" },
-  { href: "/admin/content", label: "المحتوى" },
-  { href: "/admin/radar", label: "رادار الأخبار" },
-  { href: "/admin/editorial-feedback", label: "التعلّم التحريري" },
-  { href: "/admin/content/new", label: "إضافة محتوى" },
-  { href: "/admin/categories", label: "الأقسام والصفحات" },
-  { href: "/admin/ingest", label: "جلب بالذكاء الاصطناعي" },
-  { href: "/admin/ingest/runs", label: "سجلّ الجلب" },
-  { href: "/admin/ingest/policy", label: "السياسة التحريرية" },
-  { href: "/admin/ingest/sources", label: "سِجِلّ المصادر" },
-  { href: "/admin/synthesize", label: "تحويل رابط لمقال" },
-  { href: "/admin/comments", label: "التعليقات" },
-  { href: "/admin/departments", label: "الأقسام" },
-  { href: "/admin/doctors", label: "الأطباء" },
-  { href: "/admin/transfers", label: "انتقال الأطباء" },
-  { href: "/admin/users", label: "إدارة الأدمن", ownerOnly: true },
+/**
+ * Minimum tier per nav item: `staff` = editor and above (content area only),
+ * `admin` = admin and above (operational pages), `manager` = super_admin/owner
+ * (account management). Each page ALSO hard-gates itself server-side — hiding a
+ * link is never the only protection.
+ */
+type Tier = "staff" | "admin" | "manager";
+
+const NAV: { href: string; label: string; tier: Tier }[] = [
+  { href: "/admin", label: "لوحة التحكم", tier: "admin" },
+  { href: "/admin/homepage", label: "الصفحة الرئيسية", tier: "admin" },
+  { href: "/admin/content", label: "المحتوى", tier: "staff" },
+  { href: "/admin/radar", label: "رادار الأخبار", tier: "admin" },
+  { href: "/admin/editorial-feedback", label: "التعلّم التحريري", tier: "admin" },
+  { href: "/admin/content/new", label: "إضافة محتوى", tier: "staff" },
+  { href: "/admin/categories", label: "الأقسام والصفحات", tier: "admin" },
+  { href: "/admin/ingest", label: "جلب بالذكاء الاصطناعي", tier: "admin" },
+  { href: "/admin/ingest/runs", label: "سجلّ الجلب", tier: "admin" },
+  { href: "/admin/ingest/policy", label: "السياسة التحريرية", tier: "admin" },
+  { href: "/admin/ingest/sources", label: "سِجِلّ المصادر", tier: "admin" },
+  { href: "/admin/synthesize", label: "تحويل رابط لمقال", tier: "admin" },
+  { href: "/admin/comments", label: "التعليقات", tier: "admin" },
+  { href: "/admin/departments", label: "الأقسام", tier: "admin" },
+  { href: "/admin/doctors", label: "الأطباء", tier: "admin" },
+  { href: "/admin/transfers", label: "انتقال الأطباء", tier: "admin" },
+  { href: "/admin/users", label: "إدارة الأدمن", tier: "manager" },
 ];
 
+function allowed(tier: Tier, role: string): boolean {
+  if (tier === "manager") return isManagerRole(role);
+  if (tier === "admin") return isAdminRole(role);
+  return true; // staff — requireStaff already admitted this role
+}
+
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const admin = await requireAdmin();
-  const nav = NAV.filter((n) => !n.ownerOnly || admin.role === "owner");
+  const admin = await requireStaff();
+  const nav = NAV.filter((n) => allowed(n.tier, admin.role));
+  // Editors have no dashboard home (its stats are admin-scope); brand links to content.
+  const home = isAdminRole(admin.role) ? "/admin" : "/admin/content";
 
   return (
     <div className="min-h-screen bg-sand">
       <div className="mx-auto flex max-w-6xl flex-col md:flex-row">
         <aside className="md:sticky md:top-0 md:h-screen md:w-60 md:shrink-0">
           <div className="flex h-full flex-col border-line bg-white p-4 md:border-l">
-            <Link href="/admin" className="mb-5 flex items-center gap-2.5">
+            <Link href={home} className="mb-5 flex items-center gap-2.5">
               <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal text-lg font-bold text-white">
                 س
               </span>

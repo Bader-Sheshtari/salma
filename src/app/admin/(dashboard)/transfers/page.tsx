@@ -2,10 +2,13 @@ import Link from "next/link";
 import { listTransfers } from "@/lib/admin-queries";
 import { softDeleteTransfer } from "../../actions";
 import { timeAgoAr } from "@/lib/format";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function TransfersList() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const transfers = await listTransfers();
 
   return (

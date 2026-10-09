@@ -1,10 +1,13 @@
 import { listCategories } from "@/lib/admin-queries";
 import { CategoryForm } from "./CategoryForm";
 import { DeleteCategoryForm } from "./DeleteCategoryForm";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function CategoriesAdmin() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const categories = await listCategories();
 
   return (

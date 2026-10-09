@@ -1,12 +1,15 @@
 import { listHomepageSections, listHeroOptions } from "@/lib/admin-queries";
 import { setMainContent } from "../../actions";
 import { SectionOrderList } from "./SectionOrderList";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 const TYPE_LABELS: Record<string, string> = { article: "مقال", video: "فيديو" };
 
 export default async function HomepageSectionsPage() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const [sections, heroOptions] = await Promise.all([listHomepageSections(), listHeroOptions()]);
   // Mirror the homepage's hero pick: the newest featured item (options are newest-first).
   const currentHeroId = heroOptions.find((c) => c.is_featured)?.id ?? "";

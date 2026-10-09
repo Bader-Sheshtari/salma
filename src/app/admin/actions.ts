@@ -5,7 +5,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireAdmin, isManagerRole, type Profile } from "@/lib/auth";
+import { requireAdmin, requireStaff, isManagerRole, type Profile } from "@/lib/auth";
+import { canAssignRole, canManageTarget } from "@/lib/roles";
 import { slugify } from "@/lib/slug";
 import type { TablesInsert, TablesUpdate } from "@/lib/supabase/database.types";
 import { normalizeRejectReason } from "@/lib/editorial-feedback";
@@ -84,7 +85,7 @@ export async function saveContent(
   _prev: ContentSaveResult,
   formData: FormData,
 ): Promise<ContentSaveResult> {
-  const admin = await requireAdmin();
+  const admin = await requireStaff();
   const supabase = await createClient();
 
   const id = String(formData.get("id") ?? "").trim();
@@ -106,8 +107,15 @@ export async function saveContent(
   const video_duration = String(formData.get("video_duration") ?? "").trim() || null;
   const readRaw = String(formData.get("read_minutes") ?? "").trim();
   const read_minutes = readRaw ? Number(readRaw) : null;
-  const is_breaking = formData.get("is_breaking") === "on";
-  const is_featured = formData.get("is_featured") === "on";
+  let is_breaking = formData.get("is_breaking") === "on";
+  let is_featured = formData.get("is_featured") === "on";
+  // Homepage/breaking flags are admin-scope: editors cannot set them. On update
+  // the existing values are preserved (keys omitted below); on create → false.
+  const flagsLocked = admin.role === "editor";
+  if (flagsLocked) {
+    is_breaking = false;
+    is_featured = false;
+  }
 
   const slug = String(formData.get("slug") ?? "").trim() || slugify(title);
   // No published_at here: the DB lifecycle trigger owns publication dates (an
@@ -161,9 +169,14 @@ export async function saveContent(
   } satisfies Partial<TablesInsert<"content">>;
 
   if (id) {
+    const updatePayload: Record<string, unknown> = { ...payload };
+    if (flagsLocked) {
+      delete updatePayload.is_breaking;
+      delete updatePayload.is_featured;
+    }
     const { error } = await supabase
       .from("content")
-      .update(payload as unknown as never)
+      .update(updatePayload as unknown as never)
       .eq("id", id);
     if (error) return { error: "تعذّر حفظ التعديلات." };
   } else {
@@ -263,7 +276,7 @@ export async function saveContent(
 }
 
 export async function setStatus(formData: FormData): Promise<{ ok: true } | { error: string }> {
-  const admin = await requireAdmin();
+  const admin = await requireStaff();
   const supabase = await createClient();
   const id = String(formData.get("id"));
   const requested = String(formData.get("status"));
@@ -319,7 +332,7 @@ export async function setStatusForm(formData: FormData): Promise<void> {
 }
 
 export async function softDeleteContent(formData: FormData) {
-  await requireAdmin();
+  await requireStaff();
   const supabase = await createClient();
   const id = String(formData.get("id"));
   await supabase
@@ -340,7 +353,7 @@ export async function softDeleteContent(formData: FormData) {
 export async function restoreContent(
   id: string,
 ): Promise<{ error: string } | { ok: true; status: string; title: string }> {
-  await requireAdmin();
+  await requireStaff();
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("content")
@@ -380,14 +393,14 @@ function restoreReasonAr(reason: unknown): string {
  * Restore an article's editable content to a stored version via the
  * `restore_content_version` RPC (CMS Phase 4). The RPC never changes status,
  * flags, dates or slug; the DB trigger snapshots the current content as a new
- * version and logs a single `version_restored` event. Current admin access
- * only (requireAdmin + the RPC's own is_admin() check).
+ * version and logs a single `version_restored` event. Staff access (editor and
+ * above: requireStaff + the RPC's own is_staff() check).
  */
 export async function restoreContentVersion(
   contentId: string,
   versionNo: number,
 ): Promise<RestoreVersionResult> {
-  await requireAdmin();
+  await requireStaff();
   const id = String(contentId);
   const v = Number(versionNo);
   if (!Number.isSafeInteger(v) || v < 1) return { error: "رقم إصدار غير صالح." };
@@ -429,7 +442,7 @@ export async function restoreContentVersion(
  * stamps `published_at` — publishing remains a separate, explicit action.
  */
 export async function rejectContent(formData: FormData) {
-  const admin = await requireAdmin();
+  const admin = await requireStaff();
   const supabase = await createClient();
   const id = String(formData.get("id"));
   // Optional lightweight structured reason (clamped to the small taxonomy —
@@ -519,7 +532,7 @@ async function contentRows(
  * skipped with an exact reason, never force-published.
  */
 export async function bulkSetStatus(ids: string[], status: string): Promise<BulkActionResult> {
-  const admin = await requireAdmin();
+  const admin = await requireStaff();
   const supabase = await createClient();
   const clean = [...new Set((ids ?? []).map(String))].filter(Boolean);
   const rows = await contentRows(supabase, clean);
@@ -567,7 +580,7 @@ export async function bulkSetStatus(ids: string[], status: string): Promise<Bulk
  * collecting per-item outcomes rather than aborting on the first error. Rows
  * that are missing or already deleted are skipped (nothing to do). */
 export async function bulkSoftDelete(ids: string[]): Promise<BulkActionResult> {
-  await requireAdmin();
+  await requireStaff();
   const supabase = await createClient();
   const clean = [...new Set((ids ?? []).map(String))].filter(Boolean);
   const rows = await contentRows(supabase, clean);
@@ -603,7 +616,7 @@ export async function setCategory(
   id: string,
   slug: string,
 ): Promise<{ error: string } | { ok: true }> {
-  const admin = await requireAdmin();
+  const admin = await requireStaff();
   const supabase = await createClient();
   const category_slug = String(slug ?? "").trim() || null;
   if (category_slug) {
@@ -1566,42 +1579,58 @@ export async function synthesizeUrl(_prev: SynthResult, formData: FormData): Pro
 
 export type AdminUserResult = { error: string } | { ok: string } | null;
 
-/** Roles a manager may hand out through the UI (never "owner"). */
-const ASSIGNABLE_ROLES = ["admin", "super_admin"] as const;
-
 /**
- * Whether `actor` may act on `target` (suspend / delete / change role / reset
- * password). Self is excluded (use the self-service password form) and the owner
- * account is always protected. Owners manage admins and super admins; super
- * admins manage only plain admins. Mirrors the spec's role hierarchy — and is the
- * authoritative check, since the service-role client bypasses RLS and triggers.
+ * Whether `actor` may act on `target` (suspend / change role / reset password).
+ * The rule set lives in `@/lib/roles` (shared with the users-page UI); this is
+ * the authoritative server-side check. Owner manages every non-owner account;
+ * super_admin manages admin/editor (and legacy user) accounts only.
  */
 function canManage(actor: Profile, target: { id: string; role: string }): boolean {
-  if (target.id === actor.id) return false;
-  if (target.role === "owner") return false;
-  if (actor.role === "owner") return true;
-  if (actor.role === "super_admin") return target.role === "admin";
-  return false;
+  return canManageTarget(actor, target);
 }
 
-/** Create a new admin account (auth user + elevated profile) with a temp password. */
+/**
+ * Best-effort record of a refused account-management attempt in
+ * admin_audit_log (via the `log_admin_denied` SECURITY DEFINER RPC, which
+ * snapshots the actor from the session). Never throws, never blocks the refusal.
+ * The RPC is not in the generated Database types until regenerated.
+ */
+async function logDenied(action: string, targetId: string | null, detail: string): Promise<void> {
+  try {
+    const supabase = (await createClient()) as unknown as SupabaseClient;
+    const { error } = await supabase.rpc("log_admin_denied", {
+      p_action: action,
+      p_target: targetId && /^[0-9a-f-]{36}$/i.test(targetId) ? targetId : null,
+      p_detail: detail,
+    });
+    if (error) console.error("[users] log_admin_denied failed:", error.message);
+  } catch (e) {
+    console.error("[users] log_admin_denied threw:", e);
+  }
+}
+
+/** Create a new staff account (auth user + elevated profile) with a temp password. */
 export async function createAdmin(
   _prev: AdminUserResult,
   formData: FormData,
 ): Promise<AdminUserResult> {
   const actor = await requireAdmin();
-  if (!isManagerRole(actor.role)) return { error: "لا تملك صلاحية إضافة مدراء." };
+  const role = String(formData.get("role") ?? "admin");
+  if (!isManagerRole(actor.role)) {
+    await logDenied("create_user", null, `role=${role}`);
+    return { error: "لا تملك صلاحية إضافة حسابات." };
+  }
 
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
   const full_name = String(formData.get("full_name") ?? "").trim() || null;
-  const role = String(formData.get("role") ?? "admin");
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: "أدخل بريداً إلكترونياً صحيحاً." };
   if (password.length < 8) return { error: "كلمة المرور المؤقتة يجب ألا تقل عن 8 أحرف." };
-  if (!(ASSIGNABLE_ROLES as readonly string[]).includes(role)) return { error: "دور غير صالح." };
-  if (role === "super_admin" && actor.role !== "owner")
-    return { error: "فقط المالك يمكنه تعيين مشرف أعلى." };
+  if (!canAssignRole(actor.role, role)) {
+    await logDenied("create_user", null, `role=${role}`);
+    return { error: "لا تملك صلاحية تعيين هذا الدور." };
+  }
 
   const admin = createAdminClient();
   const { data: created, error: createErr } = await admin.auth.admin.createUser({
@@ -1630,24 +1659,52 @@ export async function createAdmin(
   return { ok: "تم إنشاء الحساب بنجاح." };
 }
 
-/** Change a target admin's role (admin ⇄ super_admin). */
+/**
+ * Change a target's role within the actor's assignable set (owner: super_admin
+ * / admin / editor; super_admin: admin / editor). Written through the actor's
+ * own session (RLS profiles_update_own_or_manager) so the DB guard
+ * guard_profile_changes enforces the same rules AND admin_audit_log attributes
+ * the change to the real actor (a service-role write would be logged as system).
+ */
 export async function setAdminRole(formData: FormData) {
   const actor = await requireAdmin();
   const id = String(formData.get("id") ?? "");
   const role = String(formData.get("role") ?? "");
-  if (!(ASSIGNABLE_ROLES as readonly string[]).includes(role)) return;
-  if (role === "super_admin" && actor.role !== "owner") return;
+  if (!canAssignRole(actor.role, role)) {
+    await logDenied("change_role", id, `role=${role}`);
+    return;
+  }
 
   const admin = createAdminClient();
   const { data } = await admin.from("profiles").select("id, role").eq("id", id).maybeSingle();
   const target = data as { id: string; role: string } | null;
-  if (!target || !canManage(actor, target)) return;
+  if (!target) return;
+  if (!canManage(actor, target)) {
+    await logDenied("change_role", id, `${target.role}→${role}`);
+    return;
+  }
+  if (target.role === role) return;
 
-  await admin.from("profiles").update({ role } as never).eq("id", id);
+  const supabase = await createClient();
+  const { data: updated, error } = await supabase
+    .from("profiles")
+    .update({ role } as never)
+    .eq("id", id)
+    .select("id");
+  if (error || !updated?.length) {
+    console.error("[users] setAdminRole failed:", error?.message ?? "no row updated (RLS)");
+  }
   revalidatePath("/admin/users");
 }
 
-/** Suspend or re-activate a target admin. */
+/**
+ * Suspend or re-activate a target account. The profile flag is authoritative
+ * (requireStaff/requireAdmin, is_staff()/is_admin() all refuse disabled
+ * profiles on the next request); additionally, best-effort, the auth user is
+ * banned (~10 years) / un-banned so it cannot refresh its session or sign in.
+ * A ban failure is logged, never fails the suspension. Written through the
+ * actor's session for DB-guard enforcement + correct audit attribution.
+ */
 export async function toggleAdminDisabled(formData: FormData) {
   const actor = await requireAdmin();
   const id = String(formData.get("id") ?? "");
@@ -1659,41 +1716,71 @@ export async function toggleAdminDisabled(formData: FormData) {
     .eq("id", id)
     .maybeSingle();
   const target = data as { id: string; role: string; disabled: boolean } | null;
-  if (!target || !canManage(actor, target)) return;
+  if (!target) return;
+  if (!canManage(actor, target)) {
+    await logDenied(target.disabled ? "reactivate_user" : "suspend_user", id, `target_role=${target.role}`);
+    return;
+  }
 
-  await admin.from("profiles").update({ disabled: !target.disabled } as never).eq("id", id);
+  const disabled = !target.disabled;
+  const supabase = await createClient();
+  const { data: updated, error } = await supabase
+    .from("profiles")
+    .update({ disabled } as never)
+    .eq("id", id)
+    .select("id");
+  if (error || !updated?.length) {
+    console.error("[users] toggleAdminDisabled failed:", error?.message ?? "no row updated (RLS)");
+    revalidatePath("/admin/users");
+    return;
+  }
+
+  try {
+    const { error: banErr } = await admin.auth.admin.updateUserById(id, {
+      ban_duration: disabled ? "87600h" : "none",
+    });
+    if (banErr) console.error("[users] auth ban update failed:", banErr.message);
+  } catch (e) {
+    console.error("[users] auth ban update threw:", e);
+  }
   revalidatePath("/admin/users");
 }
 
-/** Permanently delete a target admin (cascades the profile via the auth FK). */
-export async function deleteAdmin(formData: FormData) {
-  const actor = await requireAdmin();
-  const id = String(formData.get("id") ?? "");
-
-  const admin = createAdminClient();
-  const { data } = await admin.from("profiles").select("id, role").eq("id", id).maybeSingle();
-  const target = data as { id: string; role: string } | null;
-  if (!target || !canManage(actor, target)) return;
-
-  await admin.auth.admin.deleteUser(id);
-  revalidatePath("/admin/users");
+/**
+ * Permanent account deletion is intentionally NOT available (owner decision:
+ * suspend instead). Kept as an exported stub so any stale client reference
+ * gets a clear refusal; the UI no longer offers it. The DB additionally blocks
+ * deleting any owner row.
+ */
+export async function deleteAdmin(formData?: FormData): Promise<AdminUserResult> {
+  await requireAdmin();
+  const id = formData ? String(formData.get("id") ?? "") : "";
+  await logDenied("delete_user", id || null, "permanent deletion disabled");
+  return { error: "الحذف الدائم غير متاح — استخدم الإيقاف." };
 }
 
-/** Set a new temporary password for a target admin. */
+/** Set a new temporary password for a target account. */
 export async function resetAdminPassword(
   _prev: AdminUserResult,
   formData: FormData,
 ): Promise<AdminUserResult> {
   const actor = await requireAdmin();
-  if (!isManagerRole(actor.role)) return { error: "لا تملك صلاحية." };
   const id = String(formData.get("id") ?? "");
+  if (!isManagerRole(actor.role)) {
+    await logDenied("reset_password", id, "actor is not a manager");
+    return { error: "لا تملك صلاحية." };
+  }
   const password = String(formData.get("password") ?? "");
   if (password.length < 8) return { error: "كلمة المرور يجب ألا تقل عن 8 أحرف." };
 
   const admin = createAdminClient();
   const { data } = await admin.from("profiles").select("id, role").eq("id", id).maybeSingle();
   const target = data as { id: string; role: string } | null;
-  if (!target || !canManage(actor, target)) return { error: "لا تملك صلاحية على هذا الحساب." };
+  if (!target) return { error: "الحساب غير موجود." };
+  if (!canManage(actor, target)) {
+    await logDenied("reset_password", id, `target_role=${target.role}`);
+    return { error: "لا تملك صلاحية على هذا الحساب." };
+  }
 
   const { error } = await admin.auth.admin.updateUserById(id, { password });
   if (error) return { error: "تعذّر تغيير كلمة المرور." };

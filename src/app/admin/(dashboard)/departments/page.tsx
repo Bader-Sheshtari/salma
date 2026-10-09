@@ -1,10 +1,13 @@
 import { listDepartments } from "@/lib/admin-queries";
 import { deleteDepartment } from "../../actions";
 import { DepartmentForm } from "./DepartmentForm";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function DepartmentsAdmin() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const departments = await listDepartments();
 
   return (

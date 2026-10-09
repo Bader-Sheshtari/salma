@@ -36,16 +36,16 @@ export type EditorialPolicy = Tables<"editorial_policy">;
 export type NewsSource = Tables<"news_sources">;
 export type AdminUser = Tables<"profiles">;
 
-/** Rank used to sort the admins list: owner first, then super admins, then admins. */
-const ROLE_RANK: Record<string, number> = { owner: 0, super_admin: 1, admin: 2 };
+/** Rank used to sort the accounts list: owner, super admins, admins, then editors. */
+const ROLE_RANK: Record<string, number> = { owner: 0, super_admin: 1, admin: 2, editor: 3 };
 
-/** All dashboard-capable accounts (owner/super_admin/admin), highest role first. */
+/** All dashboard-capable accounts (owner/super_admin/admin/editor), highest role first. */
 export async function listAdmins(): Promise<AdminUser[]> {
   const supabase = await createClient();
   const { data } = await supabase
     .from("profiles")
     .select("*")
-    .in("role", ["owner", "super_admin", "admin"])
+    .in("role", ["owner", "super_admin", "admin", "editor"])
     .order("created_at", { ascending: true });
   const rows = (data as AdminUser[]) ?? [];
   return rows.sort(
@@ -183,7 +183,7 @@ export async function listAdminProfiles(): Promise<AdminProfileOption[]> {
   const { data } = await supabase
     .from("profiles")
     .select("id,full_name,email")
-    .in("role", ["owner", "super_admin", "admin"])
+    .in("role", ["owner", "super_admin", "admin", "editor"])
     .order("full_name", { ascending: true });
   return ((data ?? []) as { id: string; full_name: string | null; email: string | null }[]).map(
     (p) => ({ id: p.id, name: p.full_name || p.email || p.id.slice(0, 8) }),

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listIngestionRuns, type IngestionRun, type RunArticle } from "@/lib/admin-queries";
 import { timeAgoAr } from "@/lib/format";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -118,6 +119,8 @@ function RunCard({ run, articles }: { run: IngestionRun; articles: Record<string
 }
 
 export default async function IngestRunsPage() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const { runs, articles } = await listIngestionRuns();
 
   return (

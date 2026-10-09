@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { getEditorialPolicy } from "@/lib/admin-queries";
 import { PolicyForm } from "./PolicyForm";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function PolicyPage() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const policy = await getEditorialPolicy();
 
   return (

@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { isAdminRole } from "@/lib/auth";
+import { isAdminRole, isStaffRole } from "@/lib/auth";
 
 export type LoginResult = { error: string } | null;
 
@@ -15,7 +15,8 @@ export async function login(_prev: LoginResult, formData: FormData): Promise<Log
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error || !data.user) return { error: "بيانات الدخول غير صحيحة." };
 
-  // Only admins may access the dashboard; reject and sign out everyone else.
+  // Only staff (editor and above) may access the dashboard; reject and sign out
+  // everyone else. Suspended accounts are refused regardless of role.
   const { data: profileRow } = await supabase
     .from("profiles")
     .select("role, disabled")
@@ -23,7 +24,7 @@ export async function login(_prev: LoginResult, formData: FormData): Promise<Log
     .maybeSingle();
   const profile = profileRow as { role: string; disabled: boolean } | null;
 
-  if (!profile || !isAdminRole(profile.role) || profile.disabled) {
+  if (!profile || !isStaffRole(profile.role) || profile.disabled) {
     await supabase.auth.signOut();
     return { error: "هذا الحساب لا يملك صلاحية الإدارة." };
   }
@@ -34,7 +35,8 @@ export async function login(_prev: LoginResult, formData: FormData): Promise<Log
     .update({ last_login_at: new Date().toISOString() } as never)
     .eq("id", data.user.id);
 
-  redirect("/admin");
+  // Editors land straight on the content area (their whole dashboard).
+  redirect(isAdminRole(profile.role) ? "/admin" : "/admin/content");
 }
 
 export async function logout() {

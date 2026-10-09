@@ -1,11 +1,14 @@
 import { listRadarArticles, listRadarContentLinks, listCategories } from "@/lib/admin-queries";
 import RadarInbox from "./RadarInbox";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 // Fast News Radar admin page. Editorial triage of articles discovered by the
 // radar-shadow collector, plus the one-click publish path (via radar-actions).
 export default async function RadarPage() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const [items, categories] = await Promise.all([
     listRadarArticles(),
     listCategories(),

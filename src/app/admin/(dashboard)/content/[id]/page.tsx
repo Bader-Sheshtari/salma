@@ -27,6 +27,7 @@ import RejectButton from "../RejectButton";
 import { EvidencePanel } from "../EvidencePanel";
 import VersionView from "../VersionView";
 import VersionsPanel from "../VersionsPanel";
+import { requireStaff } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -117,6 +118,8 @@ function MetaStrip({ content, names }: { content: Content; names: Map<string, st
 }
 
 export default async function EditContent({ params, searchParams }: Props) {
+  // Content area: any staff role (editor and above).
+  await requireStaff();
   const { id } = await params;
   const sp = await searchParams;
   const rawView = first(sp.view);

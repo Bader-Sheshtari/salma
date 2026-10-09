@@ -1,6 +1,6 @@
 "use server";
 
-import { requireAdmin } from "@/lib/auth";
+import { requireStaff } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
 /** One generated cover candidate + the editorial concept it was built from
@@ -94,7 +94,7 @@ export async function generateCoverImage(input: {
   // recommend using it when it is the stronger, more credible cover.
   hasSourceImage?: boolean;
 }): Promise<GenerateImageResult> {
-  await requireAdmin();
+  await requireStaff();
 
   const title = (input.title || "").trim();
   if (title.length < 4) return { error: "أدخل عنوان الخبر أولاً لتُبنى الصورة عليه." };
@@ -212,7 +212,7 @@ export type OfficialAssetsResult = { ok: true; assets: OfficialAsset[] } | { err
 export async function fetchOfficialAssets(input: {
   urls: { url: string; label?: string }[];
 }): Promise<OfficialAssetsResult> {
-  await requireAdmin();
+  await requireStaff();
 
   const seen = new Set<string>();
   const urls = (Array.isArray(input.urls) ? input.urls : [])

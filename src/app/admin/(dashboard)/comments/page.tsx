@@ -2,6 +2,7 @@ import Link from "next/link";
 import { listComments } from "@/lib/admin-queries";
 import { moderateComment } from "../../actions";
 import { timeAgoAr } from "@/lib/format";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,8 @@ const TABS = [
 type Props = { searchParams: Promise<{ status?: string }> };
 
 export default async function CommentsModeration({ searchParams }: Props) {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const { status = "pending" } = await searchParams;
   const comments = await listComments(status);
 

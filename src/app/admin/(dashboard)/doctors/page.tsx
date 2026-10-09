@@ -2,10 +2,13 @@ import Link from "next/link";
 import { listDoctors, listDepartments } from "@/lib/admin-queries";
 import { softDeleteDoctor } from "../../actions";
 import { timeAgoAr } from "@/lib/format";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function DoctorsList() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const [doctors, departments] = await Promise.all([listDoctors(), listDepartments()]);
   const deptName = new Map(departments.map((d) => [d.id, d.name_ar]));
 

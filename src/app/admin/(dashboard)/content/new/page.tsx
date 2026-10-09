@@ -1,10 +1,13 @@
 import { getCategories } from "@/lib/queries";
 import Breadcrumbs from "../../Breadcrumbs";
 import { ContentForm } from "../ContentForm";
+import { requireStaff } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function NewContent() {
+  // Content area: any staff role (editor and above).
+  await requireStaff();
   const categories = await getCategories();
   return (
     <div>

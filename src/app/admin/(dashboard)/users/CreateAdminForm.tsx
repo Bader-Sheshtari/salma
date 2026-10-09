@@ -2,12 +2,14 @@
 
 import { useActionState, useEffect, useRef } from "react";
 import { createAdmin, type AdminUserResult } from "../../actions";
+import { ROLE_LABEL } from "@/lib/roles";
 
 const field =
   "w-full rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal";
 const label = "block text-[12px] font-semibold text-gray";
 
-export function CreateAdminForm({ canAssignSuperAdmin }: { canAssignSuperAdmin: boolean }) {
+/** `roles` = the actor's assignable set (server-computed; the action re-validates). */
+export function CreateAdminForm({ roles }: { roles: string[] }) {
   const [state, action, pending] = useActionState<AdminUserResult, FormData>(createAdmin, null);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -42,9 +44,16 @@ export function CreateAdminForm({ canAssignSuperAdmin }: { canAssignSuperAdmin: 
         </label>
         <label className={label}>
           الدور
-          <select name="role" defaultValue="admin" className={`${field} mt-1`}>
-            <option value="admin">مدير</option>
-            {canAssignSuperAdmin ? <option value="super_admin">مشرف أعلى</option> : null}
+          <select
+            name="role"
+            defaultValue={roles.includes("editor") ? "editor" : roles[0]}
+            className={`${field} mt-1`}
+          >
+            {roles.map((r) => (
+              <option key={r} value={r}>
+                {ROLE_LABEL[r] ?? r}
+              </option>
+            ))}
           </select>
         </label>
       </div>

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getAdminCounts } from "@/lib/admin-queries";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,9 @@ function Stat({ label, value, href, accent }: { label: string; value: number; hr
 }
 
 export default async function AdminHome() {
+  // Admin-only (stats are admin-scope). requireAdmin sends a signed-in editor
+  // to /admin/content — that is the editor's landing page.
+  await requireAdmin();
   const c = await getAdminCounts();
 
   return (

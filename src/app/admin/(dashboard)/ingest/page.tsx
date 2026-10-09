@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { IngestForm } from "./IngestForm";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-export default function IngestPage() {
+export default async function IngestPage() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   return (
     <div>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">

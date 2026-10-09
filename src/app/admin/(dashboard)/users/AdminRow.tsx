@@ -5,28 +5,22 @@ import type { Tables } from "@/lib/supabase/database.types";
 import {
   setAdminRole,
   toggleAdminDisabled,
-  deleteAdmin,
   resetAdminPassword,
   type AdminUserResult,
 } from "../../actions";
+import { ROLE_LABEL, assignableRoles, canManageTarget } from "@/lib/roles";
 
 type AdminUser = Tables<"profiles">;
 
-const ROLE_LABEL: Record<string, string> = {
-  owner: "مالك",
-  super_admin: "مشرف أعلى",
-  admin: "مدير",
-};
 const field =
   "rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal";
 
-/** Client mirror of the server-side `canManage` gate — the server stays authoritative. */
-function manageable(actorRole: string, actorId: string, u: AdminUser): boolean {
-  if (u.id === actorId) return false;
-  if (u.role === "owner") return false;
-  if (actorRole === "owner") return true;
-  if (actorRole === "super_admin") return u.role === "admin";
-  return false;
+/** Why a row has no actions (display only — the server stays authoritative). */
+function lockedLabel(actorRole: string, isSelf: boolean, u: AdminUser): string {
+  if (u.role === "owner") return "محمي"; // always — even on the owner's own row
+  if (isSelf) return "غيّر كلمة مرورك من الأعلى";
+  if (actorRole === "super_admin" && u.role === "super_admin") return "بإدارة المالك";
+  return "—";
 }
 
 export function AdminRow({
@@ -39,8 +33,10 @@ export function AdminRow({
   actorId: string;
 }) {
   const isSelf = user.id === actorId;
-  const canManageThis = manageable(actorRole, actorId, user);
-  const canChangeRole = actorRole === "owner" && canManageThis;
+  // Client mirror of the server-side canManage gate (shared rule in @/lib/roles).
+  const canManageThis = canManageTarget({ id: actorId, role: actorRole }, user);
+  const roleOptions = assignableRoles(actorRole);
+  const canChangeRole = canManageThis && roleOptions.length > 0;
   const [reset, resetAction, resetPending] = useActionState<AdminUserResult, FormData>(
     resetAdminPassword,
     null,
@@ -75,8 +71,17 @@ export function AdminRow({
               <form action={setAdminRole} className="flex items-center gap-1">
                 <input type="hidden" name="id" value={user.id} />
                 <select name="role" defaultValue={user.role} className={`${field} py-1.5`}>
-                  <option value="admin">مدير</option>
-                  <option value="super_admin">مشرف أعلى</option>
+                  {/* Legacy/unknown current role: shown but not re-assignable. */}
+                  {roleOptions.includes(user.role) ? null : (
+                    <option value={user.role} disabled>
+                      {ROLE_LABEL[user.role] ?? user.role}
+                    </option>
+                  )}
+                  {roleOptions.map((r) => (
+                    <option key={r} value={r}>
+                      {ROLE_LABEL[r] ?? r}
+                    </option>
+                  ))}
                 </select>
                 <button className="rounded-lg border border-line px-2.5 py-1.5 text-[12px] font-semibold hover:bg-cream">
                   حفظ الدور
@@ -89,25 +94,10 @@ export function AdminRow({
                 {user.disabled ? "تفعيل" : "إيقاف"}
               </button>
             </form>
-            <form
-              action={deleteAdmin}
-              onSubmit={(e) => {
-                if (!confirm("حذف هذا الحساب نهائياً؟")) e.preventDefault();
-              }}
-            >
-              <input type="hidden" name="id" value={user.id} />
-              <button className="rounded-lg border border-coral/40 px-2.5 py-1.5 text-[12px] font-semibold text-coral hover:bg-coral/10">
-                حذف
-              </button>
-            </form>
           </div>
         ) : (
           <span className="font-sans text-[11px] text-gray">
-            {isSelf
-              ? "غيّر كلمة مرورك من الأعلى"
-              : user.role === "owner"
-                ? "حساب محمي"
-                : "—"}
+            {lockedLabel(actorRole, isSelf, user)}
           </span>
         )}
       </div>

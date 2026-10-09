@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { listNewsSources } from "@/lib/admin-queries";
 import { SourcesManager } from "./SourcesManager";
+import { requireAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function SourcesPage() {
+  // Hard gate (defense in depth — the layout only admits staff).
+  await requireAdmin();
   const sources = await listNewsSources();
 
   return (

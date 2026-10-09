@@ -14,6 +14,62 @@ export type Database = {
   }
   public: {
     Tables: {
+      admin_audit_log: {
+        Row: {
+          action: string
+          actor_id: string | null
+          actor_kind: string
+          actor_name: string | null
+          actor_role: string | null
+          after_value: string | null
+          before_value: string | null
+          created_at: string
+          details: Json | null
+          id: number
+          target_email: string | null
+          target_id: string | null
+          target_name: string | null
+        }
+        Insert: {
+          action: string
+          actor_id?: string | null
+          actor_kind: string
+          actor_name?: string | null
+          actor_role?: string | null
+          after_value?: string | null
+          before_value?: string | null
+          created_at?: string
+          details?: Json | null
+          id?: never
+          target_email?: string | null
+          target_id?: string | null
+          target_name?: string | null
+        }
+        Update: {
+          action?: string
+          actor_id?: string | null
+          actor_kind?: string
+          actor_name?: string | null
+          actor_role?: string | null
+          after_value?: string | null
+          before_value?: string | null
+          created_at?: string
+          details?: Json | null
+          id?: never
+          target_email?: string | null
+          target_id?: string | null
+          target_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "admin_audit_log_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ai_image_usage: {
         Row: {
           actual_image_count: number
@@ -1258,6 +1314,45 @@ export type Database = {
           },
         ]
       }
+      radar_cleanup_runs: {
+        Row: {
+          batches: number | null
+          deleted: number | null
+          details: Json | null
+          duration_ms: number | null
+          error: string | null
+          examined: number | null
+          finished_at: string | null
+          id: number
+          started_at: string
+          status: string
+        }
+        Insert: {
+          batches?: number | null
+          deleted?: number | null
+          details?: Json | null
+          duration_ms?: number | null
+          error?: string | null
+          examined?: number | null
+          finished_at?: string | null
+          id?: never
+          started_at?: string
+          status?: string
+        }
+        Update: {
+          batches?: number | null
+          deleted?: number | null
+          details?: Json | null
+          duration_ms?: number | null
+          error?: string | null
+          examined?: number | null
+          finished_at?: string | null
+          id?: never
+          started_at?: string
+          status?: string
+        }
+        Relationships: []
+      }
       radar_editorial_selection: {
         Row: {
           chosen_source_domain: string | null
@@ -2062,7 +2157,16 @@ export type Database = {
       }
       is_admin: { Args: never; Returns: boolean }
       is_admin_manager: { Args: never; Returns: boolean }
+      is_staff: { Args: never; Returns: boolean }
+      log_admin_denied: {
+        Args: { p_action: string; p_detail: string; p_target: string }
+        Returns: undefined
+      }
       normalize_host: { Args: { input: string }; Returns: string }
+      radar_cleanup: {
+        Args: { p_batch_limit?: number; p_max_batches?: number }
+        Returns: Json
+      }
       reserve_ai_image: {
         Args: {
           p_max_images_global_24h: number

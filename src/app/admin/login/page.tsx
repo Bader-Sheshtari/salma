@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { getAdminProfile } from "@/lib/auth";
+import { getStaffProfile } from "@/lib/auth";
 import { LoginForm } from "./LoginForm";
 
 export const metadata: Metadata = { title: "دخول الإدارة · سلمى" };
 
 export default async function LoginPage() {
-  // Already signed in as admin? Skip straight to the dashboard.
-  if (await getAdminProfile()) redirect("/admin");
+  // Already signed in as staff (editor and above)? Skip straight to the dashboard.
+  if (await getStaffProfile()) redirect("/admin");
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-sand px-4">

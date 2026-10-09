@@ -21,6 +21,7 @@ import ContentInbox from "./ContentInbox";
 import ContentTable from "./ContentTable";
 import FilterBar from "./FilterBar";
 import SearchBox from "./SearchBox";
+import { requireStaff } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,8 @@ const CAT_COUNT_NOUN: Record<string, string> = {
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
 export default async function ContentList({ searchParams }: Props) {
+  // Content area: any staff role (editor and above).
+  await requireStaff();
   const query = parseContentQuery(await searchParams);
   const { tab } = query;
   const isPending = tab === "pending";

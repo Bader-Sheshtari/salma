@@ -6,7 +6,7 @@ import { Footer } from "@/components/site/Footer";
 import { ArticleView } from "@/components/site/ArticleView";
 import { getCategories, getRelated, type ContentDetail } from "@/lib/queries";
 import { getContentForEdit } from "@/lib/admin-queries";
-import { requireAdmin } from "@/lib/auth";
+import { requireStaff } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -25,16 +25,16 @@ const STATUS_LABEL: Record<string, string> = {
 type Props = { params: Promise<{ id: string }> };
 
 /**
- * Admin-only preview of a single content item rendered with the real public
+ * Staff-only (editor and above) preview of a single content item rendered with the real public
  * article layout (Header + ArticleView + Footer), so an editor sees exactly how
- * a pending article will look before publishing. Authorization: `requireAdmin`
- * gates the page (redirects non-admins to the login screen), and the content is
+ * a pending article will look before publishing. Authorization: `requireStaff`
+ * gates the page (redirects non-staff to the login screen), and the content is
  * read through the admin session client under the same RLS as the edit screen —
  * so unpublished statuses are visible here without changing the public
  * `/article/[slug]` route, which still serves published content only.
  */
 export default async function ContentPreview({ params }: Props) {
-  await requireAdmin();
+  await requireStaff();
   const { id } = await params;
   const data = await getContentForEdit(id);
   if (!data) notFound();

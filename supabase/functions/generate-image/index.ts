@@ -11,7 +11,7 @@
 //   1. verify_jwt: true  — the Supabase gateway rejects any request without a
 //      valid, signed user JWT before our code even runs.
 //   2. authorizeAdmin()  — we re-verify the caller is a real user whose profile
-//      role ∈ {admin, super_admin, owner} and is not disabled (the anon key is
+//      role ∈ {editor, admin, super_admin, owner} and is not disabled (the anon key is
 //      explicitly rejected). Only privileged staff can generate.
 //   3. strict input validation — body size, JSON, quality, count, title.
 //   4. ATOMIC reservation (public.reserve_ai_image) — in one serialized
@@ -500,7 +500,8 @@ async function authorizeAdmin(
     .maybeSingle();
   const ok =
     !!profile &&
-    ["admin", "super_admin", "owner"].includes(profile.role) &&
+    // Staff (editor and above): cover-image generation is content-scope.
+    ["editor", "admin", "super_admin", "owner"].includes(profile.role) &&
     !profile.disabled;
   return ok ? { userId: user.id } : null;
 }
