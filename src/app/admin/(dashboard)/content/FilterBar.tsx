@@ -17,14 +17,15 @@ const ctl =
   "rounded-lg border border-line bg-white px-2.5 py-1.5 text-[12.5px] outline-none focus:border-teal";
 const lbl = "flex items-center gap-1.5 text-[12.5px] text-gray";
 
-/** Keys this bar owns; any of them set = "filters active". */
-const FILTER_KEYS = ["from", "to", "author", "reviewer", "publisher", "sort", "st", "cat"] as const;
+/** Advanced filter keys (inside the تصفية panel). Sort lives outside it. */
+const FILTER_KEYS = ["from", "to", "author", "reviewer", "publisher", "st", "cat"] as const;
 
 /**
- * Filter bar: التاريخ (range) · الكاتب · المراجع · الناشر · الترتيب (+ الحالة
- * inside الكل, + القسم dropdown in tabs without a category strip). Reviewer and
- * publisher are filters only, never table columns. Collapses into «تصفية ▾»
- * below md.
+ * One row: الترتيب (always visible) + «تصفية ▾». The تصفية panel (collapsed by
+ * default on every screen size) holds التاريخ (range) · الكاتب · المراجع ·
+ * الناشر (+ الحالة inside الكل, + القسم in tabs without a category strip).
+ * Reviewer and publisher are filters only, never table columns. The button
+ * shows how many advanced filters are active (a date range counts once).
  */
 export default function FilterBar({
   params,
@@ -47,7 +48,9 @@ export default function FilterBar({
   const [busy, startTransition] = useTransition();
 
   const owned = FILTER_KEYS.filter((k) => k !== "cat" || categoryOptions);
-  const activeCount = owned.filter((k) => params[k]).length;
+  const activeCount =
+    (params.from || params.to ? 1 : 0) +
+    owned.filter((k) => k !== "from" && k !== "to" && params[k]).length;
 
   function apply(patch: Record<string, string>) {
     const next = { ...params, ...patch };
@@ -61,17 +64,35 @@ export default function FilterBar({
 
   return (
     <div className={`mb-3 ${busy ? "opacity-70" : ""}`}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="rounded-lg border border-line bg-white px-3 py-1.5 text-[12.5px] font-semibold md:hidden"
-        aria-expanded={open}
-      >
-        تصفية {activeCount > 0 ? `(${activeCount})` : ""} ▾
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        {sortOptions.length > 0 ? (
+          <label className={lbl}>
+            <span>الترتيب:</span>
+            <select value={sort} onChange={(e) => apply({ sort: e.target.value })} className={ctl}>
+              {sortOptions.map((s) => (
+                <option key={s} value={s}>
+                  {SORT_LABEL_AR[s]}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={`rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold ${
+            activeCount > 0 ? "border-teal bg-teal/5 text-teal" : "border-line bg-white text-ink"
+          }`}
+          aria-expanded={open}
+          aria-controls="content-filter-panel"
+        >
+          تصفية{activeCount > 0 ? ` (${activeCount})` : ""} {open ? "▴" : "▾"}
+        </button>
+      </div>
 
       <div
-        className={`${open ? "flex" : "hidden"} mt-2 flex-col gap-2 rounded-xl border border-line bg-white p-3 md:mt-0 md:flex md:flex-row md:flex-wrap md:items-center md:border-0 md:bg-transparent md:p-0`}
+        id="content-filter-panel"
+        className={`${open ? "flex" : "hidden"} mt-2 flex-col gap-2 rounded-xl border border-line bg-white p-3 md:flex-row md:flex-wrap md:items-center md:gap-x-4`}
       >
         <div className={lbl}>
           <span>التاريخ:</span>
@@ -151,19 +172,6 @@ export default function FilterBar({
               {REAL_STATUSES.map((s) => (
                 <option key={s} value={s}>
                   {STATUS_LABEL_AR[s]}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-
-        {sortOptions.length > 0 ? (
-          <label className={lbl}>
-            <span>الترتيب:</span>
-            <select value={sort} onChange={(e) => apply({ sort: e.target.value })} className={ctl}>
-              {sortOptions.map((s) => (
-                <option key={s} value={s}>
-                  {SORT_LABEL_AR[s]}
                 </option>
               ))}
             </select>

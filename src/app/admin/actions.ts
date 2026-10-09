@@ -435,6 +435,10 @@ export async function rejectContent(formData: FormData) {
   // Optional lightweight structured reason (clamped to the small taxonomy —
   // anything else is treated as "no reason given").
   const reason = normalizeRejectReason(formData.get("reason"));
+  // Optional free-text note. The reason column holds the clamped taxonomy code
+  // (grouped by exact value in analytics), so the note rides in the event's
+  // existing `meta` jsonb instead of being appended to the code.
+  const note = String(formData.get("note") ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
   const { data } = await supabase
     .from("content")
     .select("status,origin,deleted_at")
@@ -461,6 +465,7 @@ export async function rejectContent(formData: FormData) {
         reason,
         before_value: row.status,
         after_value: "rejected",
+        ...(note ? { meta: { note } } : {}),
       },
     ]);
   }

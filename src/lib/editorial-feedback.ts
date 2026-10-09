@@ -11,16 +11,20 @@ export type EditMagnitude = "none" | "minor" | "moderate" | "major";
 /** Structured rejection reasons (kept small and useful on purpose). */
 export const REJECT_REASONS: { code: string; label: string }[] = [
   { code: "not_important", label: "غير مهم" },
-  { code: "weak_source", label: "مصدر ضعيف" },
+  { code: "weak_source", label: "مصدر غير موثوق" },
   { code: "duplicate_or_already_covered", label: "مكرر / تمت تغطيته" },
   { code: "too_technical_or_niche", label: "تقني / متخصص جداً" },
   { code: "weak_evidence", label: "أدلة ضعيفة" },
-  { code: "not_relevant_to_salma", label: "خارج اهتمام سلمى" },
+  { code: "not_relevant_to_salma", label: "غير مناسب لسلمى" },
   { code: "poor_editorial_angle", label: "زاوية تحريرية ضعيفة" },
   { code: "outdated", label: "قديم" },
-  { code: "inaccurate_or_unreliable", label: "غير دقيق / غير موثوق" },
+  { code: "inaccurate_or_unreliable", label: "معلومات غير دقيقة" },
+  { code: "insufficient_quality", label: "جودة المحتوى غير كافية" },
   { code: "other", label: "سبب آخر" },
 ];
+
+/** Display order of the reject dialog (codes not listed follow in taxonomy order, «other» last). */
+export const REJECT_DIALOG_ORDER = ["not_relevant_to_salma", "weak_source", "duplicate_or_already_covered"];
 
 const REJECT_REASON_CODES = new Set(REJECT_REASONS.map((r) => r.code));
 

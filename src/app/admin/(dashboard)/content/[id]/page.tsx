@@ -19,9 +19,11 @@ import {
   sameDayKw,
 } from "@/lib/content-history";
 import type { Content } from "@/lib/queries";
-import { rejectContent } from "../../../actions";
+import { contentHref } from "@/lib/content-search";
+import Breadcrumbs, { truncateCrumb, type Crumb } from "../../Breadcrumbs";
 import ActivityTimeline from "../ActivityTimeline";
 import { ContentForm } from "../ContentForm";
+import RejectButton from "../RejectButton";
 import { EvidencePanel } from "../EvidencePanel";
 import VersionView from "../VersionView";
 import VersionsPanel from "../VersionsPanel";
@@ -107,7 +109,7 @@ function MetaStrip({ content, names }: { content: Content; names: Map<string, st
       {line2.length ? line(line2) : null}
       {content.deleted_at ? (
         <div className="font-semibold text-coral">
-          في المحذوفات — حذفها {who(content.deleted_by)} · {absAr(content.deleted_at)}
+          في المحذوفات — نقلها {who(content.deleted_by)} · {absAr(content.deleted_at)}
         </div>
       ) : null}
     </div>
@@ -158,8 +160,41 @@ export default async function EditContent({ params, searchParams }: Props) {
     ? `استُعيد محتوى الإصدار ${restoredFrom} — النسخة الحالية الآن هي الإصدار ${newVersion}.`
     : null;
 
+  // Breadcrumb trail: المحتوى ← (المحذوفات | كل الأقسام ← القسم) ← العنوان ← (view).
+  const statusParam = content.status === "published" ? "" : content.status;
+  // The pending inbox ignores `cat`, so pending articles link to the all-status list instead.
+  const catStatusParam = content.status === "pending" ? "all" : statusParam;
+  const articleCat = content.category_slug ? categories.find((c) => c.slug === content.category_slug) : undefined;
+  const crumbs: Crumb[] = [{ label: "المحتوى", href: "/admin/content" }];
+  if (content.deleted_at) {
+    crumbs.push({ label: "المحذوفات", href: contentHref({ status: "trash" }) });
+  } else if (content.category_slug) {
+    crumbs.push(
+      { label: "كل الأقسام", href: contentHref({ status: statusParam }) },
+      {
+        label: articleCat?.name_ar ?? content.category_slug,
+        href: contentHref({ status: catStatusParam, cat: content.category_slug }),
+      },
+    );
+  }
+  const titleCrumb = truncateCrumb(content.title);
+  if (view === "content") {
+    crumbs.push({ label: titleCrumb });
+  } else if (view === "activity") {
+    crumbs.push({ label: titleCrumb, href: base }, { label: "سجل النشاط" });
+  } else if (versionNo == null) {
+    crumbs.push({ label: titleCrumb, href: base }, { label: "الإصدارات" });
+  } else {
+    crumbs.push(
+      { label: titleCrumb, href: base },
+      { label: "الإصدارات", href: `${base}?view=versions` },
+      { label: `الإصدار ${versionNo}` },
+    );
+  }
+
   const header = (
     <>
+      <Breadcrumbs items={crumbs} />
       <h1 className="mb-1.5 text-2xl font-bold">تحرير المحتوى</h1>
       {view !== "content" ? (
         <div className="mb-1.5 line-clamp-2 text-[14.5px] font-semibold text-ink">{content.title}</div>
@@ -313,12 +348,7 @@ export default async function EditContent({ params, searchParams }: Props) {
             معاينة قبل النشر ↗
           </Link>
           {content.status === "pending" ? (
-            <form action={rejectContent}>
-              <input type="hidden" name="id" value={content.id} />
-              <button className="rounded-lg border border-coral/50 px-3 py-1.5 text-[12.5px] font-semibold text-coral hover:bg-cream">
-                رفض
-              </button>
-            </form>
+            <RejectButton id={content.id} title={content.title} />
           ) : null}
         </div>
       </div>

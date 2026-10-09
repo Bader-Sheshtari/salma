@@ -16,12 +16,18 @@ import {
   toSearchParams,
   type ContentSort,
 } from "@/lib/content-search";
+import Breadcrumbs from "../Breadcrumbs";
 import ContentInbox from "./ContentInbox";
 import ContentTable from "./ContentTable";
 import FilterBar from "./FilterBar";
 import SearchBox from "./SearchBox";
 
 export const dynamic = "force-dynamic";
+
+/** Status navigation: primary row, then muted secondary chips after a divider. */
+const PRIMARY_TABS = ["published", "pending", "draft", "unpublished", "trash"] as const;
+const SECONDARY_TABS = ["all", "rejected"] as const;
+const TAB_LABEL: Record<string, string> = Object.fromEntries(CONTENT_TABS.map((t) => [t.key, t.label]));
 
 /** Tabs that show the category strip (archive views). */
 const STRIP_TABS = new Set(["published", "unpublished", "all"]);
@@ -96,25 +102,44 @@ export default async function ContentList({ searchParams }: Props) {
         />
       </div>
 
-      {/* Tabs with live counts */}
-      <div className="salma-scroll mb-3 flex gap-2 overflow-x-auto">
-        {CONTENT_TABS.map((t) => {
-          const active = tab === t.key;
-          const n = counts.byStatus[t.key];
+      {/* Status navigation with live counts: primary row + secondary (الكل, مرفوض). */}
+      <nav aria-label="حالة المحتوى" className="salma-scroll mb-3 flex items-center gap-2 overflow-x-auto">
+        {PRIMARY_TABS.map((key) => {
+          const active = tab === key;
+          const n = counts.byStatus[key];
           return (
             <Link
-              key={t.key}
-              href={contentHref({ status: t.key === "published" ? "" : t.key })}
+              key={key}
+              href={contentHref({ status: key === "published" ? "" : key })}
+              aria-current={active ? "page" : undefined}
               className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-[13px] font-semibold ${
                 active ? "bg-teal text-white" : "border border-line bg-white text-gray"
               }`}
             >
-              {t.label}
+              {TAB_LABEL[key]}
               {n != null ? <span className="ms-1 font-sans text-[11px] opacity-80">({n})</span> : null}
             </Link>
           );
         })}
-      </div>
+        <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line" />
+        {SECONDARY_TABS.map((key) => {
+          const active = tab === key;
+          const n = counts.byStatus[key];
+          return (
+            <Link
+              key={key}
+              href={contentHref({ status: key })}
+              aria-current={active ? "page" : undefined}
+              className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[12px] font-semibold ${
+                active ? "bg-teal text-white" : "text-gray hover:bg-cream"
+              }`}
+            >
+              {TAB_LABEL[key]}
+              {n != null ? <span className="ms-1 font-sans text-[10.5px] opacity-80">({n})</span> : null}
+            </Link>
+          );
+        })}
+      </nav>
 
       {isPending ? (
         <ContentInbox items={pendingItems ?? []} categories={categories} />
@@ -147,13 +172,14 @@ export default async function ContentList({ searchParams }: Props) {
           ) : null}
 
           {inCategory ? (
-            <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1">
-              <Link
-                href={contentHref({ ...params, cat: "", q: "" })}
-                className="text-[13px] font-semibold text-teal"
-              >
-                ‹ كل الأقسام
-              </Link>
+            <div className="mb-3">
+              <Breadcrumbs
+                items={[
+                  { label: "المحتوى", href: "/admin/content" },
+                  { label: "كل الأقسام", href: contentHref({ ...params, cat: "", q: "" }) },
+                  { label: catName.get(query.cat) ?? query.cat },
+                ]}
+              />
               <span className="flex items-center gap-2 text-[15px] font-bold">
                 <span className="size-2.5 rounded-full" style={{ background: accents[query.cat] }} />
                 {catName.get(query.cat) ?? query.cat}

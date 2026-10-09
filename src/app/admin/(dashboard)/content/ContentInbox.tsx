@@ -8,13 +8,13 @@ import { timeAgoAr, formatDateTimeAr } from "@/lib/format";
 import {
   setStatusForm,
   softDeleteContent,
-  rejectContent,
   bulkSetStatus,
   bulkSoftDelete,
   setCategory,
   type BulkActionResult,
 } from "../../actions";
-import { REJECT_REASONS } from "@/lib/editorial-feedback";
+import RowMenu from "./RowMenu";
+import RejectButton from "./RejectButton";
 
 const STATUS_LABEL: Record<string, string> = {
   published: "منشور",
@@ -48,64 +48,8 @@ function dayInfo(iso: string): { key: number; label: string } {
 
 type Group = { key: string; label: string; accent?: string; items: Content[] };
 
-/**
- * Reject button with an optional one-click structured reason. First click
- * opens a small menu (quick reject with no reason stays one extra click);
- * picking a reason submits immediately. The reason feeds the observational
- * editorial-feedback loop — it never changes ranking or selection.
- */
-function RejectButton({ id, onDone }: { id: string; onDone: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [busy, startReject] = useTransition();
-
-  function submit(reason: string | null) {
-    setOpen(false);
-    startReject(async () => {
-      const fd = new FormData();
-      fd.set("id", id);
-      if (reason) fd.set("reason", reason);
-      await rejectContent(fd);
-      onDone();
-    });
-  }
-
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => setOpen((v) => !v)}
-        className="rounded-lg border border-coral/50 px-3 py-1.5 text-[12.5px] font-semibold text-coral hover:bg-cream disabled:opacity-50"
-      >
-        رفض
-      </button>
-      {open ? (
-        <div className="absolute end-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-xl border border-line bg-white shadow-lg">
-          <button
-            type="button"
-            onClick={() => submit(null)}
-            className="block w-full px-3 py-2 text-start text-[12.5px] font-bold text-coral hover:bg-cream"
-          >
-            رفض بدون سبب
-          </button>
-          <div className="border-t border-line px-3 py-1.5 text-[10.5px] font-semibold text-gray">
-            أو اختر سبب الرفض:
-          </div>
-          {REJECT_REASONS.map((r) => (
-            <button
-              key={r.code}
-              type="button"
-              onClick={() => submit(r.code)}
-              className="block w-full px-3 py-1.5 text-start text-[12.5px] hover:bg-cream"
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
+const confirmTrash = (title: string) =>
+  `نقل «${title}» إلى المحذوفات؟ يمكن استعادتها لاحقًا من تبويب المحذوفات.`;
 
 export default function ContentInbox({
   items,
@@ -208,9 +152,9 @@ export default function ContentInbox({
     if (n === 0) return;
     const ok =
       kind === "publish"
-        ? window.confirm(`نشر ${n} مقالات مختارة؟`)
+        ? window.confirm(`نشر ${n} مواد مختارة؟`)
         : window.confirm(
-            `حذف ${n} مقالات مختارة؟ قد لا يمكن التراجع عن هذا الإجراء.`,
+            `نقل ${n} مواد مختارة إلى المحذوفات؟ يمكن استعادتها لاحقًا من تبويب المحذوفات.`,
           );
     if (!ok) return;
     setReport(null);
@@ -221,6 +165,16 @@ export default function ContentInbox({
           : await bulkSoftDelete(ids);
       setReport(res);
       clearSelection();
+      router.refresh();
+    });
+  }
+
+  function moveToTrash(c: Content) {
+    if (!window.confirm(confirmTrash(c.title))) return;
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set("id", c.id);
+      await softDeleteContent(fd);
       router.refresh();
     });
   }
@@ -348,13 +302,18 @@ export default function ContentInbox({
       ) : null}
 
       {/* List grouped by date/category */}
-      <div className="overflow-hidden rounded-2xl border border-line bg-white">
+      {/* No overflow-hidden here: the row «⋯» menus must not be clipped. */}
+      <div className="rounded-2xl border border-line bg-white">
         {filtered.length === 0 ? (
           <div className="p-6 text-[14px] text-gray">لا يوجد محتوى.</div>
         ) : (
-          groups.map((g) => (
+          groups.map((g, gi) => (
             <div key={g.key}>
-              <div className="flex items-center gap-2 border-b border-line bg-cream/60 px-3.5 py-2">
+              <div
+                className={`flex items-center gap-2 border-b border-line bg-cream/60 px-3.5 py-2 ${
+                  gi === 0 ? "rounded-t-2xl" : ""
+                }`}
+              >
                 {g.accent ? (
                   <span className="size-2.5 rounded-full" style={{ background: g.accent }} />
                 ) : null}
@@ -370,7 +329,7 @@ export default function ContentInbox({
                       key={c.id}
                       className={`flex flex-col gap-2 p-3.5 sm:flex-row sm:items-center sm:justify-between ${
                         isSel ? "bg-teal/5" : ""
-                      }`}
+                      } ${gi === groups.length - 1 ? "last:rounded-b-2xl" : ""}`}
                     >
                       <div className="flex min-w-0 items-start gap-3">
                         <input
@@ -444,6 +403,15 @@ export default function ContentInbox({
                         </div>
                       </div>
                       <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                        {c.status === "pending" ? (
+                          <form action={setStatusForm}>
+                            <input type="hidden" name="id" value={c.id} />
+                            <input type="hidden" name="status" value="published" />
+                            <button className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-semibold text-white">
+                              نشر
+                            </button>
+                          </form>
+                        ) : null}
                         <Link
                           href={`/admin/content/${c.id}`}
                           className="rounded-lg border border-line px-3 py-1.5 text-[12.5px] font-semibold hover:bg-cream"
@@ -458,24 +426,22 @@ export default function ContentInbox({
                               إلغاء النشر
                             </button>
                           </form>
-                        ) : c.status === "pending" ? (
-                          <form action={setStatusForm}>
-                            <input type="hidden" name="id" value={c.id} />
-                            <input type="hidden" name="status" value="published" />
-                            <button className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-semibold text-white">
-                              نشر
-                            </button>
-                          </form>
                         ) : null}
                         {c.status === "pending" ? (
-                          <RejectButton id={c.id} onDone={() => router.refresh()} />
+                          <RejectButton id={c.id} title={c.title} />
                         ) : null}
-                        <form action={softDeleteContent}>
-                          <input type="hidden" name="id" value={c.id} />
-                          <button className="rounded-lg border border-line px-3 py-1.5 text-[12.5px] font-semibold text-coral hover:bg-cream">
-                            حذف
-                          </button>
-                        </form>
+                        <RowMenu
+                          visible={[]}
+                          menu={[
+                            {
+                              key: "trash",
+                              label: "نقل إلى المحذوفات",
+                              danger: true,
+                              onClick: () => moveToTrash(c),
+                            },
+                          ]}
+                          disabled={pending}
+                        />
                       </div>
                     </li>
                   );
@@ -505,7 +471,7 @@ export default function ContentInbox({
               disabled={pending}
               className="rounded-lg border border-coral/60 px-3.5 py-2 text-[12.5px] font-bold text-coral hover:bg-cream disabled:opacity-50"
             >
-              حذف المحدد
+              نقل المحدد إلى المحذوفات
             </button>
             <button
               onClick={clearSelection}

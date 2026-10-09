@@ -932,10 +932,17 @@ export function ContentForm({
           >
             متابعة التحرير
           </button>
-          <form action={softDeleteContent}>
+          <form
+            action={softDeleteContent}
+            onSubmit={(e) => {
+              if (!window.confirm("نقل هذه المادة إلى المحذوفات؟ يمكن استعادتها لاحقًا من تبويب المحذوفات.")) {
+                e.preventDefault();
+              }
+            }}
+          >
             <input type="hidden" name="id" value={saved.id} />
             <button className="rounded-lg border border-line bg-white px-4 py-2 text-[13px] font-semibold text-coral hover:bg-cream">
-              حذف
+              نقل إلى المحذوفات
             </button>
           </form>
         </div>
