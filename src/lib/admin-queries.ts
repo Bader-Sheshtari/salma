@@ -53,6 +53,54 @@ export async function listAdmins(): Promise<AdminUser[]> {
   );
 }
 
+/** Invitation row as listed for managers (list_invitations(): no token_hash). */
+export type ListedInvitation = {
+  id: string;
+  kind: string;
+  email: string;
+  role: string | null;
+  invited_by: string | null;
+  invited_by_name: string | null;
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+  cancelled_at: string | null;
+  superseded_by: string | null;
+};
+
+/**
+ * Open staff invitations (pending or expired; not accepted / cancelled /
+ * superseded), newest first. Via the SECURITY DEFINER RPC list_invitations()
+ * (manager-guarded; the table itself is not client-readable). Not in the
+ * generated types yet → untyped call. Returns [] on error (e.g. pre-migration).
+ */
+export async function listOpenInvitations(): Promise<(ListedInvitation & { expired: boolean })[]> {
+  const supabase = (await createClient()) as unknown as SupabaseClient;
+  const { data, error } = await supabase.rpc("list_invitations");
+  if (error) {
+    console.error("[users] list_invitations failed:", error.message);
+    return [];
+  }
+  const now = Date.now();
+  return ((data as ListedInvitation[] | null) ?? [])
+    .filter((i) => i.kind === "invite" && !i.accepted_at && !i.cancelled_at && !i.superseded_by)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map((i) => ({ ...i, expired: new Date(i.expires_at).getTime() < now }));
+}
+
+/** id → display name for the given profile ids (manager-readable profiles). */
+export async function profileNames(ids: string[]): Promise<Record<string, string>> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return {};
+  const supabase = await createClient();
+  const { data } = await supabase.from("profiles").select("id, full_name, email").in("id", unique);
+  const out: Record<string, string> = {};
+  for (const p of (data as { id: string; full_name: string | null; email: string | null }[] | null) ?? []) {
+    out[p.id] = p.full_name?.trim() || p.email || "—";
+  }
+  return out;
+}
+
 export type AdminCounts = {
   published: number;
   draft: number;

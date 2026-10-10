@@ -70,6 +70,79 @@ export type Database = {
           },
         ]
       }
+      admin_invitations: {
+        Row: {
+          accepted_at: string | null
+          accepted_user_id: string | null
+          cancelled_at: string | null
+          created_at: string
+          email: string
+          expires_at: string
+          id: string
+          invited_by: string | null
+          invited_by_name: string | null
+          kind: string
+          role: string | null
+          superseded_by: string | null
+          target_user_id: string | null
+          token_hash: string
+        }
+        Insert: {
+          accepted_at?: string | null
+          accepted_user_id?: string | null
+          cancelled_at?: string | null
+          created_at?: string
+          email: string
+          expires_at: string
+          id?: string
+          invited_by?: string | null
+          invited_by_name?: string | null
+          kind: string
+          role?: string | null
+          superseded_by?: string | null
+          target_user_id?: string | null
+          token_hash: string
+        }
+        Update: {
+          accepted_at?: string | null
+          accepted_user_id?: string | null
+          cancelled_at?: string | null
+          created_at?: string
+          email?: string
+          expires_at?: string
+          id?: string
+          invited_by?: string | null
+          invited_by_name?: string | null
+          kind?: string
+          role?: string | null
+          superseded_by?: string | null
+          target_user_id?: string | null
+          token_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "admin_invitations_invited_by_fkey"
+            columns: ["invited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "admin_invitations_superseded_by_fkey"
+            columns: ["superseded_by"]
+            isOneToOne: false
+            referencedRelation: "admin_invitations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "admin_invitations_target_user_id_fkey"
+            columns: ["target_user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ai_image_usage: {
         Row: {
           actual_image_count: number
@@ -1277,6 +1350,7 @@ export type Database = {
           id: string
           last_login_at: string | null
           notification_prefs: Json
+          phone: string | null
           role: string
           updated_at: string
         }
@@ -1289,6 +1363,7 @@ export type Database = {
           id: string
           last_login_at?: string | null
           notification_prefs?: Json
+          phone?: string | null
           role?: string
           updated_at?: string
         }
@@ -1301,6 +1376,7 @@ export type Database = {
           id?: string
           last_login_at?: string | null
           notification_prefs?: Json
+          phone?: string | null
           role?: string
           updated_at?: string
         }
@@ -2134,6 +2210,7 @@ export type Database = {
         }
         Returns: undefined
       }
+      consume_admin_link: { Args: { p_token_plain: string }; Returns: Json }
       content_counts: {
         Args: never
         Returns: {
@@ -2155,11 +2232,46 @@ export type Database = {
         }
         Returns: string
       }
+      finalize_admin_link: {
+        Args: { p_accepted_user: string; p_id: string }
+        Returns: boolean
+      }
       is_admin: { Args: never; Returns: boolean }
       is_admin_manager: { Args: never; Returns: boolean }
       is_staff: { Args: never; Returns: boolean }
+      list_invitations: {
+        Args: never
+        Returns: {
+          accepted_at: string
+          accepted_user_id: string
+          cancelled_at: string
+          created_at: string
+          email: string
+          expires_at: string
+          id: string
+          invited_by: string
+          invited_by_name: string
+          kind: string
+          role: string
+          status: string
+          superseded_by: string
+          target_user_id: string
+        }[]
+      }
       log_admin_denied: {
         Args: { p_action: string; p_detail: string; p_target: string }
+        Returns: undefined
+      }
+      log_admin_event: {
+        Args: {
+          p_action: string
+          p_actor?: string
+          p_after: string
+          p_before: string
+          p_details: Json
+          p_target: string
+          p_target_email: string
+        }
         Returns: undefined
       }
       normalize_host: { Args: { input: string }; Returns: string }
@@ -2187,6 +2299,10 @@ export type Database = {
       restore_content_version: {
         Args: { p_content_id: string; p_version_no: number }
         Returns: Json
+      }
+      revoke_user_sessions: {
+        Args: { p_keep_session_id?: string; p_user_id: string }
+        Returns: number
       }
       run_esl: { Args: { p_mode?: string }; Returns: undefined }
       run_news_ingestion: { Args: never; Returns: undefined }

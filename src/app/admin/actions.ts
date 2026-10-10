@@ -1609,56 +1609,6 @@ async function logDenied(action: string, targetId: string | null, detail: string
   }
 }
 
-/** Create a new staff account (auth user + elevated profile) with a temp password. */
-export async function createAdmin(
-  _prev: AdminUserResult,
-  formData: FormData,
-): Promise<AdminUserResult> {
-  const actor = await requireAdmin();
-  const role = String(formData.get("role") ?? "admin");
-  if (!isManagerRole(actor.role)) {
-    await logDenied("create_user", null, `role=${role}`);
-    return { error: "لا تملك صلاحية إضافة حسابات." };
-  }
-
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const password = String(formData.get("password") ?? "");
-  const full_name = String(formData.get("full_name") ?? "").trim() || null;
-
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: "أدخل بريداً إلكترونياً صحيحاً." };
-  if (password.length < 8) return { error: "كلمة المرور المؤقتة يجب ألا تقل عن 8 أحرف." };
-  if (!canAssignRole(actor.role, role)) {
-    await logDenied("create_user", null, `role=${role}`);
-    return { error: "لا تملك صلاحية تعيين هذا الدور." };
-  }
-
-  const admin = createAdminClient();
-  const { data: created, error: createErr } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: full_name ? { full_name } : undefined,
-  });
-  if (createErr || !created?.user) {
-    if (/registered|already|exists/i.test(createErr?.message ?? ""))
-      return { error: "هذا البريد مسجّل بالفعل." };
-    return { error: "تعذّر إنشاء الحساب." };
-  }
-
-  // handle_new_user already inserted a profile (role=user); elevate it.
-  const { error: updErr } = await admin
-    .from("profiles")
-    .update({ role, full_name, created_by: actor.id } as never)
-    .eq("id", created.user.id);
-  if (updErr) {
-    await admin.auth.admin.deleteUser(created.user.id); // roll back the orphan
-    return { error: "تعذّر ضبط صلاحية الحساب." };
-  }
-
-  revalidatePath("/admin/users");
-  return { ok: "تم إنشاء الحساب بنجاح." };
-}
-
 /**
  * Change a target's role within the actor's assignable set (owner: super_admin
  * / admin / editor; super_admin: admin / editor). Written through the actor's
@@ -1757,47 +1707,4 @@ export async function deleteAdmin(formData?: FormData): Promise<AdminUserResult>
   const id = formData ? String(formData.get("id") ?? "") : "";
   await logDenied("delete_user", id || null, "permanent deletion disabled");
   return { error: "الحذف الدائم غير متاح — استخدم الإيقاف." };
-}
-
-/** Set a new temporary password for a target account. */
-export async function resetAdminPassword(
-  _prev: AdminUserResult,
-  formData: FormData,
-): Promise<AdminUserResult> {
-  const actor = await requireAdmin();
-  const id = String(formData.get("id") ?? "");
-  if (!isManagerRole(actor.role)) {
-    await logDenied("reset_password", id, "actor is not a manager");
-    return { error: "لا تملك صلاحية." };
-  }
-  const password = String(formData.get("password") ?? "");
-  if (password.length < 8) return { error: "كلمة المرور يجب ألا تقل عن 8 أحرف." };
-
-  const admin = createAdminClient();
-  const { data } = await admin.from("profiles").select("id, role").eq("id", id).maybeSingle();
-  const target = data as { id: string; role: string } | null;
-  if (!target) return { error: "الحساب غير موجود." };
-  if (!canManage(actor, target)) {
-    await logDenied("reset_password", id, `target_role=${target.role}`);
-    return { error: "لا تملك صلاحية على هذا الحساب." };
-  }
-
-  const { error } = await admin.auth.admin.updateUserById(id, { password });
-  if (error) return { error: "تعذّر تغيير كلمة المرور." };
-  return { ok: "تم تحديث كلمة المرور." };
-}
-
-/** Any signed-in admin may change their own password. */
-export async function changeOwnPassword(
-  _prev: AdminUserResult,
-  formData: FormData,
-): Promise<AdminUserResult> {
-  await requireAdmin();
-  const password = String(formData.get("password") ?? "");
-  if (password.length < 8) return { error: "كلمة المرور يجب ألا تقل عن 8 أحرف." };
-
-  const supabase = await createClient();
-  const { error } = await supabase.auth.updateUser({ password });
-  if (error) return { error: "تعذّر تغيير كلمة المرور." };
-  return { ok: "تم تغيير كلمة مرورك بنجاح." };
 }

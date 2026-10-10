@@ -1,28 +1,33 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getStaffProfile } from "@/lib/auth";
+import { AuthCard, AuthNotice } from "../AuthCard";
 import { LoginForm } from "./LoginForm";
 
 export const metadata: Metadata = { title: "دخول الإدارة · سلمى" };
 
-export default async function LoginPage() {
+type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
+
+export default async function LoginPage({ searchParams }: Props) {
   // Already signed in as staff (editor and above)? Skip straight to the dashboard.
   if (await getStaffProfile()) redirect("/admin");
 
+  const sp = await searchParams;
+  const banner =
+    sp.accepted === "1"
+      ? { title: "تم تفعيل حسابك", body: "سجّل الدخول بالبريد وكلمة المرور التي اخترتها." }
+      : sp.reset === "1"
+        ? { title: "تم تعيين كلمة المرور", body: "سجّل الدخول بكلمة المرور الجديدة." }
+        : null;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-sand px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-[0_10px_40px_rgba(46,46,45,.12)] sm:p-8">
-        <div className="mb-6 flex items-center gap-2.5">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal text-xl font-bold text-white">
-            س
-          </span>
-          <div className="leading-tight">
-            <div className="text-lg font-bold text-teal">سلمى</div>
-            <div className="font-sans text-[11px] tracking-wide text-gray">لوحة الإدارة</div>
-          </div>
+    <AuthCard>
+      {banner ? (
+        <div className="mb-4">
+          <AuthNotice tone="success" title={banner.title} body={banner.body} />
         </div>
-        <LoginForm />
-      </div>
-    </div>
+      ) : null}
+      <LoginForm />
+    </AuthCard>
   );
 }

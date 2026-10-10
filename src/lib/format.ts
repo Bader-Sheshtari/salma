@@ -69,6 +69,24 @@ export function formatDateAr(iso: string | null): string {
   return `نُشر في ${date}`;
 }
 
+/**
+ * Neutral absolute date + time for admin records (no "نُشر في" prefix), e.g.
+ * "10 أكتوبر 2026 في 3:45 م". Kuwait time, Western digits.
+ */
+export function formatStampAr(iso: string | null | undefined, withTime = true): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("ar-KW", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    ...(withTime ? { hour: "numeric", minute: "2-digit" } : {}),
+    numberingSystem: "latn",
+    timeZone: "Asia/Kuwait",
+  }).format(d);
+}
+
 /** Repeating diagonal hatch used as an image placeholder. */
 export function hatch(a: string, b: string, px = 8): string {
   return `repeating-linear-gradient(45deg,${a},${a} ${px}px,${b} ${px}px,${b} ${px * 2}px)`;
