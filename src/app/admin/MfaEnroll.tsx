@@ -89,12 +89,10 @@ function enrollErrorMessage(code: string | undefined): string {
  * The secret is never sent to our server, logged, or stored.
  */
 export function MfaEnroll({
-  reconfigured = false,
   continueHref,
   continueLabel = "متابعة",
   onDone,
 }: {
-  reconfigured?: boolean;
   /** After success: navigate here (setup page). */
   continueHref?: string;
   continueLabel?: string;
@@ -172,7 +170,7 @@ export function MfaEnroll({
     }
     // Session is aal2 now. Audit (best-effort; never blocks success).
     try {
-      await recordMfaEnabled(reconfigured);
+      await recordMfaEnabled();
     } catch {
       /* audit failure is logged server-side */
     }

@@ -12,7 +12,7 @@ const btn =
   "rounded-lg border border-line bg-white px-3.5 py-2 text-[12.5px] font-semibold hover:bg-cream disabled:opacity-50";
 
 /** «الأمان» tab: MFA status + enable (inline enrollment) / disable (re-auth gated). */
-export function MfaCard({ enabled, mandatory }: { enabled: boolean; mandatory: boolean }) {
+export function MfaCard({ enabled }: { enabled: boolean }) {
   const router = useRouter();
   const guarded = useReauth();
   const [enrolling, setEnrolling] = useState(false);
@@ -54,11 +54,6 @@ export function MfaCard({ enabled, mandatory }: { enabled: boolean; mandatory: b
           return;
         }
         setConfirming(false);
-        if (res.mandatory) {
-          // R2 would force this anyway on the next request — go there directly.
-          router.push("/admin/mfa-setup?re=1");
-          return;
-        }
         setNotice(res.ok);
         router.refresh();
       } catch {
@@ -83,9 +78,7 @@ export function MfaCard({ enabled, mandatory }: { enabled: boolean; mandatory: b
         </span>
       </div>
       <p className="mt-1.5 text-[12.5px] leading-6 text-gray">{MFA_INTRO}</p>
-      {mandatory ? (
-        <p className="mt-1 text-[12px] font-semibold text-ink">إلزامية لدورك.</p>
-      ) : null}
+      <p className="mt-1 text-[12px] text-gray">اختيارية — نوصي بتفعيلها لحماية إضافية لحسابك.</p>
       {enabled && factors && factors.length ? (
         <div className="mt-3 rounded-xl border border-line bg-cream/40 px-3.5 py-2.5">
           <div className="text-[12px] font-semibold text-ink">
@@ -111,11 +104,6 @@ export function MfaCard({ enabled, mandatory }: { enabled: boolean; mandatory: b
               <p className="text-[12.5px] leading-6 text-ink">
                 سيُطلب منك تأكيد الهوية (كلمة المرور الحالية ورمز المصادقة) ثم تُلغى المصادقة الثنائية.
               </p>
-              {mandatory ? (
-                <p className="text-[12.5px] font-bold leading-6 text-ink">
-                  بصفتك مالكًا/مشرفًا عامًا ستتم إعادتك فورًا لإعداد مصادقة جديدة.
-                </p>
-              ) : null}
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"

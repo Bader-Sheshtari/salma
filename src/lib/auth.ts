@@ -33,13 +33,6 @@ export function isManagerRole(role: string | null | undefined): boolean {
   return !!role && (MANAGER_ROLES as readonly string[]).includes(role);
 }
 
-/** Roles for which TOTP MFA is mandatory (forced enrollment). */
-export const MFA_MANDATORY_ROLES = ["owner", "super_admin"] as const;
-
-export function isMfaMandatory(role: string | null | undefined): boolean {
-  return !!role && (MFA_MANDATORY_ROLES as readonly string[]).includes(role);
-}
-
 /** The signed-in user's MFA posture, read server-side on every request. */
 export type MfaState = {
   /** Verified TOTP factor ids (empty = MFA not enrolled). */
@@ -111,16 +104,15 @@ export const getStaffSession = cache(async (): Promise<StaffSession | null> => {
 });
 
 /**
- * Where an otherwise-valid staff session must go before using the dashboard:
- *  R1 — enrolled (any role) but the session is not aal2 → finish MFA at login;
- *  R2 — owner/super_admin without a verified factor → forced enrollment.
+ * Where an otherwise-valid staff session must go before using the dashboard.
+ * MFA is OPTIONAL for every role; the only rule is R1: a user who HAS a verified
+ * factor (any role) must be aal2 → otherwise finish the code step at login.
  * null = allowed. The fail-open valve (degraded) always allows.
  */
 export function mfaRedirectFor(session: StaffSession): string | null {
-  const { mfa, profile } = session;
+  const { mfa } = session;
   if (mfa.degraded) return null;
   if (mfa.verifiedFactorIds.length > 0 && mfa.aal !== "aal2") return "/admin/login?step=mfa";
-  if (isMfaMandatory(profile.role) && mfa.verifiedFactorIds.length === 0) return "/admin/mfa-setup";
   return null;
 }
 
@@ -136,7 +128,7 @@ export function safeAdminDest(v: unknown): string | null {
   return v;
 }
 
-/** Signed-in staff profile with MFA satisfied (R1/R2 clear), or null. */
+/** Signed-in staff profile with MFA satisfied (R1 clear), or null. */
 export async function getStaffProfile(): Promise<Profile | null> {
   const session = await getStaffSession();
   return session && !mfaRedirectFor(session) ? session.profile : null;
@@ -162,7 +154,7 @@ export async function requireAdmin(): Promise<Profile> {
 
 /**
  * Guard for content-scope pages/actions — any staff role (editor and above).
- * THE chokepoint for MFA enforcement (R1 + R2, see mfaRedirectFor); every
+ * THE chokepoint for MFA enforcement (R1, see mfaRedirectFor); every
  * dashboard page and server action inherits it.
  */
 export async function requireStaff(): Promise<Profile> {
@@ -174,8 +166,8 @@ export async function requireStaff(): Promise<Profile> {
 }
 
 /**
- * Like requireStaff but SKIPS R1 + R2 — used ONLY by /admin/mfa-setup (and the
- * enrollment audit action) so enrollment is always reachable and redoable.
+ * Like requireStaff but SKIPS R1 — used ONLY by the voluntary /admin/mfa-setup
+ * page (and the enrollment audit action), which handles the aal1 case itself.
  */
 export async function requireStaffForMfaSetup(): Promise<StaffSession> {
   const session = await getStaffSession();

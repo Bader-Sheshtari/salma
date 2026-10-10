@@ -21,8 +21,6 @@ export default async function LoginPage({ searchParams }: Props) {
     const pending = mfaRedirectFor(session);
     // MFA satisfied → straight to the dashboard.
     if (!pending) redirect(dest);
-    // Mandatory role without a factor → forced enrollment.
-    if (pending === "/admin/mfa-setup") redirect(pending);
     // Enrolled but this session is not aal2 yet → the TOTP step (?step=mfa).
     return (
       <AuthCard>

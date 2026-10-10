@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { requireStaff, getStaffSession, isMfaMandatory, type Profile } from "@/lib/auth";
+import { requireStaff, getStaffSession, type Profile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { listMySecurityEvents } from "@/lib/admin-queries";
 import { auditActionLabel } from "@/lib/audit-labels";
@@ -134,7 +134,6 @@ async function SecurityTab({
 }) {
   const [session, events] = await Promise.all([getStaffSession(), listMySecurityEvents(10)]);
   const hasFactors = (session?.mfa.verifiedFactorIds.length ?? 0) > 0;
-  const mandatory = isMfaMandatory(me.role);
 
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: "الدور", value: roleChip },
@@ -149,7 +148,7 @@ async function SecurityTab({
   return (
     <ReauthProvider hasFactors={hasFactors}>
       <div className="flex flex-col gap-5">
-        <MfaCard enabled={hasFactors} mandatory={mandatory} />
+        <MfaCard enabled={hasFactors} />
 
         <section aria-labelledby="sec-info" className="rounded-2xl border border-line bg-white p-4 sm:p-5">
           <h2 id="sec-info" className="text-[15px] font-bold">

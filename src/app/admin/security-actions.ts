@@ -5,7 +5,7 @@
  * self-disable, manager MFA removal, sign-out-everywhere-else, security-log paging.
  *
  * Security model:
- *  - MFA itself is enforced in lib/auth.ts (requireStaff R1/R2) — every action
+ *  - MFA itself is enforced in lib/auth.ts (requireStaff R1) — every action
  *    here inherits it, except recordMfaEnabled (setup flow, requireStaffForMfaSetup).
  *  - Sensitive actions return NEEDS_REAUTH unless THIS session completed
  *    performReauth (password + current TOTP when enrolled) within 15 minutes.
@@ -20,7 +20,6 @@ import { createClient as createBareClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import {
   isManagerRole,
-  isMfaMandatory,
   requireAdmin,
   requireStaff,
   requireStaffForMfaSetup,
@@ -65,7 +64,7 @@ const failDelay = () => new Promise((r) => setTimeout(r, 400));
  * Success → record_reauth(user, session) + audit; valid ~15 minutes.
  */
 export async function performReauth(passwordIn: unknown, codeIn?: unknown): Promise<SecurityResult> {
-  const actor = await requireStaff(); // MFA rules (R1/R2) apply
+  const actor = await requireStaff(); // MFA rules (R1) applies
   const session = await getStaffSession(); // memoized — same request read
   const password = typeof passwordIn === "string" ? passwordIn.slice(0, 1000) : "";
   if (!password || !actor.email) return { error: "أدخل كلمة المرور الحالية." };
@@ -129,31 +128,21 @@ export async function performReauth(passwordIn: unknown, codeIn?: unknown): Prom
  * Post-enrollment hook (the enrollment itself runs in the browser against
  * GoTrue). Verified server-side: the user must now own a verified factor.
  * 'mfa_enabled' / 'mfa_disabled' are owned by the DB trigger on
- * auth.mfa_factors (source of truth). Only 'mfa_reconfigured' is written here —
- * the trigger cannot tell a re-setup (?re=1 after a disable) from a first one,
- * so it annotates the trigger's mfa_enabled row.
+ * auth.mfa_factors (source of truth) — nothing is audited app-side here.
  */
-export async function recordMfaEnabled(reconfiguredIn?: unknown): Promise<SecurityResult> {
+export async function recordMfaEnabled(): Promise<SecurityResult> {
   const session = await requireStaffForMfaSetup();
   if (!session.mfa.verifiedFactorIds.length) return { error: "لم يكتمل تفعيل المصادقة الثنائية." };
-  if (reconfiguredIn === true) {
-    await auditAsUser({
-      action: "mfa_reconfigured",
-      target: session.profile.id,
-      targetEmail: session.profile.email,
-      details: { factor_type: "totp" },
-    });
-  }
   revalidatePath("/admin/account");
   return { ok: "المصادقة الثنائية مفعّلة" };
 }
 
 /**
  * Disable own MFA (re-auth gated: password + current code). Factors are
- * removed server-side (service) only after the gate passes. owner/super_admin
- * are sent straight back to enrollment by R2 on their next request.
+ * removed server-side (service) only after the gate passes. MFA is optional for
+ * every role, so afterwards the user simply has full access without a code.
  */
-export async function disableOwnMfa(): Promise<(SecurityResult & { mandatory?: boolean }) | NeedsReauth> {
+export async function disableOwnMfa(): Promise<SecurityResult | NeedsReauth> {
   const actor = await requireStaff();
   const gate = await requireRecentAuth(actor);
   if (gate) return gate;
@@ -178,7 +167,7 @@ export async function disableOwnMfa(): Promise<(SecurityResult & { mandatory?: b
   // 'mfa_disabled' is recorded by the DB trigger on auth.mfa_factors (one row
   // per removed verified factor) — no app-side event, to avoid duplicates.
   revalidatePath("/admin/account");
-  return { ok: "أُلغيت المصادقة الثنائية.", mandatory: isMfaMandatory(actor.role) };
+  return { ok: "أُلغيت المصادقة الثنائية." };
 }
 
 /* ─────────────────────────── manager: MFA removal ─────────────────────────── */
@@ -232,11 +221,7 @@ export async function removeUserMfa(userIdIn: unknown): Promise<SecurityResult |
     details: { mfa_factors_removed: removed, sessions_revoked: revoked != null },
   });
   revalidatePath("/admin/users");
-  return {
-    ok: `أُزيلت المصادقة الثنائية لهذا الحساب وأُنهيت جلساته.${
-      isMfaMandatory(target.role) ? " سيُطلب منه إعداد مصادقة جديدة عند الدخول." : ""
-    }`,
-  };
+  return { ok: "أُزيلت المصادقة الثنائية لهذا الحساب وأُنهيت جلساته." };
 }
 
 /* ─────────────────────────── sessions ─────────────────────────── */
