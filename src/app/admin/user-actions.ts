@@ -44,6 +44,8 @@ import {
   serviceDb,
   type InvitationRow,
 } from "@/lib/admin-links";
+import { requireRecentAuth } from "@/lib/reauth";
+import type { NeedsReauth } from "@/lib/reauth-shared";
 
 export type LinkResult =
   | { ok: true; link: string; expiresAt: string; email: string; kind: "invite" | "reset" }
@@ -254,13 +256,30 @@ const PENDING_INVITE_MSG = "توجد دعوة قيد الانتظار لهذا �
 const inviteLink = (token: string) => absoluteUrl(`/admin/accept-invite?token=${token}`);
 const resetLink = (token: string) => absoluteUrl(`/admin/reset-password?token=${token}`);
 
+/**
+ * U3: record when the password last changed (display-only field).
+ * Default: service write — used by completeReset (targets are never the owner).
+ * Own-password changes MUST pass the actor's session client: the owner wall
+ * refuses any service write to the owner's row, while an own-row update by the
+ * owner themself passes (profiles_update_own_or_manager + guard self-edit).
+ */
+async function stampPasswordChanged(userId: string, client?: SupabaseClient): Promise<void> {
+  const { error } = await (client ?? serviceDb())
+    .from("profiles")
+    .update({ password_changed_at: new Date().toISOString() })
+    .eq("id", userId);
+  if (error) console.error("[users] password_changed_at update failed:", error.message);
+}
+
 /* ──────────────────────────── manager actions ──────────────────────────── */
 
 /** Invite a new staff member. Returns the one-time link (shown once). */
-export async function createInvitation(emailIn: unknown, roleIn: unknown): Promise<LinkResult> {
+export async function createInvitation(emailIn: unknown, roleIn: unknown): Promise<LinkResult | NeedsReauth> {
   const role = str(roleIn, 40);
   const actor = await requireManager("invite_user", null);
   if (!actor) return { error: "لا تملك صلاحية دعوة مستخدمين." };
+  const gate = await requireRecentAuth(actor); // U3 sensitive action
+  if (gate) return gate;
 
   const email = str(emailIn, 320).trim().toLowerCase();
   if (!EMAIL_RE.test(email) || email.length > 254) return { error: "أدخل بريداً إلكترونياً صحيحاً." };
@@ -310,10 +329,12 @@ export async function createInvitation(emailIn: unknown, roleIn: unknown): Promi
 }
 
 /** Replace an open (pending or expired) invitation with a fresh link. */
-export async function reissueInvitation(invitationIdIn: unknown): Promise<LinkResult> {
+export async function reissueInvitation(invitationIdIn: unknown): Promise<LinkResult | NeedsReauth> {
   const invitationId = str(invitationIdIn, 64);
   const actor = await requireManager("reissue_invitation", null);
   if (!actor) return { error: "لا تملك صلاحية." };
+  const gate = await requireRecentAuth(actor); // U3 sensitive action
+  if (gate) return gate;
 
   const inv = await getInvitation(invitationId);
   if (!inv || inv.kind !== "invite") return { error: "الدعوة غير موجودة." };
@@ -362,10 +383,12 @@ export async function reissueInvitation(invitationIdIn: unknown): Promise<LinkRe
 }
 
 /** Cancel an open invitation (its link stops working immediately). */
-export async function cancelInvitation(invitationIdIn: unknown): Promise<FlowResult> {
+export async function cancelInvitation(invitationIdIn: unknown): Promise<FlowResult | NeedsReauth> {
   const invitationId = str(invitationIdIn, 64);
   const actor = await requireManager("cancel_invitation", null);
   if (!actor) return { error: "لا تملك صلاحية." };
+  const gate = await requireRecentAuth(actor); // U3 sensitive action
+  if (gate) return gate;
 
   const inv = await getInvitation(invitationId);
   if (!inv || inv.kind !== "invite") return { error: "الدعوة غير موجودة." };
@@ -401,7 +424,7 @@ export async function cancelInvitation(invitationIdIn: unknown): Promise<FlowRes
  * suspended (completing it never reactivates). Supersedes older open reset
  * links for the same account. Replaces the retired manager-typed password.
  */
-export async function createResetLink(userIdIn: unknown): Promise<LinkResult> {
+export async function createResetLink(userIdIn: unknown): Promise<LinkResult | NeedsReauth> {
   const userId = str(userIdIn, 64);
   const actor = await requireManager("reset_password", userId);
   if (!actor) return { error: "لا تملك صلاحية." };
@@ -418,6 +441,8 @@ export async function createResetLink(userIdIn: unknown): Promise<LinkResult> {
     await logDenied("reset_password", userId, `target_role=${target.role}`);
     return { error: "لا تملك صلاحية على هذا الحساب." };
   }
+  const gate = await requireRecentAuth(actor); // U3 sensitive action
+  if (gate) return gate;
 
   const { data: openRows } = await serviceDb()
     .from("admin_invitations")
@@ -633,6 +658,8 @@ export async function completeReset(
     return { error: "تعذّر تعيين كلمة المرور — اطلب رابطًا جديدًا." };
   }
 
+  await stampPasswordChanged(target.id);
+
   const { error: revErr } = await db.rpc("revoke_user_sessions", {
     p_user_id: target.id,
     p_keep_session_id: null,
@@ -751,6 +778,9 @@ export async function changeOwnPassword(
     console.error("[users] changeOwnPassword updateUser failed:", updErr.message);
     return { error: "تعذّر تغيير كلمة المرور." };
   }
+
+  // Own-row update on the actor's session (see stampPasswordChanged).
+  await stampPasswordChanged(actor.id, supabase as unknown as SupabaseClient);
 
   const { error: revErr } = await serviceDb().rpc("revoke_user_sessions", {
     p_user_id: actor.id,

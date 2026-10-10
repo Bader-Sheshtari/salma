@@ -28,6 +28,7 @@ const NAV: { href: string; label: string; tier: Tier }[] = [
   { href: "/admin/doctors", label: "الأطباء", tier: "admin" },
   { href: "/admin/transfers", label: "انتقال الأطباء", tier: "admin" },
   { href: "/admin/users", label: "المستخدمون والصلاحيات", tier: "manager" },
+  { href: "/admin/security", label: "سجل الأمان", tier: "manager" },
   { href: "/admin/account", label: "حسابي", tier: "staff" },
 ];
 

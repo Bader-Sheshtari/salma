@@ -737,3 +737,63 @@ export async function listHomepageSections(): Promise<HomepageSection[]> {
     .order("key");
   return (data as HomepageSection[]) ?? [];
 }
+
+// ---- Security log (U3) ----------------------------------------------------
+
+/** One admin_audit_log row as returned by list_security_events / my_security_events. */
+export type SecurityEvent = Tables<"admin_audit_log">;
+
+export type SecurityEventFilters = {
+  /** Kuwait calendar days, inclusive (YYYY-MM-DD). */
+  from?: string | null;
+  to?: string | null;
+  actor?: string | null;
+  action?: string | null;
+  target?: string | null;
+};
+
+export type SecurityCursor = { ts: string; id: number };
+
+export const SECURITY_PAGE_SIZE = 50;
+
+/**
+ * One keyset page of the security log, newest first (list_security_events —
+ * SECURITY DEFINER, scoped per caller: owner all; super_admin minus rows
+ * involving owner/super_admin accounts except their own; others 42501).
+ * Requests one extra row to know whether more exist (RPC clamps to ≤100).
+ */
+export async function listSecurityEvents(
+  filters: SecurityEventFilters,
+  cursor?: SecurityCursor | null,
+  limit = SECURITY_PAGE_SIZE,
+): Promise<{ events: SecurityEvent[]; hasMore: boolean; error: string | null }> {
+  const n = Math.min(99, Math.max(1, limit));
+  const supabase = (await createClient()) as unknown as SupabaseClient;
+  const { data, error } = await supabase.rpc("list_security_events", {
+    p_from: filters.from || null,
+    p_to: filters.to || null,
+    p_actor: filters.actor || null,
+    p_action: filters.action || null,
+    p_target: filters.target || null,
+    p_cursor_ts: cursor?.ts ?? null,
+    p_cursor_id: cursor?.id ?? null,
+    p_limit: n + 1,
+  });
+  if (error) {
+    console.error("[security] list_security_events failed:", error.message);
+    return { events: [], hasMore: false, error: error.message };
+  }
+  const rows = (data as SecurityEvent[] | null) ?? [];
+  return { events: rows.slice(0, n), hasMore: rows.length > n, error: null };
+}
+
+/** The caller's own recent security events (my_security_events; actor or target). */
+export async function listMySecurityEvents(limit = 10): Promise<SecurityEvent[]> {
+  const supabase = (await createClient()) as unknown as SupabaseClient;
+  const { data, error } = await supabase.rpc("my_security_events", { p_limit: limit });
+  if (error) {
+    console.error("[security] my_security_events failed:", error.message);
+    return [];
+  }
+  return (data as SecurityEvent[] | null) ?? [];
+}

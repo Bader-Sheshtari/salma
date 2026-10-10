@@ -18,6 +18,9 @@ import {
   saveChangeEvents,
   type ContentSnapshot,
 } from "./feedback-log";
+import { requireRecentAuth } from "@/lib/reauth";
+import type { NeedsReauth } from "@/lib/reauth-shared";
+import { auditAsService, revokeSessions } from "@/lib/admin-audit";
 
 export type SaveResult = { error: string } | null;
 
@@ -1616,24 +1619,27 @@ async function logDenied(action: string, targetId: string | null, detail: string
  * guard_profile_changes enforces the same rules AND admin_audit_log attributes
  * the change to the real actor (a service-role write would be logged as system).
  */
-export async function setAdminRole(formData: FormData) {
+export async function setAdminRole(formData: FormData): Promise<AdminUserResult | NeedsReauth> {
   const actor = await requireAdmin();
   const id = String(formData.get("id") ?? "");
   const role = String(formData.get("role") ?? "");
   if (!canAssignRole(actor.role, role)) {
     await logDenied("change_role", id, `role=${role}`);
-    return;
+    return { error: "لا تملك صلاحية تعيين هذا الدور." };
   }
 
   const admin = createAdminClient();
   const { data } = await admin.from("profiles").select("id, role").eq("id", id).maybeSingle();
   const target = data as { id: string; role: string } | null;
-  if (!target) return;
+  if (!target) return { error: "الحساب غير موجود." };
   if (!canManage(actor, target)) {
     await logDenied("change_role", id, `${target.role}→${role}`);
-    return;
+    return { error: "لا تملك صلاحية على هذا الحساب." };
   }
-  if (target.role === role) return;
+  if (target.role === role) return null;
+  // U3: sensitive action — requires a recent re-auth of this session.
+  const gate = await requireRecentAuth(actor);
+  if (gate) return gate;
 
   const supabase = await createClient();
   const { data: updated, error } = await supabase
@@ -1643,8 +1649,18 @@ export async function setAdminRole(formData: FormData) {
     .select("id");
   if (error || !updated?.length) {
     console.error("[users] setAdminRole failed:", error?.message ?? "no row updated (RLS)");
+    revalidatePath("/admin/users");
+    return { error: "تعذّر تغيير الدور." };
   }
+
+  // U3: the target must sign in fresh under the new role.
+  const revoked = await revokeSessions(target.id, null);
+  await auditAsService(
+    { action: "sessions_revoked", target: target.id, details: { reason: "role_changed", revoked: revoked ?? 0 } },
+    actor.id,
+  );
   revalidatePath("/admin/users");
+  return { ok: "تم تغيير الدور." };
 }
 
 /**
@@ -1655,7 +1671,7 @@ export async function setAdminRole(formData: FormData) {
  * A ban failure is logged, never fails the suspension. Written through the
  * actor's session for DB-guard enforcement + correct audit attribution.
  */
-export async function toggleAdminDisabled(formData: FormData) {
+export async function toggleAdminDisabled(formData: FormData): Promise<AdminUserResult | NeedsReauth> {
   const actor = await requireAdmin();
   const id = String(formData.get("id") ?? "");
 
@@ -1666,11 +1682,14 @@ export async function toggleAdminDisabled(formData: FormData) {
     .eq("id", id)
     .maybeSingle();
   const target = data as { id: string; role: string; disabled: boolean } | null;
-  if (!target) return;
+  if (!target) return { error: "الحساب غير موجود." };
   if (!canManage(actor, target)) {
     await logDenied(target.disabled ? "reactivate_user" : "suspend_user", id, `target_role=${target.role}`);
-    return;
+    return { error: "لا تملك صلاحية على هذا الحساب." };
   }
+  // U3: sensitive action — requires a recent re-auth of this session.
+  const gate = await requireRecentAuth(actor);
+  if (gate) return gate;
 
   const disabled = !target.disabled;
   const supabase = await createClient();
@@ -1682,7 +1701,7 @@ export async function toggleAdminDisabled(formData: FormData) {
   if (error || !updated?.length) {
     console.error("[users] toggleAdminDisabled failed:", error?.message ?? "no row updated (RLS)");
     revalidatePath("/admin/users");
-    return;
+    return { error: "تعذّر تحديث حالة الحساب." };
   }
 
   try {
@@ -1693,7 +1712,17 @@ export async function toggleAdminDisabled(formData: FormData) {
   } catch (e) {
     console.error("[users] auth ban update threw:", e);
   }
+
+  // U3: suspension also kills every session (reactivation revokes nothing).
+  if (disabled) {
+    const revoked = await revokeSessions(target.id, null);
+    await auditAsService(
+      { action: "sessions_revoked", target: target.id, details: { reason: "suspended", revoked: revoked ?? 0 } },
+      actor.id,
+    );
+  }
   revalidatePath("/admin/users");
+  return { ok: disabled ? "تم إيقاف الحساب." : "أُعيد تفعيل الحساب." };
 }
 
 /**

@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import type { Tables } from "@/lib/supabase/database.types";
-import { setAdminRole, toggleAdminDisabled } from "../../actions";
+import { setAdminRole, toggleAdminDisabled, type AdminUserResult } from "../../actions";
 import { createResetLink } from "../../user-actions";
+import { removeUserMfa } from "../../security-actions";
+import type { NeedsReauth } from "@/lib/reauth-shared";
+import { useReauth } from "../ReauthProvider";
 import { ROLE_LABEL, assignableRoles, canManageTarget } from "@/lib/roles";
 import { formatStampAr } from "@/lib/format";
 import { useShowIssuedLink } from "./LinkModal";
@@ -51,20 +54,45 @@ export function AdminRow({
   const roleOptions = assignableRoles(actorRole);
   const canChangeRole = canManageThis && !user.disabled && roleOptions.length > 0;
   const setIssued = useShowIssuedLink();
+  const guarded = useReauth();
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [confirmMfa, setConfirmMfa] = useState(false);
   const [busy, start] = useTransition();
+
+  /** Sensitive actions run under the re-auth protocol (modal + one retry). */
+  function run(action: () => Promise<AdminUserResult | NeedsReauth | { ok: string } | { error: string }>) {
+    setError("");
+    setNotice("");
+    start(async () => {
+      try {
+        const res = await guarded(action);
+        if (res && "error" in res) setError(res.error);
+        else if (res && "ok" in res && res.ok) setNotice(res.ok);
+      } catch {
+        setError(GENERIC_ERROR);
+      }
+    });
+  }
 
   function issueReset() {
     setError("");
+    setNotice("");
     start(async () => {
       try {
-        const res = await createResetLink(user.id);
+        const res = await guarded(() => createResetLink(user.id));
+        if (!res) return;
         if ("error" in res) setError(res.error);
         else setIssued({ link: res.link, email: res.email, expiresAt: res.expiresAt, kind: res.kind });
       } catch {
         setError(GENERIC_ERROR);
       }
     });
+  }
+
+  function removeMfa() {
+    setConfirmMfa(false);
+    run(() => removeUserMfa(user.id));
   }
 
   const roleLabel = ROLE_LABEL[user.role] ?? user.role;
@@ -117,7 +145,7 @@ export function AdminRow({
           <div className="flex flex-col items-start gap-1.5">
             <div className="flex flex-wrap items-center gap-1.5">
               {canChangeRole ? (
-                <form action={setAdminRole} className="flex items-center gap-1">
+                <form action={(fd) => run(() => setAdminRole(fd))} className="flex items-center gap-1">
                   <input type="hidden" name="id" value={user.id} />
                   <select
                     name="role"
@@ -137,20 +165,59 @@ export function AdminRow({
                       </option>
                     ))}
                   </select>
-                  <button className={actionBtn}>حفظ الدور</button>
+                  <button disabled={busy} className={actionBtn}>
+                    حفظ الدور
+                  </button>
                 </form>
               ) : null}
-              <form action={toggleAdminDisabled}>
+              <form action={(fd) => run(() => toggleAdminDisabled(fd))}>
                 <input type="hidden" name="id" value={user.id} />
-                <button className={actionBtn}>{user.disabled ? "إعادة تفعيل" : "إيقاف"}</button>
+                <button disabled={busy} className={actionBtn}>
+                  {user.disabled ? "إعادة تفعيل" : "إيقاف"}
+                </button>
               </form>
               <button type="button" disabled={busy} onClick={issueReset} className={actionBtn}>
-                {busy ? "جارٍ الإنشاء…" : "رابط إعادة تعيين"}
+                {busy ? "جارٍ التنفيذ…" : "رابط إعادة تعيين"}
               </button>
+              {confirmMfa ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={removeMfa}
+                    className="whitespace-nowrap rounded-lg border border-coral/50 bg-white px-2.5 py-1.5 text-[12px] font-semibold text-ink hover:bg-coral/10 disabled:opacity-50"
+                  >
+                    تأكيد الإزالة
+                  </button>
+                  <button type="button" disabled={busy} onClick={() => setConfirmMfa(false)} className={actionBtn}>
+                    تراجع
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setConfirmMfa(true)}
+                  title="لمن فقد تطبيق المصادقة: تُزال عوامل المصادقة وتُنهى جلساته"
+                  className={actionBtn}
+                >
+                  إزالة المصادقة الثنائية
+                </button>
+              )}
             </div>
+            {confirmMfa ? (
+              <span className="text-[11.5px] text-gray">
+                ستُزال المصادقة الثنائية لهذا الحساب وتُنهى جميع جلساته.
+              </span>
+            ) : null}
             {error ? (
               <span role="alert" className="text-[11.5px] text-coral">
                 {error}
+              </span>
+            ) : null}
+            {notice ? (
+              <span role="status" className="text-[11.5px] text-teal">
+                {notice}
               </span>
             ) : null}
           </div>

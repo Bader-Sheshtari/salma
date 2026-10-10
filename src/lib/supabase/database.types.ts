@@ -1350,6 +1350,7 @@ export type Database = {
           id: string
           last_login_at: string | null
           notification_prefs: Json
+          password_changed_at: string | null
           phone: string | null
           role: string
           updated_at: string
@@ -1363,6 +1364,7 @@ export type Database = {
           id: string
           last_login_at?: string | null
           notification_prefs?: Json
+          password_changed_at?: string | null
           phone?: string | null
           role?: string
           updated_at?: string
@@ -1376,6 +1378,7 @@ export type Database = {
           id?: string
           last_login_at?: string | null
           notification_prefs?: Json
+          password_changed_at?: string | null
           phone?: string | null
           role?: string
           updated_at?: string
@@ -2016,6 +2019,24 @@ export type Database = {
         }
         Relationships: []
       }
+      session_reauth: {
+        Row: {
+          session_id: string
+          user_id: string
+          verified_at: string
+        }
+        Insert: {
+          session_id: string
+          user_id: string
+          verified_at?: string
+        }
+        Update: {
+          session_id?: string
+          user_id?: string
+          verified_at?: string
+        }
+        Relationships: []
+      }
       social_answers: {
         Row: {
           answer: string
@@ -2258,6 +2279,39 @@ export type Database = {
           target_user_id: string
         }[]
       }
+      list_security_events: {
+        Args: {
+          p_action?: string
+          p_actor?: string
+          p_cursor_id?: number
+          p_cursor_ts?: string
+          p_from?: string
+          p_limit?: number
+          p_target?: string
+          p_to?: string
+        }
+        Returns: {
+          action: string
+          actor_id: string | null
+          actor_kind: string
+          actor_name: string | null
+          actor_role: string | null
+          after_value: string | null
+          before_value: string | null
+          created_at: string
+          details: Json | null
+          id: number
+          target_email: string | null
+          target_id: string | null
+          target_name: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "admin_audit_log"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       log_admin_denied: {
         Args: { p_action: string; p_detail: string; p_target: string }
         Returns: undefined
@@ -2274,10 +2328,39 @@ export type Database = {
         }
         Returns: undefined
       }
+      mfa_satisfied: { Args: never; Returns: boolean }
+      my_security_events: {
+        Args: { p_limit?: number }
+        Returns: {
+          action: string
+          actor_id: string | null
+          actor_kind: string
+          actor_name: string | null
+          actor_role: string | null
+          after_value: string | null
+          before_value: string | null
+          created_at: string
+          details: Json | null
+          id: number
+          target_email: string | null
+          target_id: string | null
+          target_name: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "admin_audit_log"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       normalize_host: { Args: { input: string }; Returns: string }
       radar_cleanup: {
         Args: { p_batch_limit?: number; p_max_batches?: number }
         Returns: Json
+      }
+      record_reauth: {
+        Args: { p_session: string; p_user: string }
+        Returns: undefined
       }
       reserve_ai_image: {
         Args: {

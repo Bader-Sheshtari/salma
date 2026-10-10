@@ -5,6 +5,7 @@ import { createInvitation } from "../../user-actions";
 import { ROLE_LABEL } from "@/lib/roles";
 import { Modal } from "./Modal";
 import { IssuedLinkBody, issuedTitle, type IssuedLink } from "./LinkModal";
+import { useReauth } from "../ReauthProvider";
 
 const field =
   "mt-1 block w-full rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal aria-[invalid=true]:border-coral";
@@ -26,6 +27,7 @@ export function InviteButton({ roles }: { roles: string[] }) {
   const [error, setError] = useState("");
   const [issued, setIssued] = useState<IssuedLink | null>(null);
   const [busy, start] = useTransition();
+  const guarded = useReauth();
 
   if (!roles.length) return null;
 
@@ -56,7 +58,8 @@ export function InviteButton({ roles }: { roles: string[] }) {
     setError("");
     start(async () => {
       try {
-        const res = await createInvitation(emailTrim, role);
+        const res = await guarded(() => createInvitation(emailTrim, role));
+        if (!res) return;
         if ("error" in res) {
           setError(res.error);
           return;

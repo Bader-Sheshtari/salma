@@ -5,6 +5,7 @@ import { cancelInvitation, reissueInvitation } from "../../user-actions";
 import { ROLE_LABEL, canAssignRole } from "@/lib/roles";
 import { formatStampAr } from "@/lib/format";
 import { useShowIssuedLink } from "./LinkModal";
+import { useReauth } from "../ReauthProvider";
 import { RoleChip, StatusChip, actionBtn, actionsCell, desktopCell, mainCell, row } from "./ui";
 
 export type InvitationView = {
@@ -23,6 +24,7 @@ const GENERIC_ERROR = "حدث خطأ — حاول مرة أخرى.";
 export function InvitationRow({ inv, actorRole }: { inv: InvitationView; actorRole: string }) {
   const canAct = canAssignRole(actorRole, inv.role); // server re-checks
   const setIssued = useShowIssuedLink();
+  const guarded = useReauth();
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
   const [busy, start] = useTransition();
@@ -31,7 +33,8 @@ export function InvitationRow({ inv, actorRole }: { inv: InvitationView; actorRo
     setError("");
     start(async () => {
       try {
-        const res = await reissueInvitation(inv.id);
+        const res = await guarded(() => reissueInvitation(inv.id));
+        if (!res) return;
         if ("error" in res) setError(res.error);
         else
           setIssued({ link: res.link, email: res.email, expiresAt: res.expiresAt, kind: res.kind, reissued: true });
@@ -45,7 +48,7 @@ export function InvitationRow({ inv, actorRole }: { inv: InvitationView; actorRo
     setError("");
     start(async () => {
       try {
-        const res = await cancelInvitation(inv.id);
+        const res = await guarded(() => cancelInvitation(inv.id));
         setConfirming(false);
         if (res && "error" in res) setError(res.error);
       } catch {

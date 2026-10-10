@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { isAdminRole, isStaffRole } from "@/lib/auth";
+import { isStaffRole, staffHome } from "@/lib/auth";
 
 export type LoginResult = { error: string } | null;
 
@@ -36,7 +36,15 @@ export async function login(_prev: LoginResult, formData: FormData): Promise<Log
     .eq("id", data.user.id);
 
   // Editors land straight on the content area (their whole dashboard).
-  redirect(isAdminRole(profile.role) ? "/admin" : "/admin/content");
+  const dest = staffHome(profile.role);
+
+  // U3: an enrolled account (any role) must finish the TOTP step first. The
+  // dashboard guard (requireStaff R1) backstops this for deep links.
+  const hasTotp = (data.user.factors ?? []).some(
+    (f) => f.status === "verified" && f.factor_type === "totp",
+  );
+  if (hasTotp) redirect(`/admin/login?step=mfa&dest=${encodeURIComponent(dest)}`);
+  redirect(dest);
 }
 
 export async function logout() {
