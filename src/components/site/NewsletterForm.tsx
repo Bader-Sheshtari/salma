@@ -3,17 +3,34 @@
 import { useActionState } from "react";
 import Link from "next/link";
 import { subscribeNewsletter, type NewsletterResult } from "@/app/actions/newsletter";
+import { AudienceSurvey } from "./AudienceSurvey";
+import type { SignupSource } from "@/lib/newsletter";
 
-export function NewsletterForm() {
+/**
+ * Public newsletter signup. The flow is strictly:
+ * email → subscribe → success → OPTIONAL survey. The subscription is already
+ * complete before the survey appears; skipping or ignoring it changes nothing.
+ */
+export function NewsletterForm({ source = "homepage" }: { source?: SignupSource }) {
   const [state, formAction, pending] = useActionState<NewsletterResult | null, FormData>(
     subscribeNewsletter,
     null,
   );
 
   if (state?.ok) {
+    if (state.already) {
+      return (
+        <div className="mt-4 rounded-lg bg-cream px-4 py-3 text-[13px] text-teal">
+          أنت مشترك بالفعل في نشرة سلمى.
+        </div>
+      );
+    }
     return (
-      <div className="mt-4 rounded-lg bg-cream px-4 py-3 text-[13px] text-teal">
-        تم تسجيل بريدك بنجاح.
+      <div>
+        <div className="mt-4 rounded-lg bg-cream px-4 py-3 text-[13px] font-bold text-teal">
+          تم اشتراكك بنجاح ✓
+        </div>
+        {state.surveyToken ? <AudienceSurvey token={state.surveyToken} /> : null}
       </div>
     );
   }
@@ -21,6 +38,16 @@ export function NewsletterForm() {
   return (
     <>
       <form action={formAction} className="mt-4 flex gap-2">
+        <input type="hidden" name="source" value={source} />
+        {/* Honeypot: invisible to humans, filled by naive bots. */}
+        <input
+          type="text"
+          name="website"
+          tabIndex={-1}
+          autoComplete="off"
+          aria-hidden="true"
+          className="absolute -left-[9999px] h-0 w-0 opacity-0"
+        />
         <input
           type="email"
           name="email"

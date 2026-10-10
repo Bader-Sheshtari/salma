@@ -1322,21 +1322,122 @@ export type Database = {
         }
         Relationships: []
       }
+      newsletter_audience_profiles: {
+        Row: {
+          content_preferences: string[]
+          country_of_residence: string | null
+          created_at: string
+          interest_reason_other: string | null
+          interest_reasons: string[]
+          nationality: string | null
+          preferred_frequency: string | null
+          profession_type: string | null
+          subscriber_id: string
+          survey_completed_at: string | null
+          survey_updated_at: string | null
+          topics: string[]
+          updated_at: string
+        }
+        Insert: {
+          content_preferences?: string[]
+          country_of_residence?: string | null
+          created_at?: string
+          interest_reason_other?: string | null
+          interest_reasons?: string[]
+          nationality?: string | null
+          preferred_frequency?: string | null
+          profession_type?: string | null
+          subscriber_id: string
+          survey_completed_at?: string | null
+          survey_updated_at?: string | null
+          topics?: string[]
+          updated_at?: string
+        }
+        Update: {
+          content_preferences?: string[]
+          country_of_residence?: string | null
+          created_at?: string
+          interest_reason_other?: string | null
+          interest_reasons?: string[]
+          nationality?: string | null
+          preferred_frequency?: string | null
+          profession_type?: string | null
+          subscriber_id?: string
+          survey_completed_at?: string | null
+          survey_updated_at?: string | null
+          topics?: string[]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "newsletter_audience_profiles_subscriber_id_fkey"
+            columns: ["subscriber_id"]
+            isOneToOne: true
+            referencedRelation: "newsletter_subscribers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       newsletter_subscribers: {
         Row: {
+          consent_version: string | null
           created_at: string
           email: string
           id: string
+          name: string | null
+          source: string | null
+          status: string
+          subscribed_at: string
+          survey_token_expires_at: string | null
+          survey_token_hash: string | null
+          unsubscribed_at: string | null
+          updated_at: string
         }
         Insert: {
+          consent_version?: string | null
           created_at?: string
           email: string
           id?: string
+          name?: string | null
+          source?: string | null
+          status?: string
+          subscribed_at?: string
+          survey_token_expires_at?: string | null
+          survey_token_hash?: string | null
+          unsubscribed_at?: string | null
+          updated_at?: string
         }
         Update: {
+          consent_version?: string | null
           created_at?: string
           email?: string
           id?: string
+          name?: string | null
+          source?: string | null
+          status?: string
+          subscribed_at?: string
+          survey_token_expires_at?: string | null
+          survey_token_hash?: string | null
+          unsubscribed_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      newsletter_throttle: {
+        Row: {
+          bucket: string
+          count: number
+          window_start: string
+        }
+        Insert: {
+          bucket: string
+          count?: number
+          window_start: string
+        }
+        Update: {
+          bucket?: string
+          count?: number
+          window_start?: string
         }
         Relationships: []
       }
