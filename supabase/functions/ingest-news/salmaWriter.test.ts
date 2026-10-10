@@ -1489,3 +1489,63 @@ test("safety_alert: patient-only contact action given to facilities is BLOCKED",
   assert.ok(errors.includes("audience_misdirected_action:contact"));
   assert.ok(!errors.some((e) => e.startsWith("invented_official_action")));
 });
+
+// --- Arabic-first COUNTRY equivalence (Develop Story §16 narrow fix) --------
+//
+// English country terms in mustPreserve (from an English source) must accept
+// the canonical Arabic name as full preservation; absence in BOTH languages
+// keeps the unchanged severity; non-country foreign identities stay strict.
+
+test("country equivalence: الكويت alone satisfies mustPreserve 'Kuwait' (no error, no warning)", () => {
+  const { errors, warnings } = checkFactGrounding(
+    {
+      title: "ارتفاع حالات الإنفلونزا الموسمية في الكويت",
+      excerpt: "رصدت الجهات الصحية في الكويت ارتفاعاً موسمياً في الحالات.",
+      body: "أعلنت الجهات الصحية في الكويت رصد ارتفاع موسمي في حالات الإنفلونزا، ودعت إلى اتباع الإرشادات الوقائية المعتادة دون أي إجراء إضافي.",
+    },
+    { sourceText: "Kuwait health authorities reported a seasonal rise in influenza cases.", mustPreserve: ["Kuwait"] },
+    "safety_alert",
+  );
+  assert.ok(!errors.some((e) => e.startsWith("missing_essential_entity")), errors.join(","));
+  assert.ok(!warnings.some((w) => w.includes("Kuwait")), warnings.join(","));
+});
+
+test("country equivalence: absent in BOTH languages still blocks a safety alert", () => {
+  const { errors } = checkFactGrounding(
+    {
+      title: "ارتفاع حالات الإنفلونزا الموسمية",
+      excerpt: "رصدت الجهات الصحية ارتفاعاً موسمياً في الحالات.",
+      body: "أعلنت الجهات الصحية رصد ارتفاع موسمي في حالات الإنفلونزا، ودعت إلى اتباع الإرشادات الوقائية المعتادة.",
+    },
+    { sourceText: "Kuwait health authorities reported a seasonal rise in influenza cases.", mustPreserve: ["Kuwait"] },
+    "safety_alert",
+  );
+  assert.ok(errors.includes("missing_essential_entity:Kuwait"), errors.join(","));
+});
+
+test("country equivalence: absent in both languages stays a warning for standard news", () => {
+  const { errors, warnings } = checkFactGrounding(
+    {
+      title: "ارتفاع حالات الإنفلونزا الموسمية",
+      excerpt: "رصدت الجهات الصحية ارتفاعاً موسمياً في الحالات.",
+      body: "أعلنت الجهات الصحية رصد ارتفاع موسمي في حالات الإنفلونزا، ودعت إلى اتباع الإرشادات الوقائية المعتادة.",
+    },
+    { sourceText: "Kuwait health authorities reported a seasonal rise in influenza cases.", mustPreserve: ["Kuwait"] },
+    "standard_news",
+  );
+  assert.ok(!errors.includes("missing_essential_entity:Kuwait"));
+  assert.ok(warnings.includes("missing_essential_entity:Kuwait"), warnings.join(","));
+});
+
+test("country equivalence does NOT relax non-country foreign identities", () => {
+  const { errors } = checkFactGrounding(
+    {
+      title: "سحب دواء من الصيدليات",
+      excerpt: "أعلنت الجهة المنظّمة سحب دواء سيكلوفوسفاميد من الصيدليات.",
+      body: "أعلنت الجهة المنظّمة سحب دواء سيكلوفوسفاميد من الصيدليات دون ذكر أي إجراء مطلوب من المرضى.",
+    },
+    { sourceText: "Regulators announced a recall of Cyclophosphamide from pharmacies.", mustPreserve: ["Cyclophosphamide"] },
+    "safety_alert",
+  );
+  assert.ok(errors.includes("missing_essential_entity:Cyclophosphamide"), errors.join(","));
+});

@@ -906,6 +906,34 @@ export function stripFormalSuffixes(name: string): string {
   return s.replace(/[\s,]+$/, "").trim();
 }
 
+// --- Arabic-first COUNTRY equivalence (narrow, fixed vocabulary) -----------
+//
+// English country terms extracted into mustPreserve from an English source
+// (fetchSourceText.COUNTRY_TERMS) are NOT product/brand identities: demanding
+// the literal "Kuwait" inside an Arabic article misclassifies a translation as
+// a dropped fact and rejects correct Arabic-first writing. This fixed map lets
+// the entity checks accept the canonical Arabic name as full preservation of
+// the SAME entity. It is deliberately limited to the exact English terms the
+// extractor emits \u2014 drug/product/company names keep the strict verbatim
+// Arabic-first gloss contract unchanged, and the country itself remains
+// REQUIRED (in either language) with unchanged severity.
+const COUNTRY_ARABIC_EQUIVALENTS: Record<string, string[]> = {
+  kuwait: ["\u0627\u0644\u0643\u0648\u064A\u062A"],
+  saudi: ["\u0627\u0644\u0633\u0639\u0648\u062F\u064A\u0629", "\u0627\u0644\u0633\u0639\u0648\u062F\u064A\u0647"],
+  emirates: ["\u0627\u0644\u0625\u0645\u0627\u0631\u0627\u062A", "\u0627\u0644\u0627\u0645\u0627\u0631\u0627\u062A"],
+  uae: ["\u0627\u0644\u0625\u0645\u0627\u0631\u0627\u062A", "\u0627\u0644\u0627\u0645\u0627\u0631\u0627\u062A"],
+  qatar: ["\u0642\u0637\u0631"],
+  bahrain: ["\u0627\u0644\u0628\u062D\u0631\u064A\u0646"],
+  oman: ["\u0639\u0645\u0627\u0646"],
+};
+
+/** The accepted Arabic equivalents (normalized) for a known English country
+ *  term, keyed by the entity's normalized essential identity; [] otherwise. */
+export function arabicCountryEquivalents(idNorm: string): string[] {
+  const eqs = COUNTRY_ARABIC_EQUIVALENTS[idNorm];
+  return eqs ? eqs.map((e) => normalizeForCompare(e)) : [];
+}
+
 const ARABIC_LETTER_RE = /[\u0600-\u06FF]/;
 
 /** Every case-insensitive occurrence of the multi-word `identity` phrase in
@@ -1098,6 +1126,21 @@ export function checkFactGrounding(
     const idNorm = normalizeForCompare(identity);
     if (!idNorm) continue;
     const foreign = /[a-z]/.test(idNorm);
+
+    // Known English COUNTRY terms are exempt from the foreign-name gloss
+    // contract: the canonical Arabic name preserves the same entity fully
+    // (Arabic-first is the house style, not a fact change). The entity is
+    // still REQUIRED — absent in BOTH languages keeps the unchanged
+    // blocking/warning severity below.
+    const countryEqs = arabicCountryEquivalents(idNorm);
+    if (countryEqs.length > 0) {
+      const present = genNorm.includes(idNorm) || countryEqs.some((eq) => genNorm.includes(eq));
+      if (!present) {
+        if (profile === "safety_alert") errors.push(`missing_essential_entity:${ent}`);
+        else warnings.push(`missing_essential_entity:${ent}`);
+      }
+      continue;
+    }
 
     if (!foreign) {
       if (!genNorm.includes(idNorm)) {

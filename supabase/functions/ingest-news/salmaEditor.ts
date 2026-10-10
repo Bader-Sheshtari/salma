@@ -24,6 +24,7 @@
 // protected facts are preserved, and the editorial structure is valid.
 
 import {
+  arabicCountryEquivalents,
   classifyEntityVisibility,
   countWords,
   extractOfficialActions,
@@ -1074,7 +1075,7 @@ export function droppedRequiredActions(
 }
 
 /** Reader-essential entities the original surfaced but the edited draft dropped. */
-function droppedEssentialEntities(
+export function droppedEssentialEntities(
   original: EditorArticle,
   edited: EditorArticle,
   packet: EditorFactPacket,
@@ -1087,7 +1088,13 @@ function droppedEssentialEntities(
     // an editor that correctly drops "for Injection, USP" while keeping the core
     // name is not treated as having dropped the entity.
     const e = normalizeForCompare(stripFormalSuffixes(ent));
-    if (e && origNorm.includes(e) && !editNorm.includes(e)) dropped.push(ent);
+    if (e && origNorm.includes(e) && !editNorm.includes(e)) {
+      // Arabic-first country equivalence (same narrow fixed vocabulary as
+      // checkFactGrounding): an edit that replaces "Kuwait" with «الكويت»
+      // preserved the entity — it must not be rejected as a factual drop.
+      if (arabicCountryEquivalents(e).some((eq) => editNorm.includes(eq))) continue;
+      dropped.push(ent);
+    }
   }
   return dropped;
 }

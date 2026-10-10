@@ -7,6 +7,8 @@ import {
   getContentForEdit,
   getContentVersion,
   getContentVersions,
+  getDevelopedChildren,
+  getDevelopedParent,
   getEvidenceForContent,
   getProfileNames,
 } from "@/lib/admin-queries";
@@ -126,14 +128,17 @@ export default async function EditContent({ params, searchParams }: Props) {
   const view: View = rawView === "activity" || rawView === "versions" ? rawView : "content";
   const versionNo = view === "versions" ? posInt(first(sp.v)) : null;
 
-  const [categories, data, evidence] = await Promise.all([
+  const [categories, data, evidence, developedChildren] = await Promise.all([
     getCategories(),
     getContentForEdit(id),
     view === "content" ? getEvidenceForContent(id) : Promise.resolve(null),
+    view === "content" ? getDevelopedChildren(id) : Promise.resolve([]),
   ]);
   if (!data) notFound();
 
   const { content } = data;
+  const developedParent =
+    view === "content" ? await getDevelopedParent(content.developed_from_content_id) : null;
   const isAi = content.origin === "ai";
   const base = `/admin/content/${content.id}`;
   const isSnapshot = versionNo != null && versionNo < content.version;
@@ -342,6 +347,38 @@ export default async function EditContent({ params, searchParams }: Props) {
           </div>
         ) : null}
 
+        {/* After the News: original ↔ developed relationship (internal only). */}
+        {developedParent ? (
+          <div className="mt-2.5 text-[12.5px] text-ink">
+            <span className="rounded-md bg-gold/15 px-2 py-0.5 text-[11px] font-bold text-ink">
+              ما بعد الخبر
+            </span>{" "}
+            <span className="font-semibold">طُوّرت من:</span>{" "}
+            <Link
+              href={`/admin/content/${developedParent.id}`}
+              className="font-semibold text-teal underline underline-offset-2"
+            >
+              {developedParent.title}
+            </Link>
+          </div>
+        ) : null}
+        {developedChildren.length > 0 ? (
+          <div className="mt-2.5 text-[12.5px] text-ink">
+            <span className="font-semibold">تم تطوير هذه القصة:</span>{" "}
+            {developedChildren.map((c, i) => (
+              <span key={c.id}>
+                {i > 0 ? "، " : ""}
+                <Link
+                  href={`/admin/content/${c.id}`}
+                  className="font-semibold text-teal underline underline-offset-2"
+                >
+                  {c.title}
+                </Link>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Link
             href={`/admin/preview/${content.id}`}
@@ -350,6 +387,14 @@ export default async function EditContent({ params, searchParams }: Props) {
           >
             معاينة قبل النشر ↗
           </Link>
+          {["published", "pending", "unpublished"].includes(content.status) && !content.deleted_at ? (
+            <Link
+              href={`/admin/content/${content.id}/develop`}
+              className="rounded-lg bg-teal/10 px-3 py-1.5 text-[12.5px] font-bold text-teal hover:bg-teal/20"
+            >
+              طوّر القصة
+            </Link>
+          ) : null}
           {content.status === "pending" ? (
             <RejectButton id={content.id} title={content.title} />
           ) : null}

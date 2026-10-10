@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import {
   buildEditorInstructions,
   buildFactPacket,
+  droppedEssentialEntities,
   droppedRequiredActions,
   type EditorArticle,
   type EditorCall,
@@ -1340,4 +1341,48 @@ test("§17.6 the safety-alert prompt states the mandatory risk-retention rule", 
   assert.ok(p.includes("العناصر الخمسة"));
   assert.ok(p.includes("يُمنع حذف كل معلومات الخطر"));
   assert.ok(p.includes("لا تختلق خطراً ولا تقوّيه"));
+});
+
+// --- Arabic-first COUNTRY equivalence in the editor entity check ------------
+
+test("editor entity check: edit replacing 'Kuwait' with الكويت is NOT a dropped entity", () => {
+  const packet = buildFactPacket({
+    profile: "standard_news",
+    sourceText: "Kuwait health authorities reported a seasonal rise in influenza cases.",
+    mustPreserve: ["Kuwait"],
+  });
+  const original: EditorArticle = {
+    title: "ارتفاع حالات الإنفلونزا في Kuwait",
+    excerpt: "",
+    summary: "",
+    body: "أعلنت الجهات الصحية في Kuwait رصد ارتفاع موسمي في الحالات.",
+  };
+  const edited: EditorArticle = {
+    title: "ارتفاع حالات الإنفلونزا الموسمية في الكويت",
+    excerpt: "",
+    summary: "",
+    body: "أعلنت الجهات الصحية في الكويت رصد ارتفاع موسمي في حالات الإنفلونزا.",
+  };
+  assert.deepEqual(droppedEssentialEntities(original, edited, packet), []);
+});
+
+test("editor entity check: dropping the country in BOTH languages is still a drop", () => {
+  const packet = buildFactPacket({
+    profile: "standard_news",
+    sourceText: "Kuwait health authorities reported a seasonal rise in influenza cases.",
+    mustPreserve: ["Kuwait"],
+  });
+  const original: EditorArticle = {
+    title: "ارتفاع حالات الإنفلونزا في Kuwait",
+    excerpt: "",
+    summary: "",
+    body: "أعلنت الجهات الصحية في Kuwait رصد ارتفاع موسمي في الحالات.",
+  };
+  const edited: EditorArticle = {
+    title: "ارتفاع حالات الإنفلونزا الموسمية",
+    excerpt: "",
+    summary: "",
+    body: "أعلنت الجهات الصحية رصد ارتفاع موسمي في حالات الإنفلونزا.",
+  };
+  assert.deepEqual(droppedEssentialEntities(original, edited, packet), ["Kuwait"]);
 });

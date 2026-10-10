@@ -281,6 +281,7 @@ export type Database = {
           dedupe_key: string | null
           deleted_at: string | null
           deleted_by: string | null
+          developed_from_content_id: string | null
           excerpt: string | null
           first_published_at: string | null
           id: string
@@ -328,6 +329,7 @@ export type Database = {
           dedupe_key?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
+          developed_from_content_id?: string | null
           excerpt?: string | null
           first_published_at?: string | null
           id?: string
@@ -375,6 +377,7 @@ export type Database = {
           dedupe_key?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
+          developed_from_content_id?: string | null
           excerpt?: string | null
           first_published_at?: string | null
           id?: string
@@ -436,6 +439,20 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_developed_from_content_id_fkey"
+            columns: ["developed_from_content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_developed_from_content_id_fkey"
+            columns: ["developed_from_content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
           },
           {
             foreignKeyName: "content_last_edited_by_fkey"
@@ -2224,6 +2241,168 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      story_developments: {
+        Row: {
+          brief_sources: Json | null
+          completion_tokens: number
+          cost: number
+          created_at: string
+          direction: string
+          draft_completed_at: string | null
+          draft_direction: string | null
+          draft_duration_ms: number | null
+          draft_inputs: Json | null
+          editor_model: string | null
+          editor_note: string | null
+          editor_prompt_version: string | null
+          editor_verdict: string | null
+          editorial_audit: Json | null
+          error_category: string | null
+          error_message: string | null
+          escalation: Json | null
+          evidence_cluster_key: string | null
+          fidelity_audit: Json | null
+          id: string
+          needs_human_review: boolean | null
+          openrouter_calls: number
+          original_content_id: string
+          phase: string | null
+          prompt_tokens: number
+          requested_by: string | null
+          research_brief: Json | null
+          research_completed_at: string | null
+          research_duration_ms: number | null
+          research_model: string | null
+          research_prompt_version: string | null
+          result_content_id: string | null
+          status: string
+          total_tokens: number
+          updated_at: string
+          validation_warnings: Json | null
+          writer_model: string | null
+          writer_prompt_version: string | null
+          writing_profile: string | null
+        }
+        Insert: {
+          brief_sources?: Json | null
+          completion_tokens?: number
+          cost?: number
+          created_at?: string
+          direction: string
+          draft_completed_at?: string | null
+          draft_direction?: string | null
+          draft_duration_ms?: number | null
+          draft_inputs?: Json | null
+          editor_model?: string | null
+          editor_note?: string | null
+          editor_prompt_version?: string | null
+          editor_verdict?: string | null
+          editorial_audit?: Json | null
+          error_category?: string | null
+          error_message?: string | null
+          escalation?: Json | null
+          evidence_cluster_key?: string | null
+          fidelity_audit?: Json | null
+          id?: string
+          needs_human_review?: boolean | null
+          openrouter_calls?: number
+          original_content_id: string
+          phase?: string | null
+          prompt_tokens?: number
+          requested_by?: string | null
+          research_brief?: Json | null
+          research_completed_at?: string | null
+          research_duration_ms?: number | null
+          research_model?: string | null
+          research_prompt_version?: string | null
+          result_content_id?: string | null
+          status?: string
+          total_tokens?: number
+          updated_at?: string
+          validation_warnings?: Json | null
+          writer_model?: string | null
+          writer_prompt_version?: string | null
+          writing_profile?: string | null
+        }
+        Update: {
+          brief_sources?: Json | null
+          completion_tokens?: number
+          cost?: number
+          created_at?: string
+          direction?: string
+          draft_completed_at?: string | null
+          draft_direction?: string | null
+          draft_duration_ms?: number | null
+          draft_inputs?: Json | null
+          editor_model?: string | null
+          editor_note?: string | null
+          editor_prompt_version?: string | null
+          editor_verdict?: string | null
+          editorial_audit?: Json | null
+          error_category?: string | null
+          error_message?: string | null
+          escalation?: Json | null
+          evidence_cluster_key?: string | null
+          fidelity_audit?: Json | null
+          id?: string
+          needs_human_review?: boolean | null
+          openrouter_calls?: number
+          original_content_id?: string
+          phase?: string | null
+          prompt_tokens?: number
+          requested_by?: string | null
+          research_brief?: Json | null
+          research_completed_at?: string | null
+          research_duration_ms?: number | null
+          research_model?: string | null
+          research_prompt_version?: string | null
+          result_content_id?: string | null
+          status?: string
+          total_tokens?: number
+          updated_at?: string
+          validation_warnings?: Json | null
+          writer_model?: string | null
+          writer_prompt_version?: string | null
+          writing_profile?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "story_developments_original_content_id_fkey"
+            columns: ["original_content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "story_developments_original_content_id_fkey"
+            columns: ["original_content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
+          {
+            foreignKeyName: "story_developments_requested_by_fkey"
+            columns: ["requested_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "story_developments_result_content_id_fkey"
+            columns: ["result_content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "story_developments_result_content_id_fkey"
+            columns: ["result_content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
           },
         ]
       }

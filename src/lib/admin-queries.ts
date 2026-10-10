@@ -133,7 +133,7 @@ export async function getAdminCounts(): Promise<AdminCounts> {
  * which are large and only used server-side by search_content.
  */
 const CONTENT_COLUMNS =
-  "ai_summary,author_id,body,category_slug,cover_credit_name,cover_credit_url,cover_image_url,created_at,created_by,dedupe_key,deleted_at,deleted_by,excerpt,first_published_at,id,is_breaking,is_featured,last_edited_at,last_edited_by,last_published_at,origin,original_title,original_url,published_at,published_by,read_minutes,relevance_score,reviewed_at,reviewed_by,slug,source_image_url,source_lang,source_name,source_url,status,title,type,unpublished_at,unpublished_by,updated_at,version,video_duration,video_url";
+  "ai_summary,author_id,body,category_slug,cover_credit_name,cover_credit_url,cover_image_url,created_at,created_by,dedupe_key,deleted_at,deleted_by,developed_from_content_id,excerpt,first_published_at,id,is_breaking,is_featured,last_edited_at,last_edited_by,last_published_at,origin,original_title,original_url,published_at,published_by,read_minutes,relevance_score,reviewed_at,reviewed_by,slug,source_image_url,source_lang,source_name,source_url,status,title,type,unpublished_at,unpublished_by,updated_at,version,video_duration,video_url";
 
 export async function listContent(status?: string): Promise<Content[]> {
   const supabase = await createClient();
@@ -796,4 +796,32 @@ export async function listMySecurityEvents(limit = 10): Promise<SecurityEvent[]>
     return [];
   }
   return (data as SecurityEvent[] | null) ?? [];
+}
+
+// ---- Develop Story (After the News) ---------------------------------------
+
+export type DevelopedRelation = { id: string; title: string; status: string };
+
+/** Articles developed FROM this one (original → developed children). */
+export async function getDevelopedChildren(contentId: string): Promise<DevelopedRelation[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("content")
+    .select("id,title,status")
+    .eq("developed_from_content_id", contentId)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false });
+  return (data as DevelopedRelation[]) ?? [];
+}
+
+/** The original this article was developed from (developed → original). */
+export async function getDevelopedParent(parentId: string | null): Promise<DevelopedRelation | null> {
+  if (!parentId) return null;
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("content")
+    .select("id,title,status")
+    .eq("id", parentId)
+    .maybeSingle();
+  return (data as DevelopedRelation | null) ?? null;
 }

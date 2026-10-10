@@ -33,3 +33,16 @@ verify_jwt = true
 # at the gateway (the function additionally re-checks the caller's admin role).
 [functions.radar-translate]
 verify_jwt = true
+
+# develop-story (After the News V1) runs multi-call AI research/drafting and
+# creates pending Content. Callers: staff JWT (editor+) or the service-role key
+# (operational/system); the function re-checks the role itself. Gateway JWT
+# verification pinned like the other credit-spending functions.
+[functions.develop-story]
+verify_jwt = true
+
+# ingest-news does its own auth (admin JWT or x-ingest-secret from pg_cron);
+# gateway JWT verification has always been DISABLED for it. Pinned so a plain
+# `supabase functions deploy` cannot silently flip it.
+[functions.ingest-news]
+verify_jwt = false
