@@ -14,7 +14,7 @@ export const ADMIN_ROLES = ["admin", "super_admin", "owner"] as const;
 /** Roles that may sign in to the dashboard at all (editors: content area only). */
 export const STAFF_ROLES = ["editor", ...ADMIN_ROLES] as const;
 
-/** Roles that may manage other accounts (the "إدارة الأدمن" page). */
+/** Roles that may manage other accounts (the «المستخدمون والصلاحيات» page). */
 export const MANAGER_ROLES = ["super_admin", "owner"] as const;
 
 /** True when the role grants admin-dashboard (admin-tier) access. */

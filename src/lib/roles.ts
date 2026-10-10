@@ -13,7 +13,7 @@
 export const ROLE_LABEL: Record<string, string> = {
   owner: "المالك",
   super_admin: "مشرف عام",
-  admin: "مسؤول",
+  admin: "مدير",
   editor: "محرر",
   user: "مستخدم",
 };

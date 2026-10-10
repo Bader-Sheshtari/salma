@@ -1,56 +1,80 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useState } from "react";
 import { changeOwnPassword, type FlowResult } from "../../user-actions";
-import { PASSWORD_HINT, PASSWORD_MIN, passwordError } from "@/lib/passwords";
+import { passwordError } from "@/lib/passwords";
 import { PasswordInput } from "../../PasswordInput";
+import { PasswordChecklist, usePasswordPair } from "../../PasswordChecklist";
+
+const GENERIC_ERROR = "حدث خطأ — حاول مرة أخرى.";
 
 export function OwnPasswordForm({ email }: { email: string }) {
-  const formRef = useRef<HTMLFormElement>(null);
+  const [current, setCurrent] = useState("");
+  const pw = usePasswordPair(email);
   const [state, action, pending] = useActionState<FlowResult, FormData>(async (_prev, fd) => {
-    const current = fd.get("current");
+    const cur = fd.get("current");
     const next = fd.get("password");
     const confirm = fd.get("confirm");
     // Instant client hint; the server re-validates everything.
     const hint = passwordError(next, confirm, { email });
     if (hint) return { error: hint };
-    return changeOwnPassword(current, next, confirm);
+    let res: FlowResult;
+    try {
+      res = await changeOwnPassword(cur, next, confirm);
+    } catch {
+      return { error: GENERIC_ERROR };
+    }
+    // Clear every password field after a successful change.
+    if (res && "ok" in res) {
+      setCurrent("");
+      pw.reset();
+    }
+    return res;
   }, null);
 
-  // Clear every password field after a successful change.
-  useEffect(() => {
-    if (state && "ok" in state) formRef.current?.reset();
-  }, [state]);
+  const canSubmit = current.length > 0 && pw.valid && !pending;
 
   return (
-    <form ref={formRef} action={action} className="flex max-w-md flex-col gap-3">
-      <PasswordInput name="current" label="كلمة المرور الحالية" autoComplete="current-password" />
+    <form action={action} className="flex max-w-md flex-col gap-4" noValidate>
       <PasswordInput
-        name="password"
-        label="كلمة المرور الجديدة"
-        autoComplete="new-password"
-        minLength={PASSWORD_MIN}
-        hint={PASSWORD_HINT}
+        name="current"
+        label="كلمة المرور الحالية"
+        autoComplete="current-password"
+        value={current}
+        onChange={setCurrent}
       />
+      <div className="flex flex-col gap-2">
+        <PasswordInput
+          name="password"
+          label="كلمة المرور الجديدة"
+          autoComplete="new-password"
+          value={pw.password}
+          onChange={pw.setPassword}
+          describedBy="op-pw-rules"
+        />
+        <PasswordChecklist id="op-pw-rules" password={pw.password} check={pw.check} matches={pw.matches} />
+      </div>
       <PasswordInput
         name="confirm"
         label="تأكيد كلمة المرور الجديدة"
         autoComplete="new-password"
-        minLength={PASSWORD_MIN}
+        value={pw.confirm}
+        onChange={pw.setConfirm}
+        error={pw.mismatchError}
       />
       {state && "error" in state ? (
-        <div role="alert" className="text-[12.5px] text-coral">
+        <div role="alert" className="rounded-lg bg-coral/10 px-3 py-2 text-[12.5px] text-ink">
           {state.error}
         </div>
       ) : null}
       {state && "ok" in state ? (
-        <div role="status" className="text-[12.5px] text-teal">
+        <div role="status" className="rounded-lg bg-teal/10 px-3 py-2 text-[12.5px] text-teal">
           {state.ok}
         </div>
       ) : null}
       <button
-        disabled={pending}
-        className="self-start rounded-lg bg-teal px-5 py-2 text-[13px] font-bold text-white disabled:opacity-60"
+        disabled={!canSubmit}
+        className="self-start rounded-lg bg-teal px-5 py-2 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
       >
         {pending ? "جارٍ التحديث…" : "تغيير كلمة المرور"}
       </button>

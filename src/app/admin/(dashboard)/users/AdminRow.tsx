@@ -8,19 +8,21 @@ import { createResetLink } from "../../user-actions";
 import { ROLE_LABEL, assignableRoles, canManageTarget } from "@/lib/roles";
 import { formatStampAr } from "@/lib/format";
 import { useShowIssuedLink } from "./LinkModal";
-import { StatusChip, cell, actionBtn } from "./ui";
+import { ProtectedChip, RoleChip, StatusChip, actionBtn, actionsCell, desktopCell, mainCell, row } from "./ui";
 
 type AdminUser = Tables<"profiles">;
 
 const field =
   "rounded-lg border border-gray/40 bg-white px-2 py-1.5 text-[12px] outline-none focus:border-teal";
 
+const GENERIC_ERROR = "حدث خطأ — حاول مرة أخرى.";
+
 /** Why a row has no actions (display only — the server stays authoritative). */
 function LockedLabel({ actorRole, isSelf, u }: { actorRole: string; isSelf: boolean; u: AdminUser }) {
-  if (u.role === "owner") return <span className="text-[11.5px] text-gray">محمي</span>; // always — even own row
+  if (u.role === "owner") return <ProtectedChip />; // always — even own row
   if (isSelf) {
     return (
-      <Link href="/admin/account" className="text-[11.5px] font-semibold text-teal hover:underline">
+      <Link href="/admin/account" className="text-[12px] font-semibold text-teal hover:underline">
         حسابي
       </Link>
     );
@@ -55,36 +57,62 @@ export function AdminRow({
   function issueReset() {
     setError("");
     start(async () => {
-      const res = await createResetLink(user.id);
-      if ("error" in res) setError(res.error);
-      else setIssued({ link: res.link, email: res.email, expiresAt: res.expiresAt, kind: res.kind });
+      try {
+        const res = await createResetLink(user.id);
+        if ("error" in res) setError(res.error);
+        else setIssued({ link: res.link, email: res.email, expiresAt: res.expiresAt, kind: res.kind });
+      } catch {
+        setError(GENERIC_ERROR);
+      }
     });
   }
 
+  const roleLabel = ROLE_LABEL[user.role] ?? user.role;
+  const status = user.disabled ? "suspended" : "active";
+  const lastLogin = user.last_login_at ? formatStampAr(user.last_login_at, false) : "لم يسجّل الدخول بعد";
+  const joined = formatStampAr(user.created_at, false);
+
   return (
-    <tr className={`border-t border-line align-top ${user.disabled ? "bg-sand/20" : ""}`}>
-      <td className={cell}>
-        <span className="font-bold text-ink">{user.full_name ?? "—"}</span>
-        {isSelf ? <span className="mr-1 font-sans text-[10px] text-gray">(أنت)</span> : null}
+    <tr className={`${row} ${user.disabled ? "bg-sand/20" : ""}`}>
+      <td className={mainCell}>
+        <div className="flex flex-wrap items-baseline gap-x-1.5">
+          <span className="text-[13.5px] font-bold text-ink">{user.full_name?.trim() || "—"}</span>
+          {isSelf ? <span className="font-sans text-[10.5px] text-gray">(أنت)</span> : null}
+        </div>
+        {/* Mobile: email + chips + meta stacked under the name. */}
+        <div dir="ltr" className="mt-0.5 break-all text-right font-sans text-[12px] text-gray md:hidden">
+          {user.email}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 md:hidden">
+          <RoleChip label={roleLabel} />
+          <StatusChip status={status} />
+        </div>
+        <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-0.5 font-sans text-[11px] text-gray md:hidden">
+          <span>آخر دخول: {lastLogin}</span>
+          <span>· انضم {joined}</span>
+          {invitedBy !== "—" ? <span>· بدعوة من {invitedBy}</span> : null}
+        </div>
       </td>
-      <td className={cell}>
-        <span dir="ltr" className="font-sans text-[12px] text-gray">
+      <td className={desktopCell}>
+        <span dir="ltr" className="break-all font-sans">
           {user.email}
         </span>
       </td>
-      <td className={cell}>
-        <span className="rounded bg-cream px-1.5 py-0.5 font-sans text-[10.5px] font-semibold text-teal">
-          {ROLE_LABEL[user.role] ?? user.role}
-        </span>
+      <td className={desktopCell}>
+        <RoleChip label={roleLabel} />
       </td>
-      <td className={cell}>
-        <StatusChip status={user.disabled ? "suspended" : "active"} />
+      <td className={desktopCell}>
+        <StatusChip status={status} />
       </td>
-      <td className={`${cell} whitespace-nowrap text-[12px] text-gray`}>
-        {formatStampAr(user.created_at, false)}
+      <td
+        className={`${desktopCell} whitespace-nowrap`}
+        title={user.last_login_at ? formatStampAr(user.last_login_at) : undefined}
+      >
+        {user.last_login_at ? lastLogin : <span className="text-gray/70">لم يدخل بعد</span>}
       </td>
-      <td className={`${cell} text-[12px] text-gray`}>{invitedBy}</td>
-      <td className={cell}>
+      <td className={`${desktopCell} whitespace-nowrap`}>{joined}</td>
+      <td className={desktopCell}>{invitedBy}</td>
+      <td className={actionsCell}>
         {canManageThis ? (
           <div className="flex flex-col items-start gap-1.5">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -94,13 +122,13 @@ export function AdminRow({
                   <select
                     name="role"
                     defaultValue={user.role}
-                    aria-label="الدور"
+                    aria-label={`دور ${user.full_name?.trim() || user.email}`}
                     className={field}
                   >
                     {/* Legacy/unknown current role: shown but not re-assignable. */}
                     {roleOptions.includes(user.role) ? null : (
                       <option value={user.role} disabled>
-                        {ROLE_LABEL[user.role] ?? user.role}
+                        {roleLabel}
                       </option>
                     )}
                     {roleOptions.map((r) => (
@@ -117,7 +145,7 @@ export function AdminRow({
                 <button className={actionBtn}>{user.disabled ? "إعادة تفعيل" : "إيقاف"}</button>
               </form>
               <button type="button" disabled={busy} onClick={issueReset} className={actionBtn}>
-                {busy ? "…" : "إرسال رابط إعادة تعيين"}
+                {busy ? "جارٍ الإنشاء…" : "رابط إعادة تعيين"}
               </button>
             </div>
             {error ? (

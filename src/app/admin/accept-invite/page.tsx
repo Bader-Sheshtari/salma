@@ -25,7 +25,9 @@ export default async function AcceptInvitePage({ searchParams }: Props) {
 
   return (
     <AuthCard wide>
-      <h1 className="mb-1 text-[18px] font-bold text-ink">قبول الدعوة</h1>
+      <h1 className="mb-1 text-[18px] font-bold text-ink">
+        {!link.ok || blocked ? "قبول الدعوة" : "إنشاء حسابك في سلمى"}
+      </h1>
       {!link.ok || blocked ? (
         <>
           <p className="mb-4 text-[13px] text-gray">لا يمكن استخدام هذا الرابط.</p>
@@ -45,14 +47,14 @@ export default async function AcceptInvitePage({ searchParams }: Props) {
           <p className="mb-4 text-[13px] leading-6 text-gray">
             أكمل بياناتك واختر كلمة مرور لتفعيل حسابك في لوحة إدارة سلمى.
           </p>
-          <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 rounded-xl bg-cream/60 p-3 text-[13px]">
-            <dt className="font-semibold text-gray">البريد</dt>
-            <dd dir="ltr" className="text-left font-sans text-ink">
+          <dl className="mb-5 grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2.5 rounded-xl border border-line bg-cream/50 p-3.5 text-[13px]">
+            <dt className="font-semibold text-gray">البريد الإلكتروني</dt>
+            <dd dir="ltr" className="min-w-0 break-all text-right font-sans text-ink">
               {link.email}
             </dd>
             <dt className="font-semibold text-gray">الدور</dt>
             <dd>
-              <span className="rounded bg-white px-1.5 py-0.5 font-sans text-[11px] font-semibold text-teal">
+              <span className="rounded bg-white px-2 py-0.5 font-sans text-[11.5px] font-semibold text-teal">
                 {ROLE_LABEL[link.role ?? ""] ?? link.role}
               </span>
             </dd>
