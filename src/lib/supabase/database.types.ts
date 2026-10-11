@@ -2137,6 +2137,27 @@ export type Database = {
         }
         Relationships: []
       }
+      search_queries: {
+        Row: {
+          created_at: string
+          id: number
+          query_norm: string
+          result_count: number
+        }
+        Insert: {
+          created_at?: string
+          id?: never
+          query_norm: string
+          result_count?: number
+        }
+        Update: {
+          created_at?: string
+          id?: never
+          query_norm?: string
+          result_count?: number
+        }
+        Relationships: []
+      }
       session_reauth: {
         Row: {
           session_id: string
@@ -2642,6 +2663,24 @@ export type Database = {
         Args: { p_session: string; p_user: string }
         Returns: undefined
       }
+      related_public_content: {
+        Args: { p_id: string; p_limit?: number }
+        Returns: {
+          category_slug: string
+          cover_image_url: string
+          excerpt: string
+          id: string
+          is_breaking: boolean
+          published_at: string
+          read_minutes: number
+          relevance: number
+          slug: string
+          title: string
+          type: string
+          video_duration: string
+          video_url: string
+        }[]
+      }
       reserve_ai_image: {
         Args: {
           p_max_images_global_24h: number
@@ -2702,6 +2741,26 @@ export type Database = {
           title: string
           type: string
           version: number
+        }[]
+      }
+      search_public_content: {
+        Args: { p_limit?: number; p_offset?: number; p_q: string }
+        Returns: {
+          ai_summary: string
+          category_name_ar: string
+          category_slug: string
+          cover_image_url: string
+          excerpt: string
+          id: string
+          published_at: string
+          rank: number
+          read_minutes: number
+          slug: string
+          source_name: string
+          title: string
+          total_count: number
+          type: string
+          video_url: string
         }[]
       }
     }

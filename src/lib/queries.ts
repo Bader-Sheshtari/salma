@@ -211,27 +211,94 @@ const CONTENT_TYPE_LABEL: Record<string, string> = {
   study: "دراسة",
 };
 
+export type PublicSearchPage = {
+  results: SearchResult[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+};
+
+const SEARCH_PAGE_SIZE = 20;
+
+/** Row shape of the search_public_content RPC (not in generated types yet). */
+type PublicSearchRow = {
+  id: string; type: string; title: string; slug: string;
+  excerpt: string | null; ai_summary: string | null;
+  category_slug: string | null; category_name_ar: string | null;
+  cover_image_url: string | null; video_url: string | null;
+  source_name: string | null; published_at: string | null;
+  read_minutes: number | null; rank: number; total_count: number;
+};
+
 /**
- * Internal, Arabic-aware search across everything published on Salma: content
- * (news/articles/studies/videos), doctor transfers, categories, and doctors.
- * The DB only fetches the (small) published corpus; normalization, typo-tolerant
- * fuzzy matching and cross-type ranking happen in JS via `scoreFields`, so the
- * search never leaves Salma and never touches the internet. Results are ranked
- * by relevance, then recency.
+ * Public search. CONTENT is searched in Postgres via the search_public_content
+ * RPC — the same ar_normalize/search_norm/body_tsv infrastructure as the admin
+ * search: relevance-ranked (title > excerpt > body > careful fuzzy), paginated,
+ * published-only (WHERE + anon RLS), and it never ships article bodies to the
+ * app. The tiny side corpora (transfers, categories, doctors — a handful of
+ * rows) keep the existing in-JS scoring and are merged into page 1 only.
  */
-export async function searchAll(query: string): Promise<SearchResult[]> {
+export async function searchPublic(query: string, page = 1): Promise<PublicSearchPage> {
   const q = query.trim();
-  if (q.length < 2) return [];
+  const p = Math.min(Math.max(Math.trunc(page) || 1, 1), 25);
+  if (q.length < 2) {
+    return { results: [], total: 0, page: 1, pageSize: SEARCH_PAGE_SIZE, hasMore: false };
+  }
   const supabase = await createClient();
 
-  const [contentRes, transfersRes, categoriesRes, doctorsRes, departmentsRes] = await Promise.all([
-    supabase
-      .from("content")
-      .select(
-        "id,type,title,slug,excerpt,ai_summary,body,category_slug,cover_image_url,video_url,source_name,published_at",
+  const rpc = (supabase as unknown as {
+    rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+  }).rpc("search_public_content", {
+    p_q: q,
+    p_limit: SEARCH_PAGE_SIZE,
+    p_offset: (p - 1) * SEARCH_PAGE_SIZE,
+  });
+  const [contentRes, extras] = await Promise.all([rpc, p === 1 ? searchExtras(q) : Promise.resolve([])]);
+
+  const rows = (Array.isArray(contentRes.data) ? contentRes.data : []) as PublicSearchRow[];
+  const contentTotal = rows.length > 0 ? Number(rows[0].total_count) : 0;
+
+  const contentResults: SearchResult[] = rows.map((c) => ({
+    id: c.id,
+    kind: "content",
+    typeLabel: CONTENT_TYPE_LABEL[c.type] ?? "محتوى",
+    title: c.title,
+    href: c.type === "video" ? `/video/${c.slug}` : `/article/${c.slug}`,
+    categoryName: c.category_name_ar,
+    image: c.cover_image_url || videoThumbnail(c.video_url),
+    summary: c.ai_summary || c.excerpt || null,
+    publishedAt: c.published_at,
+    source: c.source_name,
+    score: c.rank,
+  }));
+
+  // Page 1 merges the side corpora by score (both scales put a strong title/
+  // name hit well above weak matches); later pages are content-only.
+  const results = p === 1
+    ? [...contentResults, ...extras].sort(
+        (a, b) => b.score - a.score || (b.publishedAt ?? "").localeCompare(a.publishedAt ?? ""),
       )
-      .eq("status", "published")
-      .is("deleted_at", null),
+    : contentResults;
+
+  return {
+    results,
+    total: contentTotal + (p === 1 ? extras.length : 0),
+    page: p,
+    pageSize: SEARCH_PAGE_SIZE,
+    hasMore: (p - 1) * SEARCH_PAGE_SIZE + rows.length < contentTotal,
+  };
+}
+
+/**
+ * The non-content side of public search: doctor transfers, categories and
+ * doctors. These corpora are a handful of rows each, so the original in-JS
+ * Arabic scoring (scoreFields) remains the right tool — no engine duplication.
+ */
+async function searchExtras(q: string): Promise<SearchResult[]> {
+  const supabase = await createClient();
+
+  const [transfersRes, categoriesRes, doctorsRes, departmentsRes] = await Promise.all([
     supabase
       .from("doctor_transfers")
       .select(
@@ -249,12 +316,6 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
 
   type CatRow = { slug: string; name_ar: string; name_en: string | null };
   type DeptRow = { id: string; name_ar: string };
-  type ContentRow = {
-    id: string; type: string; title: string; slug: string;
-    excerpt: string | null; ai_summary: string | null; body: string | null;
-    category_slug: string | null; cover_image_url: string | null;
-    video_url: string | null; source_name: string | null; published_at: string | null;
-  };
   type TransferRow = {
     id: string; doctor_name: string; specialty: string | null;
     from_hospital: string | null; to_hospital: string | null;
@@ -267,37 +328,10 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
   };
 
   const categories = (categoriesRes.data as CatRow[]) ?? [];
-  const catName = new Map(categories.map((c) => [c.slug, c.name_ar]));
   const departments = (departmentsRes.data as DeptRow[]) ?? [];
   const deptName = new Map(departments.map((d) => [d.id, d.name_ar]));
 
   const results: SearchResult[] = [];
-
-  for (const c of (contentRes.data as ContentRow[]) ?? []) {
-    const category = c.category_slug ? catName.get(c.category_slug) ?? null : null;
-    const score = scoreFields(q, [
-      { text: c.title, weight: 3 },
-      { text: c.excerpt, weight: 1.5 },
-      { text: c.ai_summary, weight: 1.5 },
-      { text: category, weight: 1 },
-      { text: c.source_name, weight: 1 },
-      { text: c.body, weight: 0.5, fuzzy: false },
-    ]);
-    if (score <= 0) continue;
-    results.push({
-      id: c.id,
-      kind: "content",
-      typeLabel: CONTENT_TYPE_LABEL[c.type] ?? "محتوى",
-      title: c.title,
-      href: c.type === "video" ? `/video/${c.slug}` : `/article/${c.slug}`,
-      categoryName: category,
-      image: c.cover_image_url || videoThumbnail(c.video_url),
-      summary: c.ai_summary || c.excerpt || null,
-      publishedAt: c.published_at,
-      source: c.source_name,
-      score,
-    });
-  }
 
   for (const t of (transfersRes.data as TransferRow[]) ?? []) {
     const score = scoreFields(q, [
@@ -379,8 +413,25 @@ export async function searchAll(query: string): Promise<SearchResult[]> {
   return results.slice(0, 40);
 }
 
+/**
+ * Related articles ("اقرأ أيضاً"): relevance-based via the
+ * related_public_content RPC (trgm similarity on normalized title/excerpt +
+ * body full-text against the source title, with a qualification floor so the
+ * section is never padded with unrelated same-category items — 1–2 strong
+ * matches render as 1–2, zero strong matches hides the section). If the RPC
+ * itself errors (infra), fall back to the previous recent-in-category list so
+ * article pages always render.
+ */
 export async function getRelated(content: Content, limit = 4): Promise<Content[]> {
   const supabase = await createClient();
+  try {
+    const { data, error } = await (supabase as unknown as {
+      rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+    }).rpc("related_public_content", { p_id: content.id, p_limit: limit });
+    if (!error && Array.isArray(data)) return data as Content[];
+  } catch {
+    // fall through to the recency fallback below
+  }
   const { data } = await supabase
     .from("content")
     .select(CARD_FIELDS)
