@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans_Arabic, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import { SITE_URL, SITE_NAME } from "@/lib/site";
 import "./globals.css";
+import { NavTracker } from "@/components/site/NavTracker";
 
 const plexArabic = IBM_Plex_Sans_Arabic({
   variable: "--font-arabic",
@@ -66,7 +67,10 @@ export default function RootLayout({
       data-scroll-behavior="smooth"
       className={`${plexArabic.variable} ${plexSans.variable} ${plexMono.variable} antialiased`}
     >
-      <body>{children}</body>
+      <body>
+        <NavTracker />
+        {children}
+      </body>
     </html>
   );
 }

@@ -12,6 +12,7 @@ type Tier = "staff" | "admin" | "manager";
 
 const NAV: { href: string; label: string; tier: Tier }[] = [
   { href: "/admin", label: "لوحة التحكم", tier: "admin" },
+  { href: "/admin/analytics", label: "التحليلات", tier: "admin" },
   { href: "/admin/homepage", label: "الصفحة الرئيسية", tier: "admin" },
   { href: "/admin/content", label: "المحتوى", tier: "staff" },
   { href: "/admin/radar", label: "رادار الأخبار", tier: "admin" },

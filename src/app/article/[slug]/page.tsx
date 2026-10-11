@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { Header } from "@/components/site/Header";
 import { Footer } from "@/components/site/Footer";
 import { ArticleView } from "@/components/site/ArticleView";
+import { ReaderAnalytics } from "@/components/site/ReaderAnalytics";
 import { getContentBySlug, getCategories, getRelated } from "@/lib/queries";
 import { contentMetadata } from "@/lib/seo";
 
@@ -29,6 +30,9 @@ export default async function ArticlePage({ params }: Props) {
       <Header categories={categories} active={detail.content.category_slug ?? undefined} />
       <main>
         <ArticleView detail={detail} categories={categories} related={related} />
+        {/* Public pages only — the admin preview reuses ArticleView and must
+            never generate reader analytics. */}
+        <ReaderAnalytics contentId={detail.content.id} />
       </main>
       <Footer categories={categories} />
     </div>

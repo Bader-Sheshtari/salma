@@ -27,6 +27,7 @@ import ActivityTimeline from "../ActivityTimeline";
 import { ContentForm } from "../ContentForm";
 import RejectButton from "../RejectButton";
 import { EvidencePanel } from "../EvidencePanel";
+import { ArticleStatsPanel } from "../ArticleStatsPanel";
 import VersionView from "../VersionView";
 import VersionsPanel from "../VersionsPanel";
 import { requireStaff } from "@/lib/auth";
@@ -400,6 +401,9 @@ export default async function EditContent({ params, searchParams }: Props) {
           ) : null}
         </div>
       </div>
+
+      {/* Reader analytics strip (compact; staff-visible; published articles only). */}
+      <ArticleStatsPanel contentId={content.id} everPublished={content.first_published_at != null} />
 
       {/* Evidence Intelligence card (read-only, admin-only): what kind of
           evidence this story rests on and what it can/can't support. Rendered

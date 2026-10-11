@@ -2137,6 +2137,114 @@ export type Database = {
         }
         Relationships: []
       }
+      reader_daily_sources: {
+        Row: {
+          day: string
+          internal_source: string
+          source: string
+          views: number
+        }
+        Insert: {
+          day: string
+          internal_source?: string
+          source: string
+          views?: number
+        }
+        Update: {
+          day?: string
+          internal_source?: string
+          source?: string
+          views?: number
+        }
+        Relationships: []
+      }
+      reader_daily_stats: {
+        Row: {
+          completed: number
+          content_id: string
+          day: string
+          engaged: number
+          views: number
+        }
+        Insert: {
+          completed?: number
+          content_id: string
+          day: string
+          engaged?: number
+          views?: number
+        }
+        Update: {
+          completed?: number
+          content_id?: string
+          day?: string
+          engaged?: number
+          views?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reader_daily_stats_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reader_daily_stats_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
+        ]
+      }
+      reader_events: {
+        Row: {
+          content_id: string
+          created_at: string
+          event: string
+          id: number
+          internal_source: string | null
+          referrer_domain: string | null
+          session_key: string
+          source: string | null
+        }
+        Insert: {
+          content_id: string
+          created_at?: string
+          event: string
+          id?: never
+          internal_source?: string | null
+          referrer_domain?: string | null
+          session_key: string
+          source?: string | null
+        }
+        Update: {
+          content_id?: string
+          created_at?: string
+          event?: string
+          id?: never
+          internal_source?: string | null
+          referrer_domain?: string | null
+          session_key?: string
+          source?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reader_events_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reader_events_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
+        ]
+      }
       search_queries: {
         Row: {
           created_at: string
@@ -2659,6 +2767,8 @@ export type Database = {
         Args: { p_batch_limit?: number; p_max_batches?: number }
         Returns: Json
       }
+      reader_analytics_dashboard: { Args: { p_days?: number }; Returns: Json }
+      reader_article_stats: { Args: { p_content_id: string }; Returns: Json }
       record_reauth: {
         Args: { p_session: string; p_user: string }
         Returns: undefined
@@ -2706,6 +2816,7 @@ export type Database = {
         Args: { p_keep_session_id?: string; p_user_id: string }
         Returns: number
       }
+      rollup_reader_events: { Args: never; Returns: Json }
       run_esl: { Args: { p_mode?: string }; Returns: undefined }
       run_news_ingestion: { Args: never; Returns: undefined }
       run_radar_healthlife: { Args: never; Returns: undefined }
