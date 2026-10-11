@@ -34,6 +34,8 @@ export type RadarArticle = {
   title_ar: string | null;
   url: string | null;
   source_title: string | null;
+  // ESL canonical development key (groups same-story rows); null before ESL.
+  esl_canonical_key?: string | null;
   source_domain: string | null;
   language: string | null;
   country: string | null;

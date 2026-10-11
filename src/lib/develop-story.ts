@@ -97,7 +97,7 @@ export type DevelopmentJob = {
   phase: string | null;
   error_category: string | null;
   error_message: string | null;
-  research_brief: ResearchBrief | null;
+  research_brief: ResearchBrief | BriefV2 | null;
   brief_sources: BriefSource[] | null;
   result_content_id: string | null;
   needs_human_review: boolean | null;
@@ -109,4 +109,87 @@ export type DevelopmentJob = {
   updated_at: string;
   research_completed_at: string | null;
   draft_completed_at: string | null;
+  // V2 additions (null/undefined on V1 rows)
+  research_prompt_version?: string | null;
+  research_depth?: string | null;
+  cluster_key?: string | null;
+  thread_id?: string | null;
 };
+
+// ============================================================================
+// Develop Story V2 — admin-side additions
+// ============================================================================
+
+export const DEVELOP_PHASE_LABELS_V2: Record<string, string> = {
+  analyzing_context: "جاري مراجعة تغطية سلمى السابقة…",
+  searching_literature: "جاري البحث في الأدبيات العلمية…",
+  checking_trials: "جاري مراجعة سجل التجارب السريرية…",
+};
+
+export const EVIDENCE_CLASS_LABELS: Record<string, string> = {
+  primary_study: "دراسة محكّمة",
+  systematic_review: "مراجعة منهجية",
+  trial_registry: "سجل تجارب سريرية",
+  regulator: "جهة تنظيمية",
+  public_health_agency: "هيئة صحة عامة",
+  guideline_body: "جهة إرشادات طبية",
+  gcc_ministry: "وزارة/هيئة صحية خليجية",
+  institution: "مؤسسة طبية",
+  wire: "وكالة أنباء",
+  secondary_media: "مصدر إخباري",
+  company_pr: "بيان شركة",
+};
+
+export type BriefClaim = { statement: string; source_ids: string[] };
+
+export type BriefV2 = {
+  story_summary: string;
+  why_it_matters: string;
+  previously_known: BriefClaim[];
+  new_now: BriefClaim[];
+  changed: BriefClaim[];
+  timeline: { date: string; event: string; source_ids: string[]; confidence: string }[];
+  scientific_evidence: { summary: string; source_ids: string[]; study_type: string }[];
+  regulatory_evidence: { summary: string; source_ids: string[]; status_verbatim: string }[];
+  key_numbers: { value: string; context: string; source_ids: string[] }[];
+  conflicts: { topic: string; position_a: BriefClaim; position_b: BriefClaim }[];
+  unknown: string[];
+  unanswered_questions: string[];
+  evidence_gaps: string[];
+  suggested_angles: BriefAngle[];
+};
+
+export type DevelopmentEvidence = {
+  id: number;
+  kind: "web" | "pubmed" | "trial" | "regulator" | "salma_archive";
+  url: string | null;
+  title: string | null;
+  publisher: string | null;
+  published_date: string | null;
+  source_class: string | null;
+  tier: number | null;
+  is_primary: boolean;
+  doi: string | null;
+  pmid: string | null;
+  nct_id: string | null;
+  fetched: boolean;
+  confidence: string | null;
+};
+
+export const isBriefV2 = (b: unknown): b is BriefV2 =>
+  Boolean(b && typeof b === "object" && "new_now" in (b as Record<string, unknown>));
+
+/** Advisory chip: new article vs follow-up vs nothing new (never blocking). */
+export function adviceForBrief(brief: BriefV2, hasPrior: boolean): { key: string; label: string } {
+  if (brief.new_now.length === 0 && hasPrior) {
+    return { key: "nothing_new", label: "لا جديد جوهرياً مقارنة بتغطية سلمى السابقة" };
+  }
+  if (!hasPrior || brief.new_now.length >= 3 || brief.changed.length >= 2) {
+    return { key: "new_article", label: "تطور جوهري — يصلح لمادة جديدة" };
+  }
+  return { key: "follow_up", label: "الأنسب معالجته كمتابعة لتغطية سابقة" };
+}
+
+export type DevelopOrigin =
+  | { type: "article"; id: string }
+  | { type: "cluster"; key: string; title?: string | null };

@@ -640,6 +640,14 @@ export default function RadarInbox({
                         >
                           نشر مباشر
                         </button>
+                        {/* Develop Story V2: research the whole story (cluster
+                            reports = leads only) into an evidence-first brief. */}
+                        <Link
+                          href={`/admin/radar/develop/${encodeURIComponent(a.esl_canonical_key ?? a.id)}?t=${encodeURIComponent((a.title_ar ?? a.title ?? "").slice(0, 160))}`}
+                          className="rounded-lg bg-teal/10 px-3 py-1.5 text-[12px] font-bold text-teal hover:bg-teal/20"
+                        >
+                          طوّر القصة
+                        </Link>
                       </>
                     )}
                   </div>

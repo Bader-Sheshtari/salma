@@ -41,7 +41,7 @@ export default async function DevelopStoryPage({ params }: Props) {
   if (!content || content.deleted_at) notFound();
 
   const developable = ["published", "pending", "unpublished"].includes(content.status);
-  const initial = await getDevelopmentState(id);
+  const initial = await getDevelopmentState({ type: "article", id });
 
   const { data: categoryData } = content.category_slug
     ? await supabase.from("categories").select("name_ar").eq("slug", content.category_slug).maybeSingle()
@@ -87,7 +87,7 @@ export default async function DevelopStoryPage({ params }: Props) {
 
       {developable ? (
         <DevelopFlow
-          contentId={id}
+          origin={{ type: "article", id }}
           initialJob={initial.job}
           initialHistory={initial.history}
           initialResultTitle={initial.resultTitle}

@@ -306,6 +306,8 @@ export function buildDevelopmentInstructions(input: {
     "- ميّز بوضوح بين ما هو مؤكد وما هو غير معروف بعد؛ لا تحوّل الغموض إلى يقين، ولا تُسقط فقرة «ما لا نعرفه» إذا كانت هناك فجوات حقيقية.",
     "- لا تُحوّل الارتباط إلى سببية، ولا تضخّم قوة الدليل، ولا تقدّم نصيحة طبية تتجاوز ما قالته الجهات المذكورة في المصادر.",
     "- «التوجيه التحريري غير المُتحقَّق منه» المرفق في الرسالة (موجز البحث) يحدد الزوايا والأسئلة فقط — لا تنقل منه أي رقم أو ادعاء غير موجود في الحقائق المُتحقَّق منها.",
+    "- إذا أشار موجز البحث إلى تعارض بين مصادر موثوقة فاعرضه كخلاف صريح بين الموقفين — لا ترجّح أحدهما كحقيقة مؤكدة ولا تمحُ الخلاف.",
+    "- حالة أي تجربة سريرية تُنقل كما وردت في السجل حرفياً (قيد التجنيد، مكتملة، متوقفة…) — لا تستنتج نجاحاً أو فشلاً من حالة التسجيل.",
   ]
     .filter((l) => l !== "")
     .join("\n");
@@ -332,3 +334,260 @@ export function renderBriefOrientation(brief: ResearchBrief): string {
  *  editor's factual re-validation and fidelity rules stay fully in force. */
 export const DEVELOP_EDITOR_OVERLAY =
   "تنبيه خاص بمهمة «ما بعد الخبر»: هذه مادة تحريرية معمّقة مقصودة بطول ٤٥٠–٨٠٠ كلمة، وليست خبراً قصيراً — لا تختصرها إلى نطاق كلمات النمط الإخباري، ولا تحذف أقسام التحليل أو السياق أو «ما لا نعرفه». ركّز تحريرك على الدقة والأسلوب والأمانة فقط، واحذف الحشو والتكرار دون تقليص العمق.";
+
+// ============================================================================
+// DEVELOP STORY V2 — Research Brief ds2
+// ============================================================================
+
+export const BRIEF_V2_PROMPT_VERSION = "ds2" as const;
+
+/** One evidence item as presented to the synthesis model ([S<id>] tags). */
+export type EvidenceCatalogItem = {
+  id: number;                 // development_evidence.id
+  kind: "web" | "pubmed" | "trial" | "regulator" | "salma_archive";
+  source_class: string | null;
+  class_label_ar: string;
+  title: string | null;
+  publisher: string | null;
+  published_date: string | null;
+  url: string | null;
+  doi: string | null;
+  pmid: string | null;
+  nct_id: string | null;
+  fetched: boolean;
+  excerpt: string | null;     // bounded text/abstract/structured summary
+};
+
+export type BriefV2 = {
+  story_summary: string;
+  why_it_matters: string;
+  previously_known: { statement: string; source_ids: string[] }[];
+  new_now: { statement: string; source_ids: string[] }[];
+  changed: { statement: string; source_ids: string[] }[];
+  timeline: { date: string; event: string; source_ids: string[]; confidence: "high" | "medium" | "low" }[];
+  scientific_evidence: { summary: string; source_ids: string[]; study_type: string }[];
+  regulatory_evidence: { summary: string; source_ids: string[]; status_verbatim: string }[];
+  key_numbers: { value: string; context: string; source_ids: string[] }[];
+  conflicts: {
+    topic: string;
+    position_a: { statement: string; source_ids: string[] };
+    position_b: { statement: string; source_ids: string[] };
+  }[];
+  unknown: string[];
+  unanswered_questions: string[];
+  evidence_gaps: string[];
+  suggested_angles: BriefAngle[];
+};
+
+// NOTE on structured output: Anthropic (via OpenRouter) rejects a strict
+// json_schema of ds2's size outright — "the compiled grammar is too large" —
+// at ANY strictness setting. The ds2 call therefore sends NO response_format:
+// the JSON contract below is embedded in the system prompt, and
+// parseBriefV2Output is the real gate (fence-stripping, bounded fields,
+// fail-closed on malformed output, and every source id filtered against the
+// [S#] ids actually handed to the model — an invented citation can never
+// reach the editor or the draft).
+export const BRIEF_V2_JSON_CONTRACT = [
+  "عقد الإخراج الإلزامي: أعد كائن JSON واحداً صالحاً فقط، دون أي نص قبله أو بعده، بهذه المفاتيح جميعها:",
+  '{"story_summary": نص, "why_it_matters": نص,',
+  ' "previously_known": [{"statement": نص, "source_ids": ["S#"...]}],',
+  ' "new_now": [...نفس الشكل], "changed": [...نفس الشكل],',
+  ' "timeline": [{"date": "كما ورد", "event": نص, "source_ids": [...], "confidence": "high"|"medium"|"low"}],',
+  ' "scientific_evidence": [{"summary": نص, "source_ids": [...], "study_type": نص}],',
+  ' "regulatory_evidence": [{"summary": نص, "source_ids": [...], "status_verbatim": نص}],',
+  ' "key_numbers": [{"value": نص, "context": نص, "source_ids": [...]}],',
+  ' "conflicts": [{"topic": نص, "position_a": {"statement": نص, "source_ids": [...]}, "position_b": {...}}],',
+  ' "unknown": [نص...], "unanswered_questions": [نص...], "evidence_gaps": [نص...],',
+  ' "suggested_angles": [{"direction": "deeper_explainer"|"behind_the_news"|"evidence_analysis"|"context_background"|"reader_impact"|"follow_up", "title": نص, "rationale": نص, "recommended": true|false}]} — اقترح ٢–٤ زوايا دائماً وحدد واحدة recommended=true.',
+  "القيم النصية كلها نصوص؛ المصفوفات قد تكون فارغة؛ لا تضف مفاتيح أخرى.",
+].join("\n");
+
+function renderCatalogItem(e: EvidenceCatalogItem): string {
+  const bits = [
+    `[S${e.id}]`,
+    e.class_label_ar,
+    e.title ? `«${e.title}»` : "",
+    e.publisher ?? "",
+    e.published_date ?? "",
+    e.doi ? `DOI:${e.doi}` : "",
+    e.pmid ? `PMID:${e.pmid}` : "",
+    e.nct_id ? e.nct_id : "",
+    e.url ?? "",
+    e.fetched ? "" : "(لم يُجلب النص الكامل — بيانات وصفية فقط)",
+  ].filter(Boolean).join(" | ");
+  return e.excerpt ? `${bits}\nمقتطف: ${e.excerpt}` : bits;
+}
+
+export function buildBriefV2Messages(input: {
+  originLabel: string; // «مقال سلمى المنشور …» or «قصة من رادار سلمى: …»
+  originBody: string;  // article text or cluster lead titles
+  externalEvidence: EvidenceCatalogItem[];
+  archiveEvidence: EvidenceCatalogItem[]; // prior Salma coverage (INTERNAL CONTEXT)
+  gaps: string[];      // deterministic lookup gaps (e.g. pubmed unavailable)
+  requestedDirection: DevelopmentDirection;
+  editorNote: string | null;
+}): { role: string; content: string }[] {
+  const dirLabel = input.requestedDirection === "auto"
+    ? "لم يحدد المحرر اتجاهاً — اقترح الاتجاه الأنسب"
+    : DIRECTIONS[input.requestedDirection as Exclude<DevelopmentDirection, "auto">].label;
+
+  const system = [
+    `أنت باحث تحريري في منصة «سلمى» الصحية. أعدّ «موجز بحث» تحريرياً معمّقاً من الأدلة المرفقة حصراً. (إصدار التعليمات: ${BRIEF_V2_PROMPT_VERSION})`,
+    "",
+    "قواعد صارمة غير قابلة للتجاوز:",
+    "- كل بند يحمل source_ids يجب أن يستشهد فقط بمعرّفات [S#] المرفقة أدناه، ولا تذكر أي معلومة خارج هذه المواد.",
+    "- «أرشيف سلمى الداخلي» سياق داخلي فقط: يجوز الاستشهاد به في previously_known وفي بنود الخط الزمني التاريخية والخلفية — ولا يجوز أبداً أن يكون مصدراً لبند في new_now أو scientific_evidence أو regulatory_evidence أو key_numbers.",
+    "- new_now = ما هو جديد فعلاً مقارنة بالتغطية السابقة؛ previously_known = ما كان معروفاً؛ changed = ما تغيّر تحديداً (رقم، حالة، توجيه).",
+    "- الخط الزمني: فقط أحداث لها تاريخ وارد صراحة في المواد — لا تخترع ولا تقدّر تواريخ. التاريخ كما ورد.",
+    "- حالة التجارب السريرية تُنسخ حرفياً في status_verbatim — لا تستنتج نجاحاً أو فشلاً أو فعالية من حالة السجل.",
+    "- إذا تعارضت مصادر موثوقة في نقطة جوهرية (أرقام فعالية، انتشار، إطار تنظيمي مقابل إعلان شركة، خلاف دراسات) فضعها في conflicts بموقفيها ومصادر كل موقف — لا تُرجّح ولا تدمج.",
+    "- الأرقام تُنسخ كما وردت حرفياً مع سياقها ومصدرها.",
+    "- ما لم تؤكده المواد يبقى في unknown أو unanswered_questions — لا تحوّل الغموض إلى يقين، وإذا كانت الأدلة ضعيفة قل ذلك صراحة في evidence_gaps.",
+    "- لا نصائح طبية ولا تشخيص. العربية الواضحة المختصرة في كل الحقول.",
+    "- اقترح حتى ٤ زوايا واقعية من الاتجاهات المسموحة وحدد واحدة recommended=true.",
+    "",
+    BRIEF_V2_JSON_CONTRACT,
+  ].join("\n");
+
+  const lines: string[] = [
+    `اتجاه التطوير الذي طلبه المحرر: ${dirLabel}`,
+    input.editorNote ? `ملاحظة المحرر: ${input.editorNote}` : "",
+    "",
+    `— ${input.originLabel} —`,
+    input.originBody,
+  ];
+  if (input.externalEvidence.length > 0) {
+    lines.push("", "— الأدلة الخارجية (المادة الوحيدة المسموح الاستشهاد بها للوقائع الجديدة والعلمية والتنظيمية) —");
+    for (const e of input.externalEvidence) lines.push("", renderCatalogItem(e));
+  }
+  if (input.archiveEvidence.length > 0) {
+    lines.push("", "— أرشيف سلمى الداخلي (تغطية سابقة؛ سياق داخلي فقط — انظر القواعد) —");
+    for (const e of input.archiveEvidence) lines.push("", renderCatalogItem(e));
+  }
+  if (input.gaps.length > 0) {
+    lines.push("", "— فجوات بحث يجب ذكرها كما هي في evidence_gaps —", ...input.gaps.map((g) => `- ${g}`));
+  }
+  return [
+    { role: "system", content: system },
+    { role: "user", content: lines.filter((l) => l !== "").join("\n") },
+  ];
+}
+
+const capIds = (v: unknown, valid: Set<string>): string[] =>
+  (Array.isArray(v) ? v : []).map((x) => String(x)).filter((x) => valid.has(x)).slice(0, 6);
+
+export function parseBriefV2Output(
+  raw: string,
+  validIds: string[],
+): { ok: true; brief: BriefV2 } | { ok: false; error: string } {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+  } catch {
+    return { ok: false, error: "brief_output_invalid_json" };
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { ok: false, error: "brief_output_not_object" };
+  }
+  const o = data as Record<string, unknown>;
+  const valid = new Set(validIds);
+  const capS = (v: unknown, n: number) => String(v ?? "").trim().slice(0, n);
+  const claims = (v: unknown, n: number) =>
+    (Array.isArray(v) ? v : []).map((x) => {
+      const r = (x ?? {}) as Record<string, unknown>;
+      return { statement: capS(r.statement, 400), source_ids: capIds(r.source_ids, valid) };
+    }).filter((r) => r.statement).slice(0, n);
+  const strList = (v: unknown, n: number, len: number) =>
+    (Array.isArray(v) ? v : []).map((x) => capS(x, len)).filter(Boolean).slice(0, n);
+
+  const angles: BriefAngle[] = (Array.isArray(o.suggested_angles) ? o.suggested_angles : [])
+    .map((a) => {
+      const x = (a ?? {}) as Record<string, unknown>;
+      const direction = String(x.direction ?? "");
+      if (!(direction in DIRECTIONS)) return null;
+      const title = capS(x.title, 160);
+      if (!title) return null;
+      return { direction: direction as BriefAngle["direction"], title, rationale: capS(x.rationale, 400), recommended: x.recommended === true };
+    })
+    .filter((a): a is BriefAngle => a !== null)
+    .slice(0, 4);
+
+  const brief: BriefV2 = {
+    story_summary: capS(o.story_summary, 1500),
+    why_it_matters: capS(o.why_it_matters, 1000),
+    previously_known: claims(o.previously_known, 8),
+    new_now: claims(o.new_now, 8),
+    changed: claims(o.changed, 6),
+    timeline: (Array.isArray(o.timeline) ? o.timeline : []).map((t) => {
+      const r = (t ?? {}) as Record<string, unknown>;
+      const conf = String(r.confidence ?? "medium");
+      return {
+        date: capS(r.date, 40),
+        event: capS(r.event, 240),
+        source_ids: capIds(r.source_ids, valid),
+        confidence: (["high", "medium", "low"].includes(conf) ? conf : "medium") as "high" | "medium" | "low",
+      };
+    }).filter((t) => t.date && t.event).slice(0, 10),
+    scientific_evidence: (Array.isArray(o.scientific_evidence) ? o.scientific_evidence : []).map((t) => {
+      const r = (t ?? {}) as Record<string, unknown>;
+      return { summary: capS(r.summary, 500), source_ids: capIds(r.source_ids, valid), study_type: capS(r.study_type, 60) };
+    }).filter((t) => t.summary).slice(0, 6),
+    regulatory_evidence: (Array.isArray(o.regulatory_evidence) ? o.regulatory_evidence : []).map((t) => {
+      const r = (t ?? {}) as Record<string, unknown>;
+      return { summary: capS(r.summary, 500), source_ids: capIds(r.source_ids, valid), status_verbatim: capS(r.status_verbatim, 120) };
+    }).filter((t) => t.summary).slice(0, 6),
+    key_numbers: (Array.isArray(o.key_numbers) ? o.key_numbers : []).map((t) => {
+      const r = (t ?? {}) as Record<string, unknown>;
+      return { value: capS(r.value, 80), context: capS(r.context, 240), source_ids: capIds(r.source_ids, valid) };
+    }).filter((t) => t.value).slice(0, 10),
+    conflicts: (Array.isArray(o.conflicts) ? o.conflicts : []).map((t) => {
+      const r = (t ?? {}) as Record<string, unknown>;
+      const pa = (r.position_a ?? {}) as Record<string, unknown>;
+      const pb = (r.position_b ?? {}) as Record<string, unknown>;
+      return {
+        topic: capS(r.topic, 200),
+        position_a: { statement: capS(pa.statement, 400), source_ids: capIds(pa.source_ids, valid) },
+        position_b: { statement: capS(pb.statement, 400), source_ids: capIds(pb.source_ids, valid) },
+      };
+    }).filter((t) => t.topic && t.position_a.statement && t.position_b.statement).slice(0, 4),
+    unknown: strList(o.unknown, 8, 300),
+    unanswered_questions: strList(o.unanswered_questions, 6, 300),
+    evidence_gaps: strList(o.evidence_gaps, 6, 300),
+    suggested_angles: angles,
+  };
+  if (!brief.story_summary) return { ok: false, error: "brief_missing_summary" };
+  return { ok: true, brief };
+}
+
+/** Fenced orientation for the writer packet (unverified-leads slot), V2. */
+export function renderBriefV2Orientation(brief: BriefV2): string {
+  const sec = (t: string, items: string[]) => (items.length ? [`${t}:`, ...items.map((i) => `- ${i}`)] : []);
+  return [
+    `ملخص القصة: ${brief.story_summary}`,
+    brief.why_it_matters ? `لماذا يهم: ${brief.why_it_matters}` : "",
+    ...sec("ما كان معروفاً سابقاً", brief.previously_known.map((c) => c.statement)),
+    ...sec("الجديد الآن", brief.new_now.map((c) => c.statement)),
+    ...sec("ما الذي تغيّر", brief.changed.map((c) => c.statement)),
+    ...sec(
+      "تعارض بين مصادر موثوقة (يُعرض كخلاف صريح، لا يُحسم)",
+      brief.conflicts.map((c) => `${c.topic}: (أ) ${c.position_a.statement} / (ب) ${c.position_b.statement}`),
+    ),
+    ...sec("ما لا نعرفه", brief.unknown),
+    ...sec("فجوات الأدلة", brief.evidence_gaps),
+  ].filter((l) => l !== "").join("\n");
+}
+
+/** Advisory only (never blocking): is this a new article, a follow-up, or
+ *  nothing materially new? Deterministic from the brief itself. */
+export function newVsUpdateAdvice(brief: BriefV2, hasPriorCoverage: boolean): {
+  key: "new_article" | "follow_up" | "nothing_new";
+  label: string;
+} {
+  if (brief.new_now.length === 0 && hasPriorCoverage) {
+    return { key: "nothing_new", label: "لا جديد جوهرياً مقارنة بتغطية سلمى السابقة" };
+  }
+  if (!hasPriorCoverage || brief.new_now.length >= 3 || brief.changed.length >= 2) {
+    return { key: "new_article", label: "تطور جوهري — يصلح لمادة جديدة" };
+  }
+  return { key: "follow_up", label: "الأنسب معالجته كمتابعة لتغطية سابقة" };
+}

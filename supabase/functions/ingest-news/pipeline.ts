@@ -211,7 +211,7 @@ export async function chatWeb(
 export async function chatWriter(
   model: string,
   messages: { role: string; content: string }[],
-  opts: { maxTokens?: number; usage?: LlmUsage } = {},
+  opts: { maxTokens?: number; usage?: LlmUsage; reasoning?: unknown } = {},
 ): Promise<WriterHttpResult> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY");
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
@@ -224,7 +224,14 @@ export async function chatWriter(
         "HTTP-Referer": "https://salma.health",
         "X-Title": "Salma",
       },
-      body: JSON.stringify({ model, messages, temperature: 0.2, max_tokens: opts.maxTokens ?? 2000 }),
+      body: JSON.stringify({
+        model, messages, temperature: 0.2, max_tokens: opts.maxTokens ?? 2000,
+        // Reasoning-capable models (claude via OpenRouter) default reasoning ON
+        // and can flood the completion budget, leaving null/invalid content on
+        // long writing tasks. Callers that pin such a model pass
+        // { enabled: false }; non-reasoning models ignore the field.
+        ...(opts.reasoning !== undefined ? { reasoning: opts.reasoning } : {}),
+      }),
       signal: AbortSignal.timeout(45000),
     });
     if (!res.ok) return { ok: false, httpStatus: res.status };
@@ -671,6 +678,8 @@ export async function writeArticle(input: {
   config?: WriterModelConfig;
   // Larger completion budget for longer explainers (default 2000).
   writerMaxTokens?: number;
+  // Reasoning control forwarded to chatWriter (see note there).
+  writerReasoning?: unknown;
   // Extra system instructions APPENDED to the Editorial Director's prompt
   // (develop-story only: depth-preservation note). Never replaces the base
   // editor contract; factual re-validation is untouched.
@@ -807,7 +816,7 @@ export async function writeArticle(input: {
       chatWriter(
         model,
         opts?.strictJsonRecovery ? [...messages, WRITER_JSON_RECOVERY_MESSAGE] : messages,
-        { maxTokens: input.writerMaxTokens, usage: input.usage },
+        { maxTokens: input.writerMaxTokens, usage: input.usage, reasoning: input.writerReasoning },
       ),
     validate,
   });
@@ -1029,7 +1038,7 @@ async function fetchOutboundLinks(url: string): Promise<string[]> {
 
 // Escalation search runs on a capable, plugin-supporting model (NOT the free
 // discovery default, which may not execute the web plugin). Overridable.
-const ESCALATION_MODEL = Deno.env.get("ESL_ESCALATION_MODEL") || "openai/gpt-4o-mini";
+export const ESCALATION_MODEL = Deno.env.get("ESL_ESCALATION_MODEL") || "openai/gpt-4o-mini";
 
 /** ONE bounded web search for the development → citations (url + title). */
 async function escalationWebSearch(query: string): Promise<{ url: string; title: string }[]> {

@@ -4,22 +4,25 @@ import { revalidatePath } from "next/cache";
 import { requireStaff } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { DevelopmentDirection, DevelopmentJob } from "@/lib/develop-story";
+import type {
+  DevelopmentDirection,
+  DevelopmentEvidence,
+  DevelopmentJob,
+  DevelopOrigin,
+} from "@/lib/develop-story";
 
 /**
- * After the News / Develop Story — server actions.
+ * After the News / Develop Story — server actions (V2: article OR Radar
+ * cluster origins, adaptive depth with an optional deep override, evidence
+ * provenance reads).
  *
- * Staff-level (editor and above): Develop Story is a content-authority
- * feature, mirroring the content actions, NOT the admin-only synthesize path.
- * All writes happen inside the develop-story edge function (service role,
- * after its own staff check); it owns every terminal state write, so a
- * terminated server action can never orphan a job — the UI polls
- * getDevelopmentState and reads whatever the function wrote.
+ * Staff-level (editor and above). All writes happen inside the develop-story
+ * edge function (service role, after its own staff check); it owns every
+ * terminal state write, so a terminated server action can never orphan a job
+ * — the UI polls getDevelopmentState and reads whatever the function wrote.
  */
 
 const GENERIC = "تعذّر تنفيذ العملية — حاول مرة أخرى.";
-// A researching/drafting row untouched this long is a dead run (matches the
-// edge function's own healing threshold).
 const STALE_RUN_MS = 12 * 60 * 1000;
 
 type ActionResult = { ok: true; jobId: string | null; status?: string } | { error: string };
@@ -44,17 +47,18 @@ async function invokeDevelop(body: Record<string, unknown>): Promise<Record<stri
 }
 
 export async function startDevelopment(
-  contentId: string,
+  origin: DevelopOrigin,
   direction: DevelopmentDirection,
   editorNote: string,
+  deepOverride = false,
 ): Promise<ActionResult> {
   await requireStaff();
-  if (!contentId) return { error: GENERIC };
   const data = await invokeDevelop({
     op: "start",
-    content_id: contentId,
+    ...(origin.type === "article" ? { content_id: origin.id } : { cluster_key: origin.key }),
     direction,
     editor_note: editorNote.trim().slice(0, 500),
+    ...(deepOverride ? { depth: "deep" } : {}),
   });
   if (!data) return { ok: true, jobId: null }; // keep polling — the function owns the state
   if (data.ok === false) return { error: GENERIC };
@@ -75,7 +79,7 @@ export async function createDevelopedDraft(
     editor_note: editorNote.trim().slice(0, 500),
   });
   revalidatePath("/admin/content");
-  if (!data) return { ok: true, jobId }; // polling resolves the outcome
+  if (!data) return { ok: true, jobId };
   if (data.ok === false && !data.status) return { error: GENERIC };
   return { ok: true, jobId, status: data.status as string };
 }
@@ -87,12 +91,15 @@ export async function cancelDevelopment(jobId: string): Promise<ActionResult> {
   return { ok: true, jobId };
 }
 
+const JOB_COLUMNS =
+  "id,original_content_id,cluster_key,requested_by,direction,draft_direction,editor_note,status,phase,error_category,error_message,research_brief,brief_sources,result_content_id,needs_human_review,editor_verdict,validation_warnings,cost,total_tokens,created_at,updated_at,research_completed_at,draft_completed_at,research_prompt_version,research_depth,thread_id";
+
 /**
- * Poll the latest development state for an article. Reads through RLS (staff
- * select policy); heals stale running rows first via the service client so a
- * dead run fails visibly instead of spinning forever.
+ * Poll the latest development state for an origin (article or cluster).
+ * Reads through RLS (staff select policy); heals stale running rows first via
+ * the service client so a dead run fails visibly instead of spinning forever.
  */
-export async function getDevelopmentState(contentId: string): Promise<{
+export async function getDevelopmentState(origin: DevelopOrigin): Promise<{
   job: DevelopmentJob | null;
   history: DevelopmentJob[];
   resultTitle: string | null;
@@ -100,25 +107,29 @@ export async function getDevelopmentState(contentId: string): Promise<{
   await requireStaff();
   const stale = new Date(Date.now() - STALE_RUN_MS).toISOString();
   try {
-    await createAdminClient()
+    type Chain = { eq: (c: string, v: string) => Chain } & PromiseLike<unknown>;
+    const heal = createAdminClient()
       .from("story_developments")
       .update({ status: "failed", phase: null, error_category: "timeout", error_message: "stale run healed" })
-      .eq("original_content_id", contentId)
       .in("status", ["researching", "drafting"])
-      .lt("updated_at", stale);
+      .lt("updated_at", stale) as unknown as Chain;
+    await (origin.type === "article"
+      ? heal.eq("original_content_id", origin.id)
+      : heal.eq("cluster_key", origin.key));
   } catch {
     // healing is best-effort
   }
 
   const supabase = await createClient();
-  const { data } = await supabase
+  type SelChain = { eq: (c: string, v: string) => PromiseLike<{ data: unknown }> };
+  const q = supabase
     .from("story_developments")
-    .select(
-      "id,original_content_id,requested_by,direction,draft_direction,editor_note,status,phase,error_category,error_message,research_brief,brief_sources,result_content_id,needs_human_review,editor_verdict,validation_warnings,cost,total_tokens,created_at,updated_at,research_completed_at,draft_completed_at",
-    )
-    .eq("original_content_id", contentId)
+    .select(JOB_COLUMNS)
     .order("created_at", { ascending: false })
-    .limit(10);
+    .limit(10) as unknown as SelChain;
+  const { data } = await (origin.type === "article"
+    ? q.eq("original_content_id", origin.id)
+    : q.eq("cluster_key", origin.key));
   const jobs = (data ?? []) as unknown as DevelopmentJob[];
   const job = jobs[0] ?? null;
 
@@ -132,4 +143,17 @@ export async function getDevelopmentState(contentId: string): Promise<{
     resultTitle = (result as { title: string } | null)?.title ?? null;
   }
   return { job, history: jobs.slice(1), resultTitle };
+}
+
+/** The persisted evidence items for a job (RLS: staff read). */
+export async function getDevelopmentEvidence(jobId: string): Promise<DevelopmentEvidence[]> {
+  await requireStaff();
+  if (!jobId) return [];
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("development_evidence")
+    .select("id,kind,url,title,publisher,published_date,source_class,tier,is_primary,doi,pmid,nct_id,fetched,confidence")
+    .eq("development_id", jobId)
+    .order("id");
+  return (data ?? []) as unknown as DevelopmentEvidence[];
 }

@@ -733,6 +733,80 @@ export type Database = {
         }
         Relationships: []
       }
+      development_evidence: {
+        Row: {
+          confidence: string | null
+          created_at: string
+          development_id: string
+          doi: string | null
+          excerpt: string | null
+          fetch_status: string | null
+          fetched: boolean
+          id: number
+          is_primary: boolean
+          kind: string
+          meta: Json | null
+          nct_id: string | null
+          pmid: string | null
+          published_date: string | null
+          publisher: string | null
+          source_class: string | null
+          tier: number | null
+          title: string | null
+          url: string | null
+        }
+        Insert: {
+          confidence?: string | null
+          created_at?: string
+          development_id: string
+          doi?: string | null
+          excerpt?: string | null
+          fetch_status?: string | null
+          fetched?: boolean
+          id?: never
+          is_primary?: boolean
+          kind: string
+          meta?: Json | null
+          nct_id?: string | null
+          pmid?: string | null
+          published_date?: string | null
+          publisher?: string | null
+          source_class?: string | null
+          tier?: number | null
+          title?: string | null
+          url?: string | null
+        }
+        Update: {
+          confidence?: string | null
+          created_at?: string
+          development_id?: string
+          doi?: string | null
+          excerpt?: string | null
+          fetch_status?: string | null
+          fetched?: boolean
+          id?: never
+          is_primary?: boolean
+          kind?: string
+          meta?: Json | null
+          nct_id?: string | null
+          pmid?: string | null
+          published_date?: string | null
+          publisher?: string | null
+          source_class?: string | null
+          tier?: number | null
+          title?: string | null
+          url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "development_evidence_development_id_fkey"
+            columns: ["development_id"]
+            isOneToOne: false
+            referencedRelation: "story_developments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       doctor_ratings: {
         Row: {
           author_name: string
@@ -1066,6 +1140,27 @@ export type Database = {
           regions?: string[]
           trusted_sources?: string[]
           updated_at?: string
+        }
+        Relationships: []
+      }
+      external_lookup_cache: {
+        Row: {
+          fetched_at: string
+          payload: Json
+          provider: string
+          query_hash: string
+        }
+        Insert: {
+          fetched_at?: string
+          payload: Json
+          provider: string
+          query_hash: string
+        }
+        Update: {
+          fetched_at?: string
+          payload?: Json
+          provider?: string
+          query_hash?: string
         }
         Relationships: []
       }
@@ -2376,6 +2471,7 @@ export type Database = {
       story_developments: {
         Row: {
           brief_sources: Json | null
+          cluster_key: string | null
           completion_tokens: number
           cost: number
           created_at: string
@@ -2397,17 +2493,19 @@ export type Database = {
           id: string
           needs_human_review: boolean | null
           openrouter_calls: number
-          original_content_id: string
+          original_content_id: string | null
           phase: string | null
           prompt_tokens: number
           requested_by: string | null
           research_brief: Json | null
           research_completed_at: string | null
+          research_depth: string
           research_duration_ms: number | null
           research_model: string | null
           research_prompt_version: string | null
           result_content_id: string | null
           status: string
+          thread_id: string | null
           total_tokens: number
           updated_at: string
           validation_warnings: Json | null
@@ -2417,6 +2515,7 @@ export type Database = {
         }
         Insert: {
           brief_sources?: Json | null
+          cluster_key?: string | null
           completion_tokens?: number
           cost?: number
           created_at?: string
@@ -2438,17 +2537,19 @@ export type Database = {
           id?: string
           needs_human_review?: boolean | null
           openrouter_calls?: number
-          original_content_id: string
+          original_content_id?: string | null
           phase?: string | null
           prompt_tokens?: number
           requested_by?: string | null
           research_brief?: Json | null
           research_completed_at?: string | null
+          research_depth?: string
           research_duration_ms?: number | null
           research_model?: string | null
           research_prompt_version?: string | null
           result_content_id?: string | null
           status?: string
+          thread_id?: string | null
           total_tokens?: number
           updated_at?: string
           validation_warnings?: Json | null
@@ -2458,6 +2559,7 @@ export type Database = {
         }
         Update: {
           brief_sources?: Json | null
+          cluster_key?: string | null
           completion_tokens?: number
           cost?: number
           created_at?: string
@@ -2479,17 +2581,19 @@ export type Database = {
           id?: string
           needs_human_review?: boolean | null
           openrouter_calls?: number
-          original_content_id?: string
+          original_content_id?: string | null
           phase?: string | null
           prompt_tokens?: number
           requested_by?: string | null
           research_brief?: Json | null
           research_completed_at?: string | null
+          research_depth?: string
           research_duration_ms?: number | null
           research_model?: string | null
           research_prompt_version?: string | null
           result_content_id?: string | null
           status?: string
+          thread_id?: string | null
           total_tokens?: number
           updated_at?: string
           validation_warnings?: Json | null
@@ -2533,7 +2637,75 @@ export type Database = {
             referencedRelation: "editorial_feedback_overview"
             referencedColumns: ["content_id"]
           },
+          {
+            foreignKeyName: "story_developments_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "story_threads"
+            referencedColumns: ["id"]
+          },
         ]
+      }
+      story_thread_members: {
+        Row: {
+          content_id: string
+          created_at: string
+          role: string
+          thread_id: string
+        }
+        Insert: {
+          content_id: string
+          created_at?: string
+          role: string
+          thread_id: string
+        }
+        Update: {
+          content_id?: string
+          created_at?: string
+          role?: string
+          thread_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "story_thread_members_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "content"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "story_thread_members_content_id_fkey"
+            columns: ["content_id"]
+            isOneToOne: false
+            referencedRelation: "editorial_feedback_overview"
+            referencedColumns: ["content_id"]
+          },
+          {
+            foreignKeyName: "story_thread_members_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "story_threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      story_threads: {
+        Row: {
+          created_at: string
+          id: string
+          title: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          title: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          title?: string
+        }
+        Relationships: []
       }
     }
     Views: {
@@ -2665,6 +2837,19 @@ export type Database = {
       finalize_admin_link: {
         Args: { p_accepted_user: string; p_id: string }
         Returns: boolean
+      }
+      find_prior_coverage: {
+        Args: { p_exclude?: string; p_limit?: number; p_text: string }
+        Returns: {
+          category_slug: string
+          excerpt: string
+          id: string
+          original_url: string
+          published_at: string
+          relevance: number
+          slug: string
+          title: string
+        }[]
       }
       is_admin: { Args: never; Returns: boolean }
       is_admin_manager: { Args: never; Returns: boolean }
