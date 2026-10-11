@@ -67,14 +67,10 @@ export function Header({ categories, active }: { categories: Category[]; active?
             </Link>
           );
         })}
-        <Link
-          href="/doctors"
-          className={`${navLink} ${
-            active === "doctors" ? "border-b-[2.5px] border-teal text-teal" : "text-gray hover:text-teal"
-          }`}
-        >
-          الأطباء
-        </Link>
+        {/* Launch Hardening V1: the doctors directory has no production data
+            yet (0 rows), so its public entry point is hidden — the /doctors
+            route and all admin capability remain intact. Restore this link
+            when real doctor profiles exist. */}
         <Link
           href="/transfers"
           className={`${navLink} ${

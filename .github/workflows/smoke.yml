@@ -1,0 +1,20 @@
+# Daily production smoke tests (also runnable manually). Read-only against
+# the live site; fails loudly if a high-value route breaks.
+name: Production smoke
+
+on:
+  schedule:
+    - cron: "15 4 * * *" # daily, after the content/analytics crons
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Smoke-test production
+        run: node scripts/smoke.mjs https://salma-azure.vercel.app

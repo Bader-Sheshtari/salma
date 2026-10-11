@@ -20,6 +20,15 @@ export function RatingForm({ doctorId }: { doctorId: string }) {
 
   return (
     <form action={formAction} className="rounded-2xl border border-line p-4">
+        {/* Honeypot: invisible to humans, filled by naive bots. */}
+        <input
+          type="text"
+          name="website"
+          tabIndex={-1}
+          autoComplete="off"
+          aria-hidden="true"
+          className="absolute -left-[9999px] h-0 w-0 opacity-0"
+        />
       <input type="hidden" name="doctor_id" value={doctorId} />
       <input type="hidden" name="stars" value={stars} />
 

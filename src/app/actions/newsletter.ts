@@ -1,8 +1,8 @@
 "use server";
 
-import { createHash, createHmac, randomBytes } from "crypto";
-import { headers } from "next/headers";
+import { createHash, randomBytes } from "crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { publicRateLimited } from "@/lib/public-throttle";
 import {
   NEWSLETTER_CONSENT_VERSION,
   PREFER_NOT_SAY,
@@ -35,49 +35,6 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const GENERIC_ERROR = "تعذّر إتمام العملية، حاول لاحقاً.";
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
-// -- rate limiting -----------------------------------------------------------
-// Hour buckets keyed by an HMAC of the caller's IP (raw IPs are never stored).
-// Deliberately best-effort: a lost race under-counts slightly, which is fine
-// for throttling.
-const LIMITS = { sub: 5, survey: 10 } as const;
-
-async function rateLimited(kind: keyof typeof LIMITS): Promise<boolean> {
-  const db = createAdminClient();
-  const h = await headers();
-  const ip = (h.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
-  const digest = createHmac("sha256", process.env.SUPABASE_SERVICE_ROLE_KEY!)
-    .update(ip)
-    .digest("hex")
-    .slice(0, 32);
-  const bucket = `${kind}:${digest}`;
-  const windowStart = new Date(Math.floor(Date.now() / 3600_000) * 3600_000).toISOString();
-
-  const { data: row } = await db
-    .from("newsletter_throttle")
-    .select("count")
-    .eq("bucket", bucket)
-    .eq("window_start", windowStart)
-    .maybeSingle();
-
-  if (row && row.count >= LIMITS[kind]) return true;
-
-  if (row) {
-    await db
-      .from("newsletter_throttle")
-      .update({ count: row.count + 1 })
-      .eq("bucket", bucket)
-      .eq("window_start", windowStart);
-  } else {
-    await db.from("newsletter_throttle").insert({ bucket, window_start: windowStart });
-    // Opportunistic prune — keeps the table tiny without a cron.
-    await db
-      .from("newsletter_throttle")
-      .delete()
-      .lt("window_start", new Date(Date.now() - 24 * 3600_000).toISOString());
-  }
-  return false;
-}
-
 // -- subscribe ---------------------------------------------------------------
 
 export async function subscribeNewsletter(
@@ -101,7 +58,7 @@ export async function subscribeNewsletter(
     const rawSource = String(formData.get("source") ?? "homepage");
     const source = validSource(rawSource) ? rawSource : "homepage";
 
-    if (await rateLimited("sub")) {
+    if (await publicRateLimited("sub")) {
       return { ok: false, error: "محاولات كثيرة خلال وقت قصير — حاول لاحقاً." };
     }
 
@@ -170,7 +127,7 @@ export async function submitAudienceSurvey(
     const token = String(formData.get("token") ?? "");
     if (token.length < 20 || token.length > 100) return { ok: false, error: GENERIC_ERROR };
 
-    if (await rateLimited("survey")) {
+    if (await publicRateLimited("survey")) {
       return { ok: false, error: "محاولات كثيرة خلال وقت قصير — حاول لاحقاً." };
     }
 

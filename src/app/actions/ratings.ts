@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import type { TablesInsert } from "@/lib/supabase/database.types";
+import { publicRateLimited } from "@/lib/public-throttle";
 
 export type RatingResult = { ok: true } | { ok: false; error: string };
 
@@ -14,6 +15,9 @@ export async function submitRating(
   _prev: RatingResult | null,
   formData: FormData,
 ): Promise<RatingResult> {
+  // Honeypot: invisible to humans, filled by naive bots — pretend success.
+  if (String(formData.get("website") ?? "").trim() !== "") return { ok: true };
+
   const doctorId = String(formData.get("doctor_id") ?? "").trim();
   const authorName = String(formData.get("author_name") ?? "").trim();
   const body = String(formData.get("body") ?? "").trim();
@@ -24,6 +28,10 @@ export async function submitRating(
     return { ok: false, error: "اختر تقييماً من 1 إلى 5 نجوم." };
   if (authorName.length < 2) return { ok: false, error: "الرجاء إدخال اسمك." };
   if (body.length > 2000) return { ok: false, error: "النص طويل جداً." };
+
+  if (await publicRateLimited("rating")) {
+    return { ok: false, error: "محاولات كثيرة خلال وقت قصير — حاول لاحقاً." };
+  }
 
   const supabase = await createClient();
   const row: TablesInsert<"doctor_ratings"> = {

@@ -30,6 +30,15 @@ export function Comments({
         </div>
       ) : (
         <form action={formAction} className="mb-6 rounded-2xl border border-line p-4">
+        {/* Honeypot: invisible to humans, filled by naive bots. */}
+        <input
+          type="text"
+          name="website"
+          tabIndex={-1}
+          autoComplete="off"
+          aria-hidden="true"
+          className="absolute -left-[9999px] h-0 w-0 opacity-0"
+        />
           <input type="hidden" name="content_id" value={contentId} />
           <input
             name="author_name"

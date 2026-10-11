@@ -1,5 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
+import { HotImg } from "./HotImg";
 import type { Content, SearchResult } from "@/lib/queries";
 import { formatDateTimeAr, hatch, timeAgoAr, videoThumbnail } from "@/lib/format";
 
@@ -60,10 +61,19 @@ export function Cover({
         </div>
       );
     }
+    // Hotlinked source-site image: stack the hatch placeholder BENEATH it so
+    // a dead remote file degrades to the branded fallback, never a broken
+    // icon, and the layout never collapses.
     return (
       <div className={wrap}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} className={`h-full w-full object-cover${img}`} />
+        <div
+          aria-hidden
+          className={`absolute inset-0 flex items-center justify-center font-mono text-[11px] ${dark ? "text-white/40" : "text-[#b39b78]"}`}
+          style={{ background: dark ? hatch("#2E2E2D", "#3a3a39", 9) : hatch("#F7EFE6", "#eadfcb", 9) }}
+        >
+          [ {alt} ]
+        </div>
+        <HotImg src={src} alt={alt} className={`absolute inset-0 h-full w-full object-cover${img}`} />
       </div>
     );
   }

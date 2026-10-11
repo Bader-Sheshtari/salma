@@ -20,7 +20,12 @@ export function contentMetadata(detail: ContentDetail): Metadata {
   const c = detail.content;
   const path = pathForContent(c);
   const url = absoluteUrl(path);
-  const description = c.excerpt ?? undefined;
+  // Fallback chain so a social preview is never empty: excerpt → AI summary
+  // → first ~160 chars of the body → the site description handled upstream.
+  const description =
+    c.excerpt ??
+    c.ai_summary ??
+    (c.body ? c.body.replace(/\s+/g, " ").trim().slice(0, 160) : undefined);
   const isVideo = c.type === "video";
 
   // og:image is supplied by the route's opengraph-image.tsx (branded Salma card).

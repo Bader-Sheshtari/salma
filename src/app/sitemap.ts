@@ -11,7 +11,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: absoluteUrl("/"), lastModified: new Date(), changeFrequency: "hourly", priority: 1 },
     { url: absoluteUrl("/about"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.5 },
     { url: absoluteUrl("/contact"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.4 },
-    { url: absoluteUrl("/doctors"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.5 },
+    // /doctors is temporarily hidden from navigation (no production doctor
+    // data yet) and stays out of the sitemap until it has real content.
     { url: absoluteUrl("/transfers"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.5 },
     { url: absoluteUrl("/privacy"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.3 },
     { url: absoluteUrl("/terms"), lastModified: new Date(), changeFrequency: "monthly", priority: 0.3 },
