@@ -561,6 +561,12 @@ export async function acceptInvitation(
     password,
     email_confirm: true,
     user_metadata: { full_name: fullName },
+    // Server-only marker that exempts this admin-API insert from the
+    // anti-signup trigger: GoTrue inserts the row BEFORE applying
+    // email_confirm, so without it guard_auth_signup aborts every
+    // invitation acceptance ("public signup is disabled"). app_metadata
+    // cannot be set from public signup, so the signup block stays intact.
+    app_metadata: { salma_admin_created: true },
   });
   if (createErr || !created?.user) {
     // Link stays usable (not finalized).
