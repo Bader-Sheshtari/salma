@@ -14,7 +14,7 @@
 // (see salmaWriter.test.ts). index.ts would wire these into a run later; this
 // checkpoint is local implementation + testing only (no live model call added).
 
-export const WRITER_PROMPT_VERSION = "e1.3a-salma-writer" as const;
+export const WRITER_PROMPT_VERSION = "e1.4-salma-writer" as const;
 
 // --- Profiles (Step 3) -----------------------------------------------------
 
@@ -1520,6 +1520,82 @@ export function parseWriterOutput(
 
 // --- Orchestrator: validate a written article (Steps 2, 5, 6, 7, 8, 9) -----
 
+// --- Readability heuristics (Editorial Simplification V1) -------------------
+//
+// Small deterministic ADVISORY warnings, never errors and never a score:
+// unusually long sentences, dense paragraphs, unexplained Latin
+// abbreviations, and formulaic AI filler phrases. They surface in
+// validateArticle.warnings (persisted on Develop Story jobs) so editors see
+// WHY a draft reads heavy — factual validation is untouched.
+
+export const AI_TELL_PHRASES = [
+  "من المهم الإشارة",
+  "تجدر الإشارة",
+  "في هذا السياق",
+  "من جهة أخرى",
+  "ليس مجرد",
+] as const;
+
+/** Headline cues stronger than evidence usually supports (advisory). */
+export const HEADLINE_OVERSTATEMENT_CUES = [
+  "تحل محل", "تحلّ محل", "يحل محل", "يحلّ محل",
+  "يقضي على", "تقضي على", "نهاية عصر", "علاج نهائي", "يغني عن", "تغني عن", "ثورة",
+] as const;
+
+const READABILITY_LONG_SENTENCE_WORDS = 45;
+const READABILITY_DENSE_PARAGRAPH_WORDS = 95;
+const ABBR_RE = /\b[A-Z][A-Z0-9]{1,6}\b/g;
+const ABBR_EXPLAIN_RE = /(وهو|وهي|أي |يعني|اختصار|إنزيم|بروتين|جين|مؤشر)/;
+
+export function readabilityWarnings(article: {
+  title: string;
+  excerpt: string;
+  body: string;
+}): string[] {
+  const out: string[] = [];
+  const body = article.body ?? "";
+
+  // 1) Long multi-clause sentences.
+  const sentences = body.split(/[.!؟?؛:]\s/);
+  const longCount = sentences.filter((s) => countWords(s) > READABILITY_LONG_SENTENCE_WORDS).length;
+  if (longCount >= 2) out.push(`readability_long_sentences:${longCount}`);
+
+  // 2) Dense paragraphs (visual text blocks).
+  const paragraphs = body.split(/\n\s*\n/);
+  const dense = paragraphs.filter((p) => countWords(p) > READABILITY_DENSE_PARAGRAPH_WORDS).length;
+  if (dense >= 1) out.push(`readability_dense_paragraphs:${dense}`);
+
+  // 3) Unexplained Latin abbreviations: first occurrence neither inside an
+  //    Arabic-first gloss nor followed by a nearby plain-language explainer.
+  const visible = `${article.excerpt ?? ""}\n${body}`;
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  const re = new RegExp(ABBR_RE.source, "g");
+  while ((m = re.exec(visible)) !== null) {
+    const abbr = m[0];
+    if (seen.has(abbr) || abbr.length < 2) continue;
+    seen.add(abbr);
+    const before = visible.slice(Math.max(0, m.index - 2), m.index);
+    const after = visible.slice(m.index + abbr.length, m.index + abbr.length + 120);
+    const inGloss = before.includes("(");
+    if (!inGloss && !ABBR_EXPLAIN_RE.test(after)) {
+      out.push(`readability_unexplained_abbreviation:${abbr}`);
+      if (out.filter((w) => w.startsWith("readability_unexplained")).length >= 3) break;
+    }
+  }
+
+  // 4) Formulaic AI filler phrases (flag when repeated or stacked).
+  const tells = AI_TELL_PHRASES.filter((p) => visible.includes(p));
+  if (tells.length >= 2) out.push(`readability_ai_phrases:${tells.length}`);
+
+  // 5) Headline stronger than typical evidence (advisory nudge; the editor
+  //    gate carries the same check so the Editorial Director can retitle).
+  if (HEADLINE_OVERSTATEMENT_CUES.some((c) => (article.title ?? "").includes(c))) {
+    out.push("readability_headline_overstatement");
+  }
+  return out;
+}
+
 export type ArticleValidation = {
   ok: boolean;
   profile: WritingProfile;
@@ -1600,6 +1676,11 @@ export function validateArticle(input: {
         { verificationOnly },
       ),
     );
+
+    // Editorial Simplification V1: advisory readability nudges (never errors).
+    warnings.push(
+      ...readabilityWarnings({ title: head.cleanTitle, excerpt: article.excerpt ?? "", body }),
+    );
   }
 
   const ok = errors.length === 0;
@@ -1649,6 +1730,20 @@ ${PROFILE_INSTRUCTIONS[profile]}
 - تجنّب: نسخ عنوان المصدر، وذكر اسم المصدر في العنوان، والإثارة، والوعود المبالغ فيها، والمقدّمات غير الضرورية، والخاتمات المكرّرة، والاقتباسات المختلقة، والنصائح أو التأويلات غير المدعومة.
 - عبارات ممنوعة صراحةً: ${bannedList}.
 
+لغة القارئ أولاً (تبسيط دون تسطيح — بسيط لا يعني سطحياً):
+- اكتب لقارئ ذكي غير متخصّص: لا يحتاج معرفة طبية أو إحصائية ليفهم المقال كاملاً.
+- جملة واحدة لفكرة رئيسية واحدة. تجنّب الجمل متعدّدة التراكيب الطويلة، وقسّم الجملة التي تتجاوز نحو أربعين كلمة. الفقرة من جملتين إلى أربع جمل، ولا تجعلها كتلة نصية كثيفة.
+- اشرح أولاً وسمِّ ثانياً: قدّم المعنى البسيط قبل المصطلح، وضع المصطلح الرسمي بعده أو بين قوسين عند الحاجة فقط. مثال: بدل «تجربتان عشوائيتان مزدوجتا التعمية ومضبوطتان بعلاج وهمي» اكتب «تجربتان سريريتان قارنتا الدواء بعلاج وهمي بطريقة تقلّل احتمالات التحيّز».
+- المصطلحات ثلاثة أنواع: ضروري (أبقه واشرحه ببساطة، مثل PCSK9 مع تعريف قصير)، وقابل للاستبدال (استخدم بديله العربي البسيط)، وغير ضروري (احذفه إذا كان دقّةً بلا فائدة للقارئ).
+- الأرقام: أبقِ ما يغيّر الفهم فعلاً واشرح معناه — «خفض الكوليسترول الضار بمتوسط 56% مقارنة بالعلاج الوهمي خلال 24 أسبوعاً» أوضح من «خفض بنسبة 56%». لا تكدّس إحصاءات ثانوية.
+- فرّق بين المؤشر والنتيجة بلغة القارئ: «خفض الكوليسترول لا يعني تلقائياً أن الدراسة أثبتت انخفاض الجلطات أو السكتات على المدى الطويل» أوضح من «لا يثبت نتيجةً سريريةً نهائية».
+- اللغة التنظيمية: لكل دولة أدلتها — لا تدمج موافقات جهات مختلفة في حكم واحد إذا اختلفت قوة الدليل المتاح لكل منها، وميّز بين إعلان الموافقة ووثيقة الجهة نفسها وتقرير إعلامي عنها.
+- مصدرك قد يكون مكتوباً بلغة تقنية أو تنظيمية — انقل الحقيقة نفسها بلغة صحفية بسيطة، لا تنسخ أسلوب المصدر.
+- افتح بالحدث ثم أهميته: الفقرة الأولى ماذا حدث، والثانية لماذا يهم القارئ عملياً — لا خلفيات قبل الخبر. اجعل «لماذا يهم» عملياً: «أهمية الدواء أنه يضيف لأول مرة خياراً فموياً إلى فئة كانت تعتمد على الحقن» بدل «ما يجعل هذا الاعتماد مهماً ليس مجرد إضافة دواء جديد».
+- قوة ادّعاء العنوان لا تتجاوز أقوى ادّعاء مدعوم في النص: تجنّب صيغ الإحلال والحسم مثل «تحل محل» و«يقضي على» و«نهاية عصر» ما لم تدعمها الأدلة فعلاً؛ فضّل «يضيف خياراً فموياً» أو «أول علاج فموي من فئة…».
+- القيود والمجهول بلغة بسيطة ودون كتل تحذيرية أكاديمية، ولا تجعل كل قيد بنفس الأهمية. واختم بفائدة عملية للقارئ بأسلوب «ما ننتظره الآن»: ما الذي سيحدث لاحقاً وما البيانات الناقصة — لا بخاتمة بحثية.
+- تجنّب عبارات الحشو الآلية إلا لضرورة حقيقية: «من المهم الإشارة إلى»، «تجدر الإشارة»، «في هذا السياق»، «من جهة أخرى»، وتكرار «ليس فقط… بل…». وتجنّب البنى المتناظرة المتكررة بين الفقرات.
+
 مبدأ التركيز التحريري (مهم):
 - ليست كل معلومة وردت في المصدر لازمةً للنشر. احتفظ بالحقائق التقنية للتحقّق فقط، ولا تُقحمها في النص المرئي إلا إذا كان القارئ يحتاجها فعلاً ليتعرّف على المنتج أو يتّخذ الإجراء الصحيح.
 - احذف من النص المرئي — ما لم تكن ضرورية حقاً — أرقام الدفعات/التشغيلات، وأرقام NDC أو التسجيل الداخلية، وتواريخ التوزيع أو انتهاء الصلاحية، والتركيز الدوائي الدقيق وتفاصيل التغليف، والاسم الإنجليزي الرسمي الطويل للمنتج.
@@ -1659,7 +1754,7 @@ ${PROFILE_INSTRUCTIONS[profile]}
 - حافظ على هوية المنتج والدواء والجهة والدولة بلغة مفهومة. اذكر الاسم الإنجليزي للمنتج مرّة واحدة فقط وعند الحاجة للتعريف به، ولا تكرّر الاسم الإنجليزي الكامل.
 
 المقتطف (excerpt):
-- جملة واحدة واضحة (≈30–35 كلمة كحدّ أقصى) تلخّص الجوهر.
+- جملة واحدة واضحة (≈30–35 كلمة كحدّ أقصى) تنقل الخلاصة العملية بلغة بسيطة لا أكاديمية.
 - لا تكرّر العنوان ولا الجملة الأولى من النص حرفياً.
 
 المقدّمة والنص:

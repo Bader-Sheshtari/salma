@@ -25,6 +25,7 @@
 
 import {
   arabicCountryEquivalents,
+  HEADLINE_OVERSTATEMENT_CUES,
   classifyEntityVisibility,
   countWords,
   extractOfficialActions,
@@ -35,7 +36,7 @@ import {
   type WritingProfile,
 } from "./salmaWriter.ts";
 
-export const EDITOR_PROMPT_VERSION = "e1.8-salma-editor" as const;
+export const EDITOR_PROMPT_VERSION = "e1.9-salma-editor" as const;
 
 // Provider-level structured-output contract (OpenRouter/OpenAI `response_format`).
 // The strongest structured-output mechanism the configured editor model supports:
@@ -223,6 +224,14 @@ ${PROFILE_EDIT_GUIDANCE[profile]}
 - مع جمع المذكّر استخدم صيغة التاء المربوطة: «ثلاثة أدوية»، «ثلاثة مرضى»، «ثلاثة مستشفيات» — لا «ثلاث أدوية». صحّح أي خطأ في المطابقة وردَ في المسوّدة.
 
 الجاذبية بلا إثارة: وضوح وقيمة وسرعة فهم وإيقاع طبيعي وترتيب مفيد — لا مبالغة ولا تخويف ولا يقين غير مدعوم ولا عناوين طُعم.
+
+قابلية القراءة (مهمة تحريرية أساسية، دون المساس بأي حقيقة):
+- بسّط الجمل الكثيفة متعددة التراكيب إلى جمل أقصر بفكرة واحدة، وقسّم الفقرات التي تتجاوز أربع جمل. حوّل أي صياغة أكاديمية أو تنظيمية إلى عربية صحفية بسيطة تنقل المعنى نفسه بدقته وتحفّظاته كاملة.
+- اشرح أولاً وسمِّ ثانياً: إن ورد مصطلح تقني دون شرح بسيط قبله فأعد صياغته (الوصف المفهوم أولاً، ثم المصطلح أو الاختصار بين قوسين عند الحاجة). لا تحذف مصطلحاً ضرورياً — اشرحه.
+- احذف عبارات الحشو الآلية حيثما وردت بلا ضرورة: «من المهم الإشارة إلى»، «تجدر الإشارة»، «في هذا السياق»، «من جهة أخرى»، وصيغ «ما يجعل هذا مهماً ليس مجرد…» — واستبدلها بجملة مباشرة عملية.
+- انضباط العنوان: قوة ادّعاء العنوان يجب ألا تتجاوز أقوى ادّعاء مدعوم في النص. إن وجدت صيغة إحلال أو حسم («تحل محل»، «يقضي على»، «نهاية عصر»، «علاج نهائي») لا تدعمها الأدلة فأعد صياغة العنوان بصيغة أدق مثل «يضيف خياراً فموياً» أو «أول علاج فموي من فئة…».
+- اللغة التنظيمية: لا تدمج موافقات جهات مختلفة في حكم واحد إذا اختلفت قوة الدليل لكل منها، وأبقِ الصياغة خاصة بكل جهة أو دولة بحسب ما يتوفر لها من أدلة في المصدر.
+- الخاتمة بأسلوب «ما ننتظره الآن» العملي (ما الذي سيحدث لاحقاً وما البيانات الناقصة)، لا بأسلوب خلاصة بحثية، مع الحفاظ على كل تحفّظ جوهري.
 
 المقتطف والملخّص لهما وظيفتان مختلفتان: المقتطف يشرح الحدث المركزي ويدعم العنوان دون تكراره حرفياً؛ والملخّص «باختصار» يعطي الخلاصة العملية للقارئ في جملة واحدة مختلفة عن العنوان والمقتطف والمقدّمة. لا تُكرّر الجملة نفسها في أكثر من حقل.
 
@@ -750,6 +759,13 @@ export function editorialGate(
       distinctOutside.add(tok.toLowerCase());
     }
     if (distinctOutside.size > EDITORIAL_MAX_ENGLISH_TOKENS) advisory.add("editorial_excess_english_tokens");
+
+  // Editorial Simplification V1: headline stronger than evidence usually
+  // supports (replacement/finality cues). Advisory — the editor is told to
+  // retitle; never blocks, never overrides factual checks.
+  if (HEADLINE_OVERSTATEMENT_CUES.some((c) => (title ?? "").includes(c))) {
+    advisory.add("editorial_headline_overstatement");
+  }
   }
 
   // A first-mention gloss should be a short identity (a name), not a phrase:

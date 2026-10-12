@@ -9,6 +9,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   WRITER_PROMPT_VERSION,
+  readabilityWarnings,
+  HEADLINE_OVERSTATEMENT_CUES,
   selectProfile,
   sensitiveProfileHint,
   countWords,
@@ -40,7 +42,7 @@ import {
 // --- profile selection -----------------------------------------------------
 
 test("prompt version is the dedicated writer version", () => {
-  assert.equal(WRITER_PROMPT_VERSION, "e1.3a-salma-writer");
+  assert.equal(WRITER_PROMPT_VERSION, "e1.4-salma-writer");
 });
 
 test("a medicine safety alert selects the safety_alert profile", () => {
@@ -1548,4 +1550,60 @@ test("country equivalence does NOT relax non-country foreign identities", () => 
     "safety_alert",
   );
   assert.ok(errors.includes("missing_essential_entity:Cyclophosphamide"), errors.join(","));
+});
+
+
+// --- Editorial Simplification V1: readability heuristics (advisory only) ----
+
+test("readability: long sentences and dense paragraphs flagged", () => {
+  const longSentence = Array.from({ length: 50 }, (_, i) => `كلمة${i}`).join(" ") + ".";
+  const dense = Array.from({ length: 100 }, (_, i) => `نص${i}`).join(" ");
+  const w = readabilityWarnings({
+    title: "عنوان",
+    excerpt: "مقتطف",
+    body: `${longSentence} ${longSentence}\n\n${dense}`,
+  });
+  assert.ok(w.some((x) => x.startsWith("readability_long_sentences")), w.join(","));
+  assert.ok(w.some((x) => x.startsWith("readability_dense_paragraphs")), w.join(","));
+});
+
+test("readability: unexplained abbreviation flagged; glossed/explained one is not", () => {
+  const bad = readabilityWarnings({
+    title: "عنوان",
+    excerpt: "",
+    body: "يستهدف الدواء مستقبلات GLP1 في الجسم بشكل مباشر.",
+  });
+  assert.ok(bad.includes("readability_unexplained_abbreviation:GLP1"), bad.join(","));
+  const glossed = readabilityWarnings({
+    title: "عنوان",
+    excerpt: "",
+    body: "يستهدف الدواء إنزيماً ينظم الكوليسترول (PCSK9) في الكبد.",
+  });
+  assert.ok(!glossed.some((x) => x.includes("PCSK9")), glossed.join(","));
+  const explained = readabilityWarnings({
+    title: "عنوان",
+    excerpt: "",
+    body: "يستهدف الدواء PCSK9 وهو إنزيم ينظم الكوليسترول في الكبد.",
+  });
+  assert.ok(!explained.some((x) => x.includes("PCSK9")), explained.join(","));
+});
+
+test("readability: stacked AI filler phrases and overstated headline flagged", () => {
+  const w = readabilityWarnings({
+    title: "دواء جديد يحلّ محل الحقن نهائياً",
+    excerpt: "",
+    body: "من المهم الإشارة إلى الدراسة. في هذا السياق تتضح الصورة.",
+  });
+  assert.ok(w.some((x) => x.startsWith("readability_ai_phrases")), w.join(","));
+  assert.ok(w.includes("readability_headline_overstatement"), w.join(","));
+  assert.ok(HEADLINE_OVERSTATEMENT_CUES.some((c) => "يحلّ محل".includes(c) || c.includes("يحلّ محل")));
+});
+
+test("readability: clean simple article yields no readability warnings", () => {
+  const w = readabilityWarnings({
+    title: "الصحة تطلق حملة التطعيم الشتوية",
+    excerpt: "حملة جديدة تشمل الفئات الأكثر عرضة.",
+    body: "أطلقت وزارة الصحة حملة التطعيم. تشمل الحملة كبار السن والحوامل.\n\nتبدأ الحملة الأسبوع المقبل في المراكز الصحية.",
+  });
+  assert.deepEqual(w.filter((x) => x.startsWith("readability")), []);
 });
