@@ -58,7 +58,7 @@ Related but tracked elsewhere: pipeline run-log monitoring is **P1 #1** in §8 (
 
 | Item | Status | Notes |
 |---|---|---|
-| **Kuwait / GCC dedicated intelligence (Radar V1.2)** | LATER | Dedicated intake for Kuwait/Saudi/UAE/Qatar/Bahrain/Oman ministries, regulators, hospitals, companies, investments. Planned as next Radar profile after launch stabilizes. |
+| **Kuwait / GCC dedicated intelligence (Radar V1.2)** | **DONE 2026-10-12 — shipped as GCC Radar V1 (5d1becd)** | Additive layer: `radar-gcc` collector over a curated `gcc_sources` registry (KW/SA/AE; QA/BH/OM designed-for-later), deterministic per-item intelligence (topics/signals/orgs/strategic/«لماذا يهم»/gcc_score) in `radar_gcc_intel`, «رادار الخليج» inbox view + coverage report (`/admin/radar/gcc-sources`), cron `salma-gcc-radar` every 3h. Rows flow through existing rank/ESL/retention untouched. Known gaps (coverage report flags them): moh.gov.kw + kuna.net.kw geo-blocked from the edge region; UAE ministry newsrooms JS-rendered. |
 | **ESL supply improvements (V1.3)** | LATER | Residual tier-5 share is a supply problem → needs strong-source discovery; L5 research-vs-guidance split refinement. |
 | **Evergreen Editorial Planner** | LATER | Non-breaking magazine-style planning (sleep, nutrition, exercise, prevention, QoL explainers). Distinct from Healthy-Life NEWS discovery. |
 | **Editorial audit persistence** | LATER | Persist Editorial Director/fidelity audit verdicts queryably (currently observability-only). |
@@ -67,7 +67,7 @@ Related but tracked elsewhere: pipeline run-log monitoring is **P1 #1** in §8 (
 
 Preserve; do **not** build before launch. We already have substantial AI infrastructure — additions must earn their place.
 
-1. **Direct Authoritative Source Network** — direct discovery monitoring of FDA, EMA, WHO, CDC, SFDA, GCC ministries, PubMed, ClinicalTrials.gov, NEJM/Lancet/JAMA/BMJ/Nature, pharma newsrooms, major institutions. **Distinct from Primary Source Escalation** (which upgrades sources *after* discovery; the feed network would BE discovery). Not built.
+1. **Direct Authoritative Source Network** — direct discovery monitoring of FDA, EMA, WHO, CDC, SFDA, GCC ministries, PubMed, ClinicalTrials.gov, NEJM/Lancet/JAMA/BMJ/Nature, pharma newsrooms, major institutions. **Distinct from Primary Source Escalation** (which upgrades sources *after* discovery; the feed network would BE discovery). Partially advanced 2026-10-12: GCC Radar V1 now does direct discovery monitoring of SFDA + GCC ministries/newsrooms (the GCC slice only); the global slice (FDA/EMA/WHO/journals/pharma newsrooms) remains not built.
 2. **Story Intelligence** — evolving-story understanding (trial → submission → approval → launch → safety update as one thread).
 3. **AI Editorial Director (planning)** — higher-level daily mix/planning recommendations. NOT the existing Editorial Director writing stage.
 4. **Personalization** — reader-interest personalization.
