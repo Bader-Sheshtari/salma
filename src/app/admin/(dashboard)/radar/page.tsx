@@ -1,4 +1,4 @@
-import { listRadarArticles, listRadarContentLinks, listCategories } from "@/lib/admin-queries";
+import { listRadarArticles, listRadarContentLinks, listCategories, listGccIntel } from "@/lib/admin-queries";
 import RadarInbox from "./RadarInbox";
 import { requireAdmin } from "@/lib/auth";
 
@@ -9,9 +9,10 @@ export const dynamic = "force-dynamic";
 export default async function RadarPage() {
   // Hard gate (defense in depth — the layout only admits staff).
   await requireAdmin();
-  const [items, categories] = await Promise.all([
+  const [items, categories, gccIntel] = await Promise.all([
     listRadarArticles(),
     listCategories(),
+    listGccIntel(),
   ]);
   // Slugs/status for the content rows the radar rows link to, so the card can
   // open the actual published article (and the existing article for duplicates).
@@ -34,6 +35,7 @@ export default async function RadarPage() {
         items={items}
         categories={categories.map((c) => ({ slug: c.slug, name_ar: c.name_ar }))}
         contentLinks={contentLinks}
+        gccIntel={gccIntel}
       />
     </div>
   );

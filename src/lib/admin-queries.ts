@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import type { RadarArticle } from "@/lib/radar";
+import type { GccIntel, GccRun, GccSource } from "@/lib/gcc-radar";
 import type {
   Category,
   Content,
@@ -259,6 +260,50 @@ export async function listRadarArticles(limit = 500): Promise<RadarArticle[]> {
     .order("id", { ascending: false })
     .limit(limit);
   return (data ?? []) as RadarArticle[];
+}
+
+/**
+ * GCC Radar V1: per-article deterministic intelligence (topics / signals /
+ * strategic flag / «لماذا يهم» / gcc_score) keyed by radar article id. The
+ * gcc_* tables are not in the generated Database types (same situation as the
+ * radar_shadow_* tables above), so this uses the same untyped-client pattern.
+ */
+export async function listGccIntel(limit = 1000): Promise<Record<string, GccIntel>> {
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const { data } = await client
+    .from("radar_gcc_intel")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  const map: Record<string, GccIntel> = {};
+  for (const r of (data ?? []) as GccIntel[]) map[r.radar_article_id] = r;
+  return map;
+}
+
+/** GCC Radar source registry with freshness fields (coverage report, §20–21). */
+export async function listGccSources(): Promise<GccSource[]> {
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const { data } = await client
+    .from("gcc_sources")
+    .select("*")
+    .order("country_code", { ascending: true })
+    .order("authority_tier", { ascending: true })
+    .order("name", { ascending: true });
+  return (data ?? []) as GccSource[];
+}
+
+/** Recent GCC collector runs (per-source stats feed the 7-day story counts). */
+export async function listGccRuns(limit = 60): Promise<GccRun[]> {
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const { data } = await client
+    .from("gcc_radar_runs")
+    .select("*")
+    .order("started_at", { ascending: false })
+    .limit(limit);
+  return (data ?? []) as GccRun[];
 }
 
 // Resolve the slug + status of the content rows a Radar row points at

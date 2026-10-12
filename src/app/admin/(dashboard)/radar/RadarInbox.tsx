@@ -21,8 +21,44 @@ import {
   type RadarPublishState,
 } from "../../radar-actions";
 import type { RadarContentLink } from "@/lib/admin-queries";
+import {
+  type GccIntel,
+  GCC_TOPIC_AR,
+  gccAuthorityLabel,
+  gccSignalLabel,
+  gccTopicLabel,
+} from "@/lib/gcc-radar";
 
 type Cat = { slug: string; name_ar: string };
+
+// GCC Radar view mode: «كل الرادار» is the unchanged global inbox; «رادار
+// الخليج» is the additive GCC intelligence lens (brief §15) — same cards, same
+// actions, filtered to GCC-collected items and ordered by importance
+// (strategic flag + deterministic gcc_score), not recency.
+type ViewMode = "all" | "gcc";
+
+const GCC_COUNTRY_FILTERS: { key: string; label: string }[] = [
+  { key: "", label: "الكل" },
+  { key: "KW", label: "🇰🇼 الكويت" },
+  { key: "SA", label: "🇸🇦 السعودية" },
+  { key: "AE", label: "🇦🇪 الإمارات" },
+];
+
+// Client-side mirror of the ESL title signature (first 6 significant tokens,
+// sorted) — used ONLY to group same-story GCC rows in this view so the most
+// official source is shown as the representative (brief §13–14).
+function gccTitleSignature(title: string | null): string {
+  if (!title) return "";
+  const tokens = title
+    .toLowerCase()
+    .replace(/[ً-ٰٟـ]/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 2)
+    .slice(0, 6)
+    .sort();
+  return tokens.join("|");
+}
 
 // Per-article one-click publish result, held in the client so the card shows an
 // unmistakable state without leaving the page or exposing raw internal codes.
@@ -143,14 +179,19 @@ export default function RadarInbox({
   items,
   categories,
   contentLinks,
+  gccIntel = {},
 }: {
   items: RadarArticle[];
   categories: Cat[];
   contentLinks: Record<string, RadarContentLink>;
+  gccIntel?: Record<string, GccIntel>;
 }) {
+  const [view, setView] = useState<ViewMode>("all");
   const [importance, setImportance] = useState<ImportanceMode>("default");
   const [dupe, setDupe] = useState<DupeMode>("opportunities");
   const [cat, setCat] = useState<string>("");
+  const [gccCountry, setGccCountry] = useState<string>("");
+  const [gccTopic, setGccTopic] = useState<string>("");
 
   const router = useRouter();
 
@@ -234,9 +275,19 @@ export default function RadarInbox({
 
   const filtered = useMemo(() => {
     return items.filter((a) => {
+      const intel = gccIntel[a.id];
+      // GCC view: only GCC-collected items, with country/topic filters. The
+      // GCC lens is importance-by-intelligence, so the recency/priority
+      // "default" gate does NOT hide unranked rows here (rank catches up on
+      // its own hourly cadence) — the explicit importance chips still work.
+      if (view === "gcc") {
+        if (!intel) return false;
+        if (gccCountry && intel.country_code !== gccCountry) return false;
+        if (gccTopic && !intel.topics.includes(gccTopic)) return false;
+      }
       // Importance
       const lvl = a.priority_level;
-      if (importance === "default" && !(lvl === "very_important" || lvl === "important")) return false;
+      if (importance === "default" && view !== "gcc" && !(lvl === "very_important" || lvl === "important")) return false;
       if (importance === "very_important" && lvl !== "very_important") return false;
       if (importance === "low" && lvl !== "low") return false;
       if (importance === "unranked" && lvl !== null) return false;
@@ -249,7 +300,42 @@ export default function RadarInbox({
       if (cat && a.expected_category_slug !== cat) return false;
       return true;
     });
-  }, [items, importance, dupe, cat]);
+  }, [items, importance, dupe, cat, view, gccCountry, gccTopic, gccIntel]);
+
+  // GCC view: collapse same-story rows (shared ESL canonical key, else shared
+  // title signature) to ONE representative — the most official source wins
+  // (lowest authority tier, then highest gcc_score). Other members stay
+  // reachable through the global view; the card shows the cluster size.
+  const gccCluster = useMemo(() => {
+    if (view !== "gcc") return null;
+    const bySig = new Map<string, RadarArticle[]>();
+    for (const a of filtered) {
+      const sig = a.esl_canonical_key ?? gccTitleSignature(a.title_ar ?? a.title) ?? a.id;
+      const key = sig || a.id;
+      (bySig.get(key) ?? bySig.set(key, []).get(key)!).push(a);
+    }
+    const keep = new Set<string>();
+    const clusterSize: Record<string, number> = {};
+    for (const rows of bySig.values()) {
+      const rep = [...rows].sort((x, y) => {
+        const tx = gccIntel[x.id]?.authority_tier ?? 9;
+        const ty = gccIntel[y.id]?.authority_tier ?? 9;
+        if (tx !== ty) return tx - ty;
+        const sx = gccIntel[x.id]?.gcc_score ?? 0;
+        const sy = gccIntel[y.id]?.gcc_score ?? 0;
+        if (sx !== sy) return sy - sx;
+        return x.id < y.id ? -1 : 1;
+      })[0];
+      keep.add(rep.id);
+      clusterSize[rep.id] = rows.length;
+    }
+    return { keep, clusterSize };
+  }, [view, filtered, gccIntel]);
+
+  const visible = useMemo(
+    () => (gccCluster ? filtered.filter((a) => gccCluster.keep.has(a.id)) : filtered),
+    [filtered, gccCluster],
+  );
 
   // Group filtered rows by detection date, newest date first. Within a group the
   // order is a STABLE, status-independent key: detection time (newest first) with
@@ -258,18 +344,30 @@ export default function RadarInbox({
   // (untouched→processing→draft/failed/published all update the SAME card in place).
   const groups = useMemo(() => {
     const map = new Map<string, RadarArticle[]>();
-    for (const a of filtered) {
+    for (const a of visible) {
       const k = dateKey(a.first_seen_at);
       (map.get(k) ?? map.set(k, []).get(k)!).push(a);
     }
     for (const rows of map.values()) {
       rows.sort((x, y) => {
+        // GCC view orders a day by importance (strategic first, then the
+        // deterministic gcc_score) — brief §2: importance, not recency/volume.
+        if (view === "gcc") {
+          const ix = gccIntel[x.id];
+          const iy = gccIntel[y.id];
+          const stx = ix?.strategic ? 1 : 0;
+          const sty = iy?.strategic ? 1 : 0;
+          if (stx !== sty) return sty - stx;
+          const sx = ix?.gcc_score ?? 0;
+          const sy = iy?.gcc_score ?? 0;
+          if (sx !== sy) return sy - sx;
+        }
         if (x.first_seen_at !== y.first_seen_at) return x.first_seen_at < y.first_seen_at ? 1 : -1;
         return x.id < y.id ? 1 : x.id > y.id ? -1 : 0;
       });
     }
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
-  }, [filtered]);
+  }, [visible, view, gccIntel]);
 
   // Map the server result to a single clear card state. Raw internal reasons
   // (e.g. source_fetch_failed) are NEVER surfaced here — they stay in the logs.
@@ -335,8 +433,33 @@ export default function RadarInbox({
     });
   }
 
+  const gccCount = useMemo(() => Object.keys(gccIntel).length, [gccIntel]);
+  const gccStrategicCount = useMemo(
+    () => Object.values(gccIntel).filter((i) => i.strategic).length,
+    [gccIntel],
+  );
+
   return (
     <div>
+      {/* View toggle: global Radar (unchanged) vs the GCC intelligence lens. */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Chip active={view === "all"} onClick={() => setView("all")}>كل الرادار</Chip>
+        <Chip active={view === "gcc"} onClick={() => setView("gcc")}>
+          🌴 رادار الخليج{gccCount > 0 ? ` (${gccCount})` : ""}
+        </Chip>
+        {view === "gcc" && gccStrategicCount > 0 && (
+          <span className="rounded-md border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11.5px] font-bold text-violet-700">
+            ⚡ {gccStrategicCount} تطور مهم
+          </span>
+        )}
+        <Link
+          href="/admin/radar/gcc-sources"
+          className="ms-auto text-[12px] font-semibold text-teal underline"
+        >
+          تقرير تغطية مصادر الخليج ↗
+        </Link>
+      </div>
+
       {/* Summary bar */}
       <div className="mb-4 flex flex-wrap gap-2 text-[12.5px]">
         <SummaryCard label="اليوم" value={summary.total} strong />
@@ -356,6 +479,25 @@ export default function RadarInbox({
 
       {/* Filters */}
       <div className="mb-3 space-y-2">
+        {view === "gcc" && (
+          <>
+            <FilterRow label="الدولة">
+              {GCC_COUNTRY_FILTERS.map((f) => (
+                <Chip key={f.key} active={gccCountry === f.key} onClick={() => setGccCountry(f.key)}>
+                  {f.label}
+                </Chip>
+              ))}
+            </FilterRow>
+            <FilterRow label="المجال">
+              <Chip active={gccTopic === ""} onClick={() => setGccTopic("")}>الكل</Chip>
+              {Object.entries(GCC_TOPIC_AR).map(([key, label]) => (
+                <Chip key={key} active={gccTopic === key} onClick={() => setGccTopic(key)}>
+                  {label}
+                </Chip>
+              ))}
+            </FilterRow>
+          </>
+        )}
         <FilterRow label="الأهمية">
           {IMPORTANCE_FILTERS.map((f) => (
             <Chip key={f.key} active={importance === f.key} onClick={() => setImportance(f.key)}>
@@ -447,6 +589,8 @@ export default function RadarInbox({
               const selectedCat = catOverride[a.id] ?? a.expected_category_slug ?? "";
               const country = countryDisplay(a.country);
               const sourceName = a.source_title ?? a.source_domain ?? null;
+              const intel = gccIntel[a.id];
+              const clusterN = gccCluster?.clusterSize[a.id] ?? 1;
               return (
                 <article key={a.id} className="rounded-xl border border-line bg-white p-3">
                   {/* Top tag row: RADAR · priority · category · country · source · duplicate. */}
@@ -473,6 +617,27 @@ export default function RadarInbox({
                         className="inline-block max-w-[150px] truncate rounded-md border border-line bg-white px-1.5 py-0.5 align-middle text-[11px] font-medium text-gray"
                       >
                         {sourceName}
+                      </span>
+                    )}
+                    {/* GCC intelligence badges (deterministic sidecar; brief §16–18). */}
+                    {intel?.strategic && (
+                      <span className="rounded-md border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[11px] font-bold text-violet-700">
+                        ⚡ تطور مهم
+                      </span>
+                    )}
+                    {intel?.topics.slice(0, 2).map((t) => (
+                      <span key={t} className="rounded-md border border-teal/30 bg-teal/5 px-1.5 py-0.5 text-[11px] font-semibold text-teal">
+                        {gccTopicLabel(t)}
+                      </span>
+                    ))}
+                    {intel && (
+                      <span className="rounded-md border border-line bg-white px-1.5 py-0.5 text-[11px] font-semibold text-gray">
+                        {gccAuthorityLabel(intel.authority_tier)}
+                      </span>
+                    )}
+                    {view === "gcc" && clusterN > 1 && (
+                      <span className="rounded-md border border-line bg-cream px-1.5 py-0.5 text-[11px] font-semibold text-ink">
+                        {clusterN} مصادر لنفس الخبر
                       </span>
                     )}
                     {a.duplicate_status && a.duplicate_status !== "new" ? (
@@ -527,6 +692,13 @@ export default function RadarInbox({
                       />
                     )}
                   </div>
+
+                  {/* «لماذا يهم؟» — deterministic GCC signal line (brief §17). */}
+                  {intel?.why_ar && (
+                    <div className="mb-1 text-[12px] font-semibold leading-snug text-teal" dir="rtl">
+                      لماذا يهم؟ <span className="font-medium text-ink/80">{intel.why_ar}</span>
+                    </div>
+                  )}
 
                   {/* Bottom metadata: language · published time · Radar detected time. */}
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-2 font-sans text-[11px] text-gray">
@@ -695,6 +867,16 @@ export default function RadarInbox({
                         <Meta label="القيمة التحريرية" value={a.priority_level ? PRIORITY_LABEL[a.priority_level] : UNRANKED_LABEL} />
                         <Meta label="القسم المقترح" value={catName(a.expected_category_slug)} />
                         <Meta label="التكرار" value={a.duplicate_status ? DUPLICATE_LABEL[a.duplicate_status] : "—"} />
+                        {intel && (
+                          <>
+                            <Meta
+                              label="إشارات خليجية"
+                              value={intel.signals.length ? intel.signals.map(gccSignalLabel).join("، ") : "—"}
+                            />
+                            <Meta label="درجة الأهمية الخليجية" value={String(Math.round(intel.gcc_score))} />
+                            <Meta label="موثوقية المصدر" value={gccAuthorityLabel(intel.authority_tier)} />
+                          </>
+                        )}
                       </dl>
 
                       <div className="mt-2 flex flex-wrap items-center gap-3">
