@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import type { RadarArticle } from "@/lib/radar";
 import type { GccIntel, GccRun, GccSource } from "@/lib/gcc-radar";
+import type { NewsletterIssue, NewsletterItem } from "@/lib/newsletter-issues";
 import type {
   Category,
   Content,
@@ -292,6 +293,55 @@ export async function listGccSources(): Promise<GccSource[]> {
     .order("authority_tier", { ascending: true })
     .order("name", { ascending: true });
   return (data ?? []) as GccSource[];
+}
+
+/**
+ * Newsletter Curation Engine V1: issues + items (staff-gated by RLS). The
+ * newsletter_* curation tables are not in the generated Database types, so
+ * this uses the same untyped-client pattern as the radar/gcc tables.
+ */
+export async function listNewsletterIssues(limit = 50): Promise<NewsletterIssue[]> {
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const { data } = await client
+    .from("newsletter_issues")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  return (data ?? []) as NewsletterIssue[];
+}
+
+export async function getNewsletterIssue(
+  id: string,
+): Promise<{ issue: NewsletterIssue; items: NewsletterItem[] } | null> {
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const { data: issue } = await client
+    .from("newsletter_issues").select("*").eq("id", id).maybeSingle();
+  if (!issue) return null;
+  const { data: items } = await client
+    .from("newsletter_items")
+    .select("*")
+    .eq("issue_id", id)
+    .order("section", { ascending: true })
+    .order("position", { ascending: true });
+  return { issue: issue as NewsletterIssue, items: (items ?? []) as NewsletterItem[] };
+}
+
+/** Slug/status/title for the Salma articles an issue references. */
+export async function listIssueContentLinks(
+  ids: (string | null)[],
+): Promise<Record<string, { slug: string; status: string; title: string }>> {
+  const unique = [...new Set(ids.filter((x): x is string => !!x))];
+  if (unique.length === 0) return {};
+  const supabase = await createClient();
+  const client = supabase as unknown as SupabaseClient;
+  const { data } = await client.from("content").select("id,slug,status,title").in("id", unique);
+  const map: Record<string, { slug: string; status: string; title: string }> = {};
+  for (const r of (data ?? []) as { id: string; slug: string; status: string; title: string }[]) {
+    map[r.id] = { slug: r.slug, status: r.status, title: r.title };
+  }
+  return map;
 }
 
 /** Recent GCC collector runs (per-source stats feed the 7-day story counts). */

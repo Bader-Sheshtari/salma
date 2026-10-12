@@ -46,3 +46,15 @@ verify_jwt = true
 # `supabase functions deploy` cannot silently flip it.
 [functions.ingest-news]
 verify_jwt = false
+
+# radar-gcc (GCC Radar V1 collector) is triggered only by pg_cron run_gcc_radar()
+# (anon bearer + x-ingest-secret). Gateway JWT verification pinned; real
+# authorization is the in-code INGEST_SECRET check.
+[functions.radar-gcc]
+verify_jwt = true
+
+# newsletter-curate assembles an editor-ready newsletter issue (deterministic
+# candidate engine + one batched LLM copy pass). Callers: staff JWT (editor+)
+# or the service-role key; the function re-checks the role itself.
+[functions.newsletter-curate]
+verify_jwt = true
