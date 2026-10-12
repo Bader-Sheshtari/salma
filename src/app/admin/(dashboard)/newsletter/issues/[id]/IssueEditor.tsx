@@ -4,10 +4,17 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  BAND_CLASS,
+  BAND_LABEL_AR,
+  displayReasons,
   ISSUE_STATUS_AR,
+  NO_LEAD_MESSAGE_AR,
   type NewsletterIssue,
   type NewsletterItem,
+  OPPORTUNITIES_LABEL_AR,
+  OPPORTUNITIES_SECTION,
   reasonLabel,
+  scoreBand,
   SECTION_ORDER,
   sectionLabel,
   SOURCE_TYPE_AR,
@@ -69,7 +76,11 @@ export default function IssueEditor({
     return map;
   }, [items]);
 
-  const activeCount = items.filter((i) => i.editor_state !== "rejected").length;
+  const activeCount = items.filter(
+    (i) => i.editor_state !== "rejected" && i.section !== OPPORTUNITIES_SECTION,
+  ).length;
+  const opportunityItems = bySection.get(OPPORTUNITIES_SECTION) ?? [];
+  const hasLead = (bySection.get("lead") ?? []).some((i) => i.editor_state !== "rejected");
 
   return (
     <div>
@@ -160,6 +171,16 @@ export default function IssueEditor({
             </div>
           </div>
 
+          {/* V1.1 §2: an issue without a strong lead says so honestly. */}
+          {!hasLead && (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] font-semibold text-amber-800" dir="rtl">
+              {NO_LEAD_MESSAGE_AR}
+              <span className="ms-1 font-normal text-amber-700">
+                يمكنك ترقية عنصر يدوياً إلى «الخبر الأبرز» إذا رأيت ذلك مناسباً.
+              </span>
+            </div>
+          )}
+
           {/* Sections */}
           {SECTION_ORDER.map((sec) => {
             const rows = bySection.get(sec) ?? [];
@@ -225,6 +246,30 @@ export default function IssueEditor({
               </section>
             );
           })}
+
+          {/* V1.1 §10: editor-only opportunities pool — never reader-facing. */}
+          {opportunityItems.length > 0 && (
+            <section className="mb-5 rounded-xl border border-dashed border-amber-300 bg-amber-50/40 p-3">
+              <h2 className="mb-1 text-[14px] font-bold text-amber-800">{OPPORTUNITIES_LABEL_AR}</h2>
+              <p className="mb-2 text-[12px] text-amber-700">
+                مواد واعدة لم تدخل العدد تلقائياً (أغلبها يحتاج تحقق مصدر). انقلها إلى قسم فعلي لاعتمادها — قرارك يتجاوز البوابة الآلية.
+              </p>
+              <div className="space-y-2">
+                {opportunityItems.map((it) => (
+                  <ItemCard
+                    key={it.id}
+                    item={it}
+                    issue={issue}
+                    contentLink={it.content_id ? contentLinks[it.content_id] : undefined}
+                    busy={busy}
+                    editing={editingItem === it.id}
+                    setEditing={(on) => setEditingItem(on ? it.id : null)}
+                    run={run}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
 
           <AddForms issueId={issue.id} run={run} busy={busy} />
         </>
@@ -296,21 +341,26 @@ function ItemCard({
             {SOURCE_TYPE_AR[item.external_source_type] ?? item.external_source_type}
           </span>
         )}
-        {item.reasons.map((r) => (
+        {/* V1.1 §12: only meaningful badges, capped at 3. */}
+        {displayReasons(item.reasons).map((r) => (
           <span key={r} className="rounded-md border border-teal/30 bg-teal/5 px-1.5 py-0.5 text-[11px] font-semibold text-teal">
             {reasonLabel(r)}
           </span>
         ))}
-        {item.score !== null && item.editor_state === "suggested" && (
-          <span
-            className="rounded-md border border-line bg-cream px-1.5 py-0.5 text-[11px] font-semibold text-gray"
-            title={item.score_parts
-              ? `لماذا تم اقتراحه؟ تحريري ${item.score_parts.editorial} · موثوقية ${item.score_parts.authority} · اهتمام ${item.score_parts.interest} · قرّاء ${item.score_parts.reader} · خليج ${item.score_parts.gcc}`
-              : undefined}
-          >
-            {Math.round((item.score ?? 0) * 100)}٪
-          </span>
-        )}
+        {/* V1.1 §11: honest quality band; the numeric breakdown stays in the tooltip. */}
+        {(() => {
+          const band = item.editor_state === "suggested" ? scoreBand(item.score) : null;
+          return band ? (
+            <span
+              className={`rounded-md border px-1.5 py-0.5 text-[11px] font-bold ${BAND_CLASS[band]}`}
+              title={item.score_parts
+                ? `لماذا تم اقتراحه؟ تحريري ${item.score_parts.editorial} · موثوقية ${item.score_parts.authority} · اهتمام ${item.score_parts.interest} · قرّاء ${item.score_parts.reader} · خليج ${item.score_parts.gcc}`
+                : undefined}
+            >
+              {BAND_LABEL_AR[band]}
+            </span>
+          ) : null;
+        })()}
       </div>
 
       <div className="text-[14.5px] font-bold leading-snug text-ink">
@@ -330,6 +380,15 @@ function ItemCard({
       )}
       {item.why_ar && (
         <p className="mt-1 text-[12px] font-semibold text-teal">لماذا يستحق وقتك؟ <span className="font-medium text-ink/70">{item.why_ar}</span></p>
+      )}
+      {/* V1.1 §5: located primary source — the basis of verification/authority. */}
+      {item.primary_url && (
+        <p className="mt-1 text-[12px] text-gray">
+          المصدر الأساسي:{" "}
+          <a href={item.primary_url} target="_blank" rel="noopener noreferrer" className="font-semibold text-teal underline" dir="ltr">
+            {item.primary_source_name ?? item.primary_url}
+          </a>
+        </p>
       )}
 
       {/* Actions */}
@@ -360,6 +419,7 @@ function ItemCard({
           {SECTION_ORDER.map((s) => (
             <option key={s} value={s}>{sectionLabel(s, issue.section_titles)}</option>
           ))}
+          <option value={OPPORTUNITIES_SECTION}>فرص تحريرية (خارج العدد)</option>
         </select>
         <button type="button" onClick={() => setEditing(!editing)} className="rounded-md border border-line bg-white px-2.5 py-1 font-semibold text-gray">
           {editing ? "إغلاق التحرير" : "تحرير النص"}
@@ -503,7 +563,10 @@ function IssuePreview({
   titleDraft: string;
   introDraft: string;
 }) {
-  const active = items.filter((i) => i.editor_state !== "rejected");
+  // The opportunities pool is editor-only — never part of the rendered issue.
+  const active = items.filter(
+    (i) => i.editor_state !== "rejected" && i.section !== OPPORTUNITIES_SECTION,
+  );
   const bySection = new Map<string, NewsletterItem[]>();
   for (const it of active) {
     (bySection.get(it.section) ?? bySection.set(it.section, []).get(it.section)!).push(it);

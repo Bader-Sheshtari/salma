@@ -42,6 +42,9 @@ export type NewsletterItem = {
   external_published_at: string | null;
   external_source_type: string | null;
   verification_status: "verified" | "needs_check";
+  /** V1.1 §5: located primary/official source (authority + verification basis) */
+  primary_url: string | null;
+  primary_source_name: string | null;
   section: string;
   position: number;
   newsletter_headline: string | null;
@@ -84,17 +87,64 @@ export const SECTION_LABELS_AR: Record<string, string> = {
 
 export const REASON_LABELS_AR: Record<string, string> = {
   official_source: "مصدر رسمي",
+  primary_research: "دراسة أصلية",
   research: "بحث علمي",
   high_engagement: "مرتفع التفاعل",
-  global_trend: "ترند عالمي",
+  global_trend: "ترند عالمي موثوق",
   econ_important: "مهم اقتصادياً",
   gcc_strategic: "تطور مهم في الخليج",
   expert_article: "مقال خبير",
   qol: "جودة حياة",
   transfer: "انتقال طبيب",
   after_news: "ما بعد الخبر",
-  search_demand: "طلب بحث من القرّاء",
+  search_demand: "مطلوب في البحث",
 };
+
+/**
+ * V1.1 §12: only MEANINGFUL badges in the primary visual hierarchy, in this
+ * priority order, capped by the card. Unknown/legacy keys are simply hidden.
+ */
+export const DISPLAY_REASONS: readonly string[] = [
+  "official_source",
+  "primary_research",
+  "gcc_strategic",
+  "econ_important",
+  "global_trend",
+  "high_engagement",
+  "search_demand",
+  "after_news",
+];
+
+export function displayReasons(reasons: string[], cap = 3): string[] {
+  return DISPLAY_REASONS.filter((r) => reasons.includes(r)).slice(0, cap);
+}
+
+/** V1.1 §11: honest quality categories instead of false-precision percentages. */
+export type ScoreBand = "strong" | "good" | "weak";
+
+export function scoreBand(score: number | null): ScoreBand | null {
+  if (score === null) return null;
+  if (score >= 0.62) return "strong";
+  if (score >= 0.48) return "good";
+  return "weak";
+}
+
+export const BAND_LABEL_AR: Record<ScoreBand, string> = {
+  strong: "قوي",
+  good: "جيد",
+  weak: "يحتاج مراجعة",
+};
+
+export const BAND_CLASS: Record<ScoreBand, string> = {
+  strong: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  good: "border-sky-200 bg-sky-50 text-sky-700",
+  weak: "border-amber-200 bg-amber-50 text-amber-700",
+};
+
+/** Editor-only pool (§10) — never rendered in the reader-facing issue. */
+export const OPPORTUNITIES_SECTION = "opportunities";
+export const OPPORTUNITIES_LABEL_AR = "فرص تحريرية — مواد تحتاج تحققاً أو تطويراً";
+export const NO_LEAD_MESSAGE_AR = "لا يوجد خبر رئيسي قوي بما يكفي في هذه الفترة.";
 
 export const SOURCE_TYPE_AR: Record<string, string> = {
   official: "جهة رسمية",

@@ -17,13 +17,22 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 //
 // Deliberately NOT here (§35): sending, SMTP, campaigns, tracking.
 
-import { chatJson, EDITOR_MODEL, newUsage, type LlmUsage } from "../ingest-news/pipeline.ts";
 import {
+  chatJson,
+  EDITOR_MODEL,
+  fetchOutboundLinks,
+  newUsage,
+  type LlmUsage,
+} from "../ingest-news/pipeline.ts";
+import {
+  buildTrendCounts,
   type Candidate,
   dedupeCandidates,
   fallbackCopy,
+  isResearchPrimary,
   type NewsletterSection,
   normalizeArabic,
+  scoreBand,
   scoreCandidate,
   type ScoredCandidate,
   SECTION_LABELS,
@@ -335,19 +344,52 @@ Deno.serve(async (req) => {
     // ---- Candidates: external (ranked Radar, not already in Salma) --------
     // NOTE: radar retention keeps unselected rows ~48h, so the external pool
     // skews to the most recent days of the range. Snapshot everything needed.
-    const { data: radar } = await admin
-      .from("radar_shadow_articles")
-      .select("id,title,title_ar,url,source_title,source_domain,language,country,published_at,first_seen_at,priority_level,priority_score,editorial_value,esl_evidence_class,esl_canonical_key")
-      .not("ranked_at", "is", null)
-      .in("priority_level", ["important", "very_important"])
-      .eq("duplicate_status", "new")
-      .is("publish_status", null)
-      .is("matched_content_id", null)
-      .not("url", "is", null)
-      .gte("first_seen_at", rangeStart)
-      .lte("first_seen_at", rangeEnd)
-      .order("priority_score", { ascending: false, nullsFirst: false })
-      .limit(MAX_EXTERNAL_CANDIDATES);
+    //
+    // V1.1: the pool is pulled in TWO passes. The LLM ranker clusters global
+    // stories at high scores, so a naive top-N by priority_score can crowd
+    // tier-1 officials (e.g. SFDA at 75 vs a wall of 80s) out of the pool
+    // entirely. Pass 2 guarantees every ranked item from a tier-1/2 REGISTRY
+    // domain a seat at the table; the engine's own scoring decides from there.
+    const RADAR_SELECT =
+      "id,title,title_ar,url,source_title,source_domain,language,country,published_at,first_seen_at,priority_level,priority_score,editorial_value,esl_evidence_class,esl_canonical_key";
+    const radarPoolFilters = <T>(q: T): T => {
+      // deno-lint-ignore no-explicit-any
+      return (q as any)
+        .not("ranked_at", "is", null)
+        .in("priority_level", ["important", "very_important"])
+        .eq("duplicate_status", "new")
+        .is("publish_status", null)
+        .is("matched_content_id", null)
+        .not("url", "is", null)
+        .gte("first_seen_at", rangeStart)
+        .lte("first_seen_at", rangeEnd) as T;
+    };
+    const authorityDomains = [
+      ...((nsRes.data ?? []) as { domain: string; tier: string }[])
+        .filter((s) => s.tier === "1" || s.tier === "2").map((s) => s.domain),
+      ...((gccSrcRes.data ?? []) as { domain: string; authority_tier: number }[])
+        .filter((s) => s.authority_tier <= 2).map((s) => s.domain),
+    ];
+    const [{ data: radarTop }, { data: radarAuthority }] = await Promise.all([
+      radarPoolFilters(
+        admin.from("radar_shadow_articles").select(RADAR_SELECT),
+      )
+        .order("priority_score", { ascending: false, nullsFirst: false })
+        .limit(MAX_EXTERNAL_CANDIDATES),
+      authorityDomains.length > 0
+        ? radarPoolFilters(
+          admin.from("radar_shadow_articles").select(RADAR_SELECT),
+        )
+          .in("source_domain", authorityDomains)
+          .order("priority_score", { ascending: false, nullsFirst: false })
+          .limit(60)
+        : Promise.resolve({ data: [] }),
+    ]);
+    const radarById = new Map<string, Record<string, unknown>>();
+    for (const r of [...(radarTop ?? []), ...(radarAuthority ?? [])] as { id: string }[]) {
+      radarById.set(r.id, r as unknown as Record<string, unknown>);
+    }
+    const radar = [...radarById.values()];
     const radarRows = (radar ?? []) as {
       id: string; title: string | null; title_ar: string | null; url: string;
       source_title: string | null; source_domain: string | null; language: string | null;
@@ -440,29 +482,81 @@ Deno.serve(async (req) => {
     // ---- Deterministic engine ---------------------------------------------
     const maxViews = Math.max(0, ...candidates.map((c) => c.views ?? 0));
     const ctx: SignalContext = { tierOf, searchTerms, audienceTopics, maxViews };
+    const prelim = candidates.map((c) => scoreCandidate(c, ctx));
+
+    // ---- Primary-source escalation (V1.1 §5) ------------------------------
+    // For promising-but-unverified externals (secondary media), try to locate
+    // the primary/official/original source via the hardened outbound-link
+    // escalation (ingest STEP B — no brittle scraping, no LLM). A found
+    // tier-1/2 primary drives verification + authority; the secondary URL
+    // stays as reader-facing context.
+    const ESCALATION_BUDGET_MS = 45_000;
+    const escStarted = Date.now();
+    const escTargets = prelim
+      .filter((c) => c.kind === "external" && !c.verified && c.score >= 0.45 && c.url)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+    let escalated = 0;
+    for (const t of escTargets) {
+      if (Date.now() - escStarted > ESCALATION_BUDGET_MS) break;
+      const links = await fetchOutboundLinks(t.url!).catch(() => [] as string[]);
+      let best: { url: string; domain: string; tier: number } | null = null;
+      for (const link of links) {
+        try {
+          const u = new URL(link);
+          const domain = u.hostname.replace(/^www\./, "");
+          const tier = tierOf(domain);
+          // Prefer true primaries: regulators/official (tier 1), then original
+          // research outlets; never "escalate" to another ordinary media site.
+          if (tier <= 2 || isResearchPrimary(domain)) {
+            const effTier = isResearchPrimary(domain) ? Math.min(tier, 1.5) : tier;
+            if (!best || effTier < best.tier) best = { url: u.href, domain, tier: effTier };
+          }
+        } catch { /* skip malformed */ }
+      }
+      if (best) {
+        const cand = candidates.find((c) => c.refId === t.refId);
+        if (cand) {
+          cand.hasPrimary = true;
+          cand.primaryUrl = best.url;
+          cand.primaryDomain = best.domain;
+          escalated++;
+        }
+      }
+    }
+
     const scored = candidates.map((c) => scoreCandidate(c, ctx));
+    const trendGroupCounts = buildTrendCounts(scored);
+    const selectionCtx: SignalContext = { ...ctx, trendGroupCounts };
     const deduped = dedupeCandidates(scored);
 
     // Keep editor decisions: existing accepted/rejected/manual items survive a
     // re-curation; their references are excluded from new suggestions.
     const { data: existing } = await admin
       .from("newsletter_items")
-      .select("id,editor_state,content_id,transfer_id,external_url")
+      .select("id,editor_state,section,content_id,transfer_id,external_url")
       .eq("issue_id", issueId);
     const existingRows = (existing ?? []) as {
-      id: string; editor_state: string; content_id: string | null;
+      id: string; editor_state: string; section: string; content_id: string | null;
       transfer_id: string | null; external_url: string | null;
     }[];
     const keptRefs = new Set<string>();
+    // Sections already occupied by editor-kept items: the engine fills AROUND
+    // them (an occupied lead is never re-filled — §2 exactly one).
+    const keptSectionCounts: Partial<Record<NewsletterSection, number>> = {};
     for (const row of existingRows) {
       if (row.editor_state === "suggested") continue;
       if (row.content_id) keptRefs.add(row.content_id);
       if (row.transfer_id) keptRefs.add(row.transfer_id);
       if (row.external_url) keptRefs.add(row.external_url);
+      if (row.section !== "opportunities") {
+        const s = row.section as NewsletterSection;
+        keptSectionCounts[s] = (keptSectionCounts[s] ?? 0) + 1;
+      }
     }
     const pool = deduped.filter((c) => !keptRefs.has(c.refId) && !(c.url && keptRefs.has(c.url)));
 
-    const { picks, emptySections } = selectIssue(pool, ctx);
+    const { picks, emptySections, opportunities } = selectIssue(pool, selectionCtx, keptSectionCounts);
 
     // ---- One batched copy pass (fallback keeps the engine deterministic) --
     const usage: LlmUsage = newUsage();
@@ -491,14 +585,13 @@ Deno.serve(async (req) => {
       .eq("issue_id", issueId)
       .eq("editor_state", "suggested");
 
-    const inserts = picks.map((p, i) => {
-      const c = p.candidate;
+    const toRow = (c: ScoredCandidate, section: string, position: number,
+      llm: { headline?: string; teaser?: string; analysis?: string; why?: string }) => {
       const fb = fallbackCopy(c);
-      const llm = copy.items.get(i) ?? {};
-      const domain = normDomain(c.sourceDomain);
+      // Authority/type follow the PRIMARY domain when escalation found one (§5).
+      const domain = normDomain(c.primaryDomain ?? c.sourceDomain);
       const gccClass = gccClassByDomain.get(domain) ?? null;
       const nsType = nsTypeByDomain.get(domain) ?? null;
-      const tier = tierOf(c.sourceDomain);
       return {
         issue_id: issueId,
         item_type: c.kind,
@@ -511,11 +604,11 @@ Deno.serve(async (req) => {
         external_source_type: c.kind === "external"
           ? externalSourceType(c, gccClass, nsType)
           : null,
-        verification_status: c.kind === "external"
-          ? (tier <= 2 ? "verified" : "needs_check")
-          : "verified",
-        section: p.section,
-        position: p.position,
+        primary_url: c.primaryUrl ?? null,
+        primary_source_name: c.primaryDomain ?? null,
+        verification_status: c.verified ? "verified" : "needs_check",
+        section,
+        position,
         newsletter_headline: llm.headline ?? fb.headline,
         teaser: llm.teaser ?? fb.teaser,
         short_analysis: llm.analysis ?? null,
@@ -526,14 +619,23 @@ Deno.serve(async (req) => {
         score_parts: c.parts,
         editor_state: "suggested",
       };
-    });
-    if (inserts.length > 0) {
-      const { error: insErr } = await admin.from("newsletter_items").insert(inserts);
+    };
+
+    const inserts = picks.map((p, i) => toRow(p.candidate, p.section, p.position, copy.items.get(i) ?? {}));
+    // §10: the editor-only opportunities pool gets deterministic copy only
+    // (no LLM spend on items that are not in the issue).
+    const oppInserts = opportunities
+      .filter((c) => !keptRefs.has(c.refId) && !(c.url && keptRefs.has(c.url)))
+      .map((c, i) => toRow(c, "opportunities", i, {}));
+    const allInserts = [...inserts, ...oppInserts];
+    if (allInserts.length > 0) {
+      const { error: insErr } = await admin.from("newsletter_items").insert(allInserts);
       if (insErr) throw new Error(`items_insert_failed: ${insErr.message}`);
     }
 
     const curationMeta = {
       curated_at: new Date().toISOString(),
+      engine_version: "v1.1",
       candidates: {
         articles: articleRows.length,
         external: radarRows.length,
@@ -541,6 +643,12 @@ Deno.serve(async (req) => {
         after_dedupe: deduped.length,
       },
       picks: picks.length,
+      opportunities: oppInserts.length,
+      escalation: { attempted: escTargets.length, primaries_found: escalated },
+      bands: {
+        strong: picks.filter((p) => scoreBand(p.candidate.score) === "strong").length,
+        good: picks.filter((p) => scoreBand(p.candidate.score) === "good").length,
+      },
       empty_sections: emptySections,
       copy_mode: copyMode,
       zero_result_search_terms: zeroResultTerms, // editorial leads (§27)
@@ -559,6 +667,8 @@ Deno.serve(async (req) => {
       ok: true,
       issue_id: issueId,
       inserted: inserts.length,
+      opportunities: oppInserts.length,
+      escalation: { attempted: escTargets.length, primaries_found: escalated },
       empty_sections: emptySections,
       copy_mode: copyMode,
       usage,

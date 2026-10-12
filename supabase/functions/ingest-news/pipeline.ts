@@ -994,8 +994,9 @@ const ESCALATION_LINK_HINTS = [
 ];
 
 /** SSRF-safe: fetch the discovery article and return outbound links pointing to
- *  known strong-source domains (STEP B). Mirrors the hardened asset fetch. */
-async function fetchOutboundLinks(url: string): Promise<string[]> {
+ *  known strong-source domains (STEP B). Mirrors the hardened asset fetch.
+ *  Exported for the newsletter primary-source escalation (calibration V1.1). */
+export async function fetchOutboundLinks(url: string): Promise<string[]> {
   let u: URL;
   try { u = new URL(url); } catch { return []; }
   if (u.protocol !== "http:" && u.protocol !== "https:") return [];

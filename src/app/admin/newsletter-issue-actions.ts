@@ -22,6 +22,9 @@ type ActionResult = { ok: true; id?: string } | { error: string };
 const VALID_SECTIONS = new Set([
   "lead", "top_missed", "economy", "gcc", "research", "qol",
   "trend", "expert", "transfers", "quick",
+  // V1.1: editor-only pool («فرص تحريرية») — moving an item OUT of it into a
+  // real section is the manual override the verification gate allows (§4).
+  "opportunities",
 ]);
 
 function issuePaths(id?: string): string[] {

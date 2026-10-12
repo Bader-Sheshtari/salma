@@ -63,7 +63,10 @@ export function containsTerm(text: string, needle: string): boolean {
     // but never match inside a longer word tail (keeps عمان out of عثمان).
     const words = n.split(/\s+/).filter(Boolean).map((w) => {
       const esc = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return `(?:و|ف)?(?:ب|ل|ك|لل)?(?:ال)?${esc}`;
+      // Stacked proclitics before the stem; a SHORT closed suffix set after it
+      // (accusative alif «استحواذاً→استحواذا», plural/pronoun endings). Longer
+      // word tails still never match (عمان stays out of عثمان).
+      return `(?:و|ف)?(?:ب|ل|ك|لل)?(?:ال)?${esc}(?:ا|ه|ي|ين|ون|ان|ات|ها|هم|كم|نا)?`;
     });
     const re = new RegExp(
       `(^|[^\\u0600-\\u06FF])${words.join("[^\\u0600-\\u06FF]+")}($|[^\\u0600-\\u06FF])`,
