@@ -180,7 +180,8 @@ Related but tracked elsewhere: newsletter anti-spam is part of **P1 #7** in §8;
 
 | Item | Status | Notes |
 |---|---|---|
-| **Newsletter (full)** | LATER | Delivery provider, templates, double opt-in, subscriber management UI, sending workflow, analytics, automation. Schema today is 3 columns (email/id/created_at) — needs consent/status/token columns. |
+| **Newsletter curation engine** | **DONE 2026-10-12 — shipped as Newsletter Curation Engine V1 (5cd9b58)** | Editor-ready issues inside Admin (`/admin/newsletter/issues`): deterministic candidate engine over published articles + verified external Radar items + doctor transfers, balanced sections (الخبر الأبرز/أهم ما فاتك/اقتصاد الصحة/من الخليج/البحث/جودة الحياة/ترند/مقال خبير/انتقالات/باختصار), one batched LLM copy pass (~$0.01/issue), full editor control + RTL preview. Subscriber capture + survey shipped earlier (fcf9311: consent/status/token columns exist). |
+| **Newsletter delivery (full)** | LATER | Delivery provider, email templates, double opt-in, unsubscribe flow, sending workflow, open/click analytics, SPF/DKIM/DMARC — deliberately still deferred; the issue schema is delivery-ready (title/intro/sections/ordered items/links/copy). Blocked on a real sender domain. |
 
 ---
 
