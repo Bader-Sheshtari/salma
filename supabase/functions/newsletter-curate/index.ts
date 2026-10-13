@@ -49,6 +49,23 @@ const MAX_ARTICLE_CANDIDATES = 100;
 
 type Actor = { kind: "staff"; id: string } | { kind: "service"; id: null };
 
+// Structural slice of the PostgREST filter builder (just the chainable methods
+// the radar pool pulls use), so both pulls share one filter set without
+// widening to `any`. An interface because polymorphic `this` returns are only
+// legal on interface/class members; awaiting it yields the usual {data} shape.
+// (A generic <T extends …> version trips TS2589 against supabase-js's own
+// deeply-generic builder types, hence the single explicit cast per call site.)
+interface RadarPoolQuery extends PromiseLike<{ data: unknown[] | null }> {
+  not(column: string, operator: string, value: unknown): this;
+  in(column: string, values: readonly unknown[]): this;
+  eq(column: string, value: unknown): this;
+  is(column: string, value: null): this;
+  gte(column: string, value: string): this;
+  lte(column: string, value: string): this;
+  order(column: string, opts: { ascending: boolean; nullsFirst?: boolean }): this;
+  limit(n: number): this;
+}
+
 // Same staff-or-service authorization as develop-story.
 async function authorize(req: Request, admin: SupabaseClient): Promise<Actor | null> {
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
@@ -352,9 +369,8 @@ Deno.serve(async (req) => {
     // domain a seat at the table; the engine's own scoring decides from there.
     const RADAR_SELECT =
       "id,title,title_ar,url,source_title,source_domain,language,country,published_at,first_seen_at,priority_level,priority_score,editorial_value,esl_evidence_class,esl_canonical_key";
-    const radarPoolFilters = <T>(q: T): T => {
-      // deno-lint-ignore no-explicit-any
-      return (q as any)
+    const radarPoolFilters = (q: RadarPoolQuery): RadarPoolQuery =>
+      q
         .not("ranked_at", "is", null)
         .in("priority_level", ["important", "very_important"])
         .eq("duplicate_status", "new")
@@ -362,28 +378,25 @@ Deno.serve(async (req) => {
         .is("matched_content_id", null)
         .not("url", "is", null)
         .gte("first_seen_at", rangeStart)
-        .lte("first_seen_at", rangeEnd) as T;
-    };
+        .lte("first_seen_at", rangeEnd);
     const authorityDomains = [
       ...((nsRes.data ?? []) as { domain: string; tier: string }[])
         .filter((s) => s.tier === "1" || s.tier === "2").map((s) => s.domain),
       ...((gccSrcRes.data ?? []) as { domain: string; authority_tier: number }[])
         .filter((s) => s.authority_tier <= 2).map((s) => s.domain),
     ];
+    const radarPoolQuery = (): RadarPoolQuery =>
+      admin.from("radar_shadow_articles").select(RADAR_SELECT) as unknown as RadarPoolQuery;
     const [{ data: radarTop }, { data: radarAuthority }] = await Promise.all([
-      radarPoolFilters(
-        admin.from("radar_shadow_articles").select(RADAR_SELECT),
-      )
+      radarPoolFilters(radarPoolQuery())
         .order("priority_score", { ascending: false, nullsFirst: false })
         .limit(MAX_EXTERNAL_CANDIDATES),
       authorityDomains.length > 0
-        ? radarPoolFilters(
-          admin.from("radar_shadow_articles").select(RADAR_SELECT),
-        )
+        ? radarPoolFilters(radarPoolQuery())
           .in("source_domain", authorityDomains)
           .order("priority_score", { ascending: false, nullsFirst: false })
           .limit(60)
-        : Promise.resolve({ data: [] }),
+        : Promise.resolve({ data: [] as unknown[] | null }),
     ]);
     const radarById = new Map<string, Record<string, unknown>>();
     for (const r of [...(radarTop ?? []), ...(radarAuthority ?? [])] as { id: string }[]) {
