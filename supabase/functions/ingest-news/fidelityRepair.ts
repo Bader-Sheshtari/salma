@@ -52,6 +52,8 @@ export type FidelityClass = "repairable" | "omission" | "blocking";
 // source. If the code still appears at final validation, the article is rejected.
 export const REPAIRABLE_FIDELITY_PREFIXES = [
   "unsupported_number",
+  // P2-A1: a draft date that matches no source date (same class as a number).
+  "unsupported_date",
   "unsupported_claim",
   "invented_quotation",
 ] as const;

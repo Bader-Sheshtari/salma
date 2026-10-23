@@ -170,8 +170,9 @@ type PilotReport = {
   rejection_reason: string | null;
   created_content_id: string | null;
   // E1.4A: the editorial-director audit for the single draft that reached the
-  // editor stage (null until then). Observability-only — surfaced in the HTTP
-  // pilot report, NOT persisted to ingestion_decisions (no migration).
+  // editor stage (null until then). Surfaced in full in the HTTP pilot report;
+  // only its decision + prompt version are persisted to ingestion_decisions
+  // (P2-D10 editor_outcome / editor_prompt_version).
   editorial: EditorialAudit | null;
   editor_prompt_version: string | null;
   // Post-editor source-fidelity stage audit (original error, repair attempt,
@@ -234,6 +235,10 @@ type Decision = {
   source_extraction_method: string | null;
   source_char_count: number | null;
   source_word_count: number | null;
+  // P2-D10 Editorial Director outcome audit (nullable; only set once the editor
+  // ran). Requires migration 20261023100100_editorial_outcome_audit.sql.
+  editor_outcome: string | null;
+  editor_prompt_version: string | null;
 };
 
 // Optional dedup audit fields attached to a decision (E1.2).
@@ -776,6 +781,8 @@ async function runIngestion(
       source_extraction_method: writer.source_extraction_method ?? null,
       source_char_count: writer.source_char_count ?? null,
       source_word_count: writer.source_word_count ?? null,
+      editor_outcome: writer.editor_outcome ?? null,
+      editor_prompt_version: writer.editor_prompt_version ?? null,
     });
   };
 

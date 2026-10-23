@@ -14,7 +14,7 @@
 // (see salmaWriter.test.ts). index.ts would wire these into a run later; this
 // checkpoint is local implementation + testing only (no live model call added).
 
-export const WRITER_PROMPT_VERSION = "e2.1.1-salma-writer" as const;
+export const WRITER_PROMPT_VERSION = "e2.2-salma-writer" as const;
 
 // --- Profiles (Step 3) -----------------------------------------------------
 
@@ -160,14 +160,189 @@ export function foldDigits(s: string): string {
 }
 
 /** Normalize for faithful text comparison: fold digits, strip diacritics and
- *  tatweel, unify punctuation to spaces, collapse whitespace, lowercase. */
+ *  tatweel, unify punctuation to spaces, collapse whitespace, lowercase.
+ *  P2-B8: also folds Arabic ORTHOGRAPHIC variants that never change a word —
+ *  alef forms (أ إ آ ٱ → ا), hamza carriers (ؤ → و, ئ → ي, bare ء dropped),
+ *  alef maqsura (ى → ي) and taa marbuta (ة → ه) — on BOTH sides of every
+ *  comparison, so «الهيئة» ≡ «الهيئه» and «إدارة» ≡ «ادارة». Letters that
+ *  distinguish different words (e.g. ت vs ة, ك vs ق) are never merged. */
 export function normalizeForCompare(text: string): string {
   return foldDigits(text ?? "")
     .replace(/[\u064B-\u065F\u0610-\u061A\u0670]/g, "") // harakat
     .replace(/\u0640/g, "") // tatweel
+    .replace(/[أإآٱ]/g, "ا")
+    .replace(/ؤ/g, "و")
+    .replace(/ئ/g, "ي")
+    // Limitation (P2R-11): a bare hamza is DROPPED, not mapped, so words that
+    // differ only by a final/medial bare ء compare equal (جزء ≡ جز, بدء ≡ بد).
+    // Both sides fold identically and no drug/organisation name in our
+    // fixtures differs only by a bare ء; entity matching stays token-exact.
+    .replace(/ء/g, "")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim()
     .toLowerCase();
+}
+
+// --- P2-B8: Arabic-aware token matching for entity presence ----------------
+//
+// Entity presence (writer missing_essential_entity + editor dropped-entity
+// guard) compares on folded TOKENS: normalizeForCompare's orthographic folds,
+// plus a leading definite article / article-bearing proclitic (ال، وال، بال،
+// فال، كال، لل) and the feminine nisba ending (-ية → -ي) so «السعودية» ≡
+// «سعودية» ≡ «سعودي». Matching is TOKEN-EXACT on contiguous token runs — never
+// a fuzzy/edit-distance match — so two different drug names can never become
+// equal (a one-letter difference survives every fold).
+
+/** Fold one already-normalized token (see normalizeForCompare). */
+export function foldArabicToken(tok: string): string {
+  let t = tok ?? "";
+  if (!/[\u0600-\u06FF]/.test(t)) return t;
+  const m = t.match(/^(?:[وف]?[بك]?ال|[وف]?لل)(.{2,})$/u);
+  if (m) t = m[1];
+  if (t.length > 3 && t.endsWith("يه")) t = t.slice(0, -1);
+  return t;
+}
+
+/** Folded token list of a text, for token-run entity matching. */
+export function arabicMatchTokens(text: string): string[] {
+  return normalizeForCompare(text).split(" ").filter(Boolean).map(foldArabicToken);
+}
+
+/** A text token with a leading conjunction/preposition proclitic removed
+ *  («وإدارة» → «إدارة», «لشركة» → «شركة»), or null when none applies. */
+function stripTextProclitic(tok: string): string | null {
+  const m = tok.match(/^[وف]?[بلك]?(.{3,})$/u);
+  if (!m || m[1] === tok || !/^[\u0600-\u06FF]/.test(tok)) return null;
+  return foldArabicToken(m[1]);
+}
+
+/** Does `hay` contain `needle`'s folded tokens as one contiguous run? The
+ *  FIRST text token of the run may carry a proclitic (و/ف + ب/ل/ك) that the
+ *  entity itself does not — «وإدارة الغذاء والدواء» contains «إدارة الغذاء
+ *  والدواء». Only the text side is ever stripped, never the entity. */
+export function containsFoldedPhrase(hay: string[], needleText: string): boolean {
+  const needle = arabicMatchTokens(needleText);
+  if (!needle.length || needle.length > hay.length) return false;
+  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (hay[i + j] === needle[j]) continue;
+      if (j === 0 && stripTextProclitic(hay[i]) === needle[0]) continue;
+      continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+// P2-B8: narrow, fixed regulator equivalence groups (English name/acronym ↔ the
+// canonical Arabic name). Shared by the writer entity check and the editor
+// dropped-entity guard. A preserved regulator entity is satisfied by ANY
+// member of its own group; groups never overlap (the US FDA «إدارة» and the
+// Saudi SFDA «هيئة» stay distinct).
+export const REGULATOR_EQUIVALENTS: readonly (readonly string[])[] = [
+  [
+    "FDA", "U.S. FDA", "US FDA", "Food and Drug Administration",
+    "U.S. Food and Drug Administration", "US Food and Drug Administration",
+    "إدارة الغذاء والدواء", "إدارة الغذاء والدواء الأمريكية", "هيئة الغذاء والدواء الأمريكية",
+  ],
+  ["WHO", "World Health Organization", "World Health Organisation", "منظمة الصحة العالمية"],
+  ["EMA", "European Medicines Agency", "وكالة الأدوية الأوروبية", "الوكالة الأوروبية للأدوية"],
+  [
+    // P2R-2: no bare «هيئة الغذاء والدواء» — only Saudi-qualified forms.
+    "SFDA", "Saudi Food and Drug Authority", "Saudi FDA",
+    "هيئة الغذاء والدواء السعودية", "الهيئة العامة للغذاء والدواء السعودية",
+    // P2R2-H: the SFDA's official Arabic name, with or without «السعودية».
+    "الهيئة العامة للغذاء والدواء",
+  ],
+  [
+    "CDC", "U.S. CDC", "Centers for Disease Control and Prevention",
+    "Centers for Disease Control", "مراكز السيطرة على الأمراض والوقاية منها",
+    "مراكز مكافحة الأمراض والوقاية منها", "المراكز الأمريكية لمكافحة الأمراض",
+    "مراكز السيطرة على الأمراض", "مراكز مكافحة الأمراض",
+  ],
+];
+
+/** The regulator group an entity belongs to (exact normalized match), or null. */
+export function regulatorGroup(entity: string): readonly string[] | null {
+  const n = normalizeForCompare(entity);
+  if (!n) return null;
+  for (const g of REGULATOR_EQUIVALENTS) {
+    if (g.some((v) => normalizeForCompare(v) === n)) return g;
+  }
+  return null;
+}
+
+// P2R-2: tokens that, right before/after a member, make it ANOTHER country's
+// regulator (Saudi FDA, «إدارة الغذاء والدواء السعودية»).
+const REGULATOR_FOREIGN_QUALIFIERS = new Set(["saudi", "سعودي", "sfda"]);
+
+/** Is a regulator entity present in `text` under ANY member of its group?
+ *  P2R-2: an all-caps acronym member (FDA, WHO, EMA, CDC, SFDA, "U.S. FDA")
+ *  matches only as a case-sensitive whole word — the English pronoun "who"
+ *  never counts as the WHO; every other member matches as a folded token run
+ *  that is NOT qualified by a Saudi marker immediately before/after it, so
+ *  "Saudi FDA" / «… السعودية» never satisfy the US FDA group. */
+export function regulatorPresent(group: readonly string[], text: string): boolean {
+  const raw = text ?? "";
+  const hay = arabicMatchTokens(raw);
+  const isSaudiGroup = group.includes("SFDA");
+  return group.some((v) => {
+    if (/^[A-Z.\s]{2,10}$/.test(v)) {
+      const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s*");
+      const re = new RegExp(`(?<![A-Za-z])${esc}(?![A-Za-z])`, "g");
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(raw)) !== null) {
+        if (isSaudiGroup) return true;
+        const before = raw.slice(Math.max(0, m.index - 12), m.index);
+        const after = raw.slice(m.index + m[0].length, m.index + m[0].length + 20);
+        if (/saudi\s*$/i.test(before) || /سعودي/.test(before)) continue;
+        if (/^\s*(?:in Saudi|of Saudi|في السعودي|بالسعودي|السعودي)/i.test(after)) continue;
+        return true;
+      }
+      return false;
+    }
+    // English qualifies BEFORE the name ("Saudi Food and Drug …"), Arabic
+    // AFTER it («إدارة الغذاء والدواء السعودية») — «مسؤول سعودي وإدارة الغذاء
+    // والدواء» is a Saudi official AND the US FDA, not a Saudi regulator.
+    // P2R2-H: a postfix «في السعودية» / "in Saudi …" also disqualifies.
+    return foldedRuns(hay, v).some(([i, j]) =>
+      isSaudiGroup ||
+      (!["saudi", "sfda"].includes(hay[i - 1] ?? "") &&
+        !REGULATOR_FOREIGN_QUALIFIERS.has(hay[j] ?? "") &&
+        !(["في", "in", "of"].includes(hay[j] ?? "") && REGULATOR_FOREIGN_QUALIFIERS.has(hay[j + 1] ?? "")) &&
+        stripTextProclitic(hay[j] ?? "") !== "سعودي")
+    );
+  });
+}
+
+/** Every [start, end) token run in `hay` matching `needleText` (same rules as
+ *  containsFoldedPhrase). */
+function foldedRuns(hay: string[], needleText: string): [number, number][] {
+  const needle = arabicMatchTokens(needleText);
+  const out: [number, number][] = [];
+  if (!needle.length) return out;
+  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (hay[i + j] === needle[j]) continue;
+      if (j === 0 && stripTextProclitic(hay[i]) === needle[0]) continue;
+      continue outer;
+    }
+    out.push([i, i + needle.length]);
+  }
+  return out;
+}
+
+/** Arabic-aware presence of a NATIVE (Arabic-script) or country/regulator
+ *  entity: the legacy normalized-substring check OR a folded token-run match.
+ *  Only ever ADDS ways for a genuinely present entity to be recognised; a
+ *  missing name still fails. */
+export function arabicEntityPresent(entityIdentity: string, text: string): boolean {
+  const idNorm = normalizeForCompare(entityIdentity);
+  if (!idNorm) return false;
+  if (normalizeForCompare(text).includes(idNorm)) return true;
+  return containsFoldedPhrase(arabicMatchTokens(text), entityIdentity);
 }
 
 /** Count Arabic (or any-script) words: whitespace tokens containing a letter or
@@ -456,6 +631,278 @@ export function extractNumberEntries(
   return out;
 }
 
+/** Number entries WITH their character span in `text` (same scan as
+ *  extractNumberEntries; foldDigits and the ٬/٫ folds are length-preserving, so
+ *  the indices address the original text). Used to exempt the components of a
+ *  FULLY grounded date from the per-number check (P2-A1). */
+function scanNumberEntries(
+  text: string,
+  locale: NumberLocale,
+): { raw: string; value: string | null; start: number; end: number }[] {
+  const folded = foldDigits(text ?? "").replace(/٬/g, ",").replace(/٫/g, ".");
+  const re =
+    /(\d[\d.,]*)\s*(ألف|آلاف|الف|آلآف|مليون|ملايين|مليار|مليارات|بليون|thousands?|millions?|billions?)?/giu;
+  const out: { raw: string; value: string | null; start: number; end: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(folded)) !== null) {
+    if (!m[1]) {
+      if (m.index === re.lastIndex) re.lastIndex++;
+      continue;
+    }
+    const raw = m[1].replace(/[.,]+$/, "");
+    let value = parseNumberToken(raw, locale);
+    const exp = scaleExponent(m[2]);
+    if (value !== null && exp > 0) value = applyScale(value, exp);
+    out.push({ raw, value, start: m.index, end: m.index + raw.length });
+  }
+  return out;
+}
+
+// --- P2-A1: date grounding (unsupported_date, blocking) --------------------
+//
+// A date in the draft must match a date the verified source states, compared
+// as a DATE (day + month [+ year]) under folding: month name ↔ numeric month,
+// zero padding, and day/month order both ways for an all-numeric date. A
+// matching day number and year existing SOMEWHERE in the source is not enough
+// — «10 أكتوبر 2026» against a source that says "as of October 7, 2026" is an
+// unsupported date even though 10 and 2026 both occur in the source. A year
+// alone («2026») or a month alone is NOT a date token (the number check
+// already covers a bare year). Same repairable class as unsupported_number.
+
+export type DateToken = {
+  raw: string;
+  start: number; // span in the ORIGINAL text
+  end: number;
+  // Every (day, month, year) reading of the token; an all-numeric d/m/y yields
+  // both day-first and month-first readings when both are valid.
+  readings: { d: number | null; m: number; y: number | null }[];
+  // P2R-4: a day RANGE / pair («7 و8 أكتوبر», "between October 1 and 7") —
+  // every reading is an endpoint that must be supported, not an alternative.
+  requireAll?: boolean;
+};
+
+// Month lexicon on the date-fold (diacritics stripped, alef folded, lowercase).
+// Gulf/Egyptian, Levantine and English names (+ common English abbreviations).
+const MONTH_NAMES: [string, number][] = [
+  ["يناير", 1], ["كانون الثاني", 1], ["فبراير", 2], ["شباط", 2], ["مارس", 3], ["اذار", 3],
+  ["ابريل", 4], ["نيسان", 4], ["مايو", 5], ["ايار", 5], ["يونيو", 6], ["يونيه", 6], ["حزيران", 6],
+  ["يوليو", 7], ["يوليه", 7], ["تموز", 7], ["اغسطس", 8], ["اب", 8], ["سبتمبر", 9], ["ايلول", 9],
+  ["اكتوبر", 10], ["تشرين الاول", 10], ["نوفمبر", 11], ["تشرين الثاني", 11], ["ديسمبر", 12],
+  ["كانون الاول", 12],
+  ["january", 1], ["jan", 1], ["february", 2], ["feb", 2], ["march", 3], ["mar", 3],
+  ["april", 4], ["apr", 4], ["may", 5], ["june", 6], ["jun", 6], ["july", 7], ["jul", 7],
+  ["august", 8], ["aug", 8], ["september", 9], ["sept", 9], ["sep", 9], ["october", 10],
+  ["oct", 10], ["november", 11], ["nov", 11], ["december", 12], ["dec", 12],
+  // Radar sources include European languages (accents are folded by dateFold).
+  // es / pt / fr / de / it — only names not already listed above.
+  ["enero", 1], ["febrero", 2], ["marzo", 3], ["abril", 4], ["mayo", 5], ["junio", 6],
+  ["julio", 7], ["agosto", 8], ["septiembre", 9], ["setiembre", 9], ["octubre", 10],
+  ["noviembre", 11], ["diciembre", 12],
+  ["janeiro", 1], ["fevereiro", 2], ["marco", 3], ["maio", 5], ["junho", 6], ["julho", 7],
+  ["setembro", 9], ["outubro", 10], ["novembro", 11], ["dezembro", 12],
+  ["janvier", 1], ["fevrier", 2], ["mars", 3], ["avril", 4], ["mai", 5], ["juin", 6],
+  ["juillet", 7], ["aout", 8], ["septembre", 9], ["octobre", 10], ["novembre", 11], ["decembre", 12],
+  ["januar", 1], ["februar", 2], ["marz", 3], ["juni", 6], ["juli", 7], ["oktober", 10], ["dezember", 12],
+  ["gennaio", 1], ["febbraio", 2], ["aprile", 4], ["maggio", 5], ["giugno", 6], ["luglio", 7],
+  ["settembre", 9], ["ottobre", 10], ["dicembre", 12],
+];
+const MONTH_LOOKUP = new Map(MONTH_NAMES.map(([n, v]) => [n, v]));
+const MONTH_ALT = [...MONTH_NAMES]
+  .map(([n]) => n)
+  .sort((a, b) => b.length - a.length)
+  .map((n) => n.replace(/ /g, "\\s+"))
+  .join("|");
+// A month word: optional Arabic proclitic (و/ب/ل/ف), the name, an optional
+// abbreviation dot, never inside a longer word; optional dual naming
+// «أكتوبر/تشرين الأول».
+const MONTH_RE_SRC =
+  `(?<![\\p{L}])[وبلف]?(${MONTH_ALT})\\.?(?![\\p{L}])(?:\\s*/\\s*(?:${MONTH_ALT})(?![\\p{L}]))?`;
+const DAY_SRC = `(\\d{1,2})(?:st|nd|rd|th|er|o|º)?\\.?`;
+const YEAR_SRC = `(?:عام\\s+|سنة\\s+|de\\s+|del\\s+)?(\\d{4})(?!\\d)`;
+// Connector between a day and its month: Arabic «من»/«شهر», English "of",
+// Romance "de"/"del".
+const DAY_MONTH_JOIN = `[\\s\\-/]*(?:(?:من|of|de|del)\\s+)?(?:شهر\\s+)?`;
+// P2R-4: second day of a pair/range ("7 and 8", «1 و7», "1-7", "1 to 7").
+const DAY_RANGE_SRC = `(?:\\s*(?:[-–&]|and|to|through|و|إلى|الى|حتى)\\s*(\\d{1,2})(?!\\d))?`;
+// P2R-4: month words too ambiguous to count as a standalone month mention
+// (English modal "may", verb "march", «مارس» "practised", «آب» "father").
+const AMBIGUOUS_STANDALONE_MONTHS = new Set(["may", "mar", "mai", "mars", "marco", "march", "اب", "مارس"]);
+
+/** Length-tracked date fold: digits → Western, Arabic diacritics/tatweel
+ *  dropped, alef forms → ا, Latin accents dropped (é → e), lowercase. `map[i]` is the original index of the
+ *  i-th folded character. */
+function dateFold(text: string): { s: string; map: number[] } {
+  const src = foldDigits(text ?? "");
+  let s = "";
+  const map: number[] = [];
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (/[ً-ٟؐ-ؚٰـ]/.test(c)) continue;
+    let o = /[أإآٱ]/.test(c) ? "ا" : c.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (o.length !== 1) o = c;
+    s += o;
+    map.push(i);
+  }
+  return { s, map };
+}
+
+function monthOf(word: string | undefined): number | null {
+  if (!word) return null;
+  return MONTH_LOOKUP.get(word.replace(/\s+/g, " ")) ?? null;
+}
+
+function validDay(d: number): boolean {
+  return d >= 1 && d <= 31;
+}
+
+/** Extract every date token from a text (ISO, all-numeric d/m/y or m/d/y with a
+ *  year, and month-name forms carrying a day and/or a year). */
+export function extractDateTokens(text: string): DateToken[] {
+  const { s, map } = dateFold(text);
+  const out: DateToken[] = [];
+  const taken: [number, number][] = [];
+  const free = (a: number, b: number) => !taken.some(([x, y]) => a < y && b > x);
+  const push = (a: number, b: number, readings: DateToken["readings"], requireAll = false) => {
+    if (!readings.length || !free(a, b)) return;
+    taken.push([a, b]);
+    const start = map[a];
+    const end = map[b - 1] + 1;
+    out.push({
+      raw: foldDigits(text).slice(start, end).trim(),
+      start,
+      end,
+      readings,
+      ...(requireAll && readings.length > 1 ? { requireAll: true } : {}),
+    });
+  };
+  const run = (
+    re: RegExp,
+    f: (m: RegExpExecArray) => DateToken["readings"] | { readings: DateToken["readings"]; all: boolean },
+  ) => {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(s)) !== null) {
+      const r = f(m);
+      if (Array.isArray(r)) push(m.index, m.index + m[0].length, r);
+      else push(m.index, m.index + m[0].length, r.readings, r.all);
+      if (m.index === re.lastIndex) re.lastIndex++;
+    }
+  };
+  // 1) ISO yyyy-mm-dd (also / and .), e.g. a "2026-10-07T…" timestamp.
+  run(/(?<!\d)(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)/g, (m) => {
+    const y = +m[1], mo = +m[2], d = +m[3];
+    return mo >= 1 && mo <= 12 && validDay(d) ? [{ d, m: mo, y }] : [];
+  });
+  // 2) All-numeric a/b/yyyy (or yy): both day-first and month-first readings.
+  run(/(?<![\d/.-])(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?![\d/.-])/g, (m) => {
+    const a = +m[1], b = +m[2];
+    let y = +m[3];
+    if (m[3].length === 2) y += 2000;
+    const r: DateToken["readings"] = [];
+    if (b >= 1 && b <= 12 && validDay(a)) r.push({ d: a, m: b, y });
+    if (a >= 1 && a <= 12 && validDay(b) && a !== b) r.push({ d: b, m: a, y });
+    return r;
+  });
+  // 3) Day[–Day] [من] [شهر] Month [, Year] — «7 أكتوبر 2026», «7 و8 أكتوبر»,
+  //    "7 October 2026", "07-Oct-2026" (P2R-4: hyphen/slash separators).
+  run(
+    new RegExp(
+      `(?<!\\d)${DAY_SRC}${DAY_RANGE_SRC}${DAY_MONTH_JOIN}${MONTH_RE_SRC}(?:[\\s,،\\-/]+${YEAR_SRC})?`,
+      "gu",
+    ),
+    (m) => {
+      const d = +m[1], mo = monthOf(m[3]);
+      const y = m[4] ? +m[4] : null;
+      if (!mo || !validDay(d)) return [];
+      const r: DateToken["readings"] = [{ d, m: mo, y }];
+      if (m[2] && validDay(+m[2])) r.push({ d: +m[2], m: mo, y });
+      return { readings: r, all: true };
+    },
+  );
+  // 4) Month Day[–Day][, Year] — "October 7, 2026", "Oct. 1-7, 2026",
+  //    "October 7 and 8", "between October 1 and 7". P2R-4: «مارس» is a month
+  //    only before a day-less year or after a day (shapes 3/5), never here.
+  run(
+    new RegExp(`${MONTH_RE_SRC}\\s+${DAY_SRC}${DAY_RANGE_SRC}(?![\\d])(?:,?\\s+${YEAR_SRC})?`, "gu"),
+    (m) => {
+      if (m[1] === "مارس") return [];
+      const mo = monthOf(m[1]);
+      const d1 = +m[2];
+      if (!mo || !validDay(d1)) return [];
+      const y = m[4] ? +m[4] : null;
+      const r: DateToken["readings"] = [{ d: d1, m: mo, y }];
+      if (m[3] && validDay(+m[3])) r.push({ d: +m[3], m: mo, y });
+      return { readings: r, all: true };
+    },
+  );
+  // 5) Month Year (no day) — «أكتوبر 2026», "October 2026".
+  run(new RegExp(`${MONTH_RE_SRC}[\\s,،]+${YEAR_SRC}`, "gu"), (m) => {
+    const mo = monthOf(m[1]);
+    return mo ? [{ d: null, m: mo, y: +m[2] }] : [];
+  });
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** Months the source MENTIONS: from its date tokens plus standalone,
+ *  unambiguous month words (P2R-4). */
+function sourceMonths(sourceText: string, tokens: DateToken[]): Set<number> {
+  const out = new Set<number>(tokens.flatMap((t) => t.readings.map((r) => r.m)));
+  const { s } = dateFold(sourceText);
+  const re = new RegExp(MONTH_RE_SRC, "gu");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    const w = m[1].replace(/\s+/g, " ");
+    if (AMBIGUOUS_STANDALONE_MONTHS.has(w)) continue;
+    const mo = monthOf(w);
+    if (mo) out.add(mo);
+  }
+  return out;
+}
+
+/** Is a draft date reading supported by a source date reading? Month must
+ *  match; a draft day must equal a stated source day; a draft year must equal
+ *  the source date's year, or — when that source date carries no year — the
+ *  year must itself occur as a number in the source. */
+function dateReadingSupported(
+  a: DateToken["readings"][number],
+  s: DateToken["readings"][number],
+  srcNumbers: Set<string>,
+): boolean {
+  if (a.m !== s.m) return false;
+  if (a.d !== null && s.d !== a.d) return false;
+  if (a.y !== null) {
+    if (s.y !== null) return s.y === a.y;
+    if (a.d === null) return false; // "month year" needs a source date with that year
+    return srcNumbers.has(String(a.y));
+  }
+  return true;
+}
+
+/** Draft date tokens that match no source date. */
+export function unsupportedDates(
+  draftText: string,
+  sourceText: string,
+  srcNumbers: Set<string> = new Set(),
+): { supported: DateToken[]; unsupported: DateToken[] } {
+  const srcTokens = extractDateTokens(sourceText);
+  // A source range/pair contributes BOTH endpoints as stated dates.
+  const src = srcTokens.flatMap((t) => t.readings);
+  const months = sourceMonths(sourceText, srcTokens);
+  const readingOk = (a: DateToken["readings"][number]) =>
+    src.some((s) => dateReadingSupported(a, s, srcNumbers)) ||
+    // P2R-4: a day-less "month year" is supported when the source mentions
+    // that month and the year occurs anywhere in the source.
+    (a.d === null && a.y !== null && months.has(a.m) && srcNumbers.has(String(a.y)));
+  const supported: DateToken[] = [];
+  const unsupported: DateToken[] = [];
+  for (const tok of extractDateTokens(draftText)) {
+    // A draft range/pair needs EVERY endpoint supported; a numeric d/m
+    // ambiguity needs ANY reading.
+    const ok = tok.requireAll ? tok.readings.every(readingOk) : tok.readings.some(readingOk);
+    (ok ? supported : unsupported).push(tok);
+  }
+  return { supported, unsupported };
+}
+
 /** PII-free diagnostic for one unsupported figure — logged (Deno runtime only,
  *  silent under `node --test`) so a real rejection can be proven, not inferred.
  *  Records ONLY numeric tokens/values, the source language, and normalization
@@ -486,15 +933,155 @@ function logNumberDiagnostic(d: {
   }
 }
 
-/** Extract quoted spans (Arabic «…», ASCII "…", curly “…”). */
-export function extractQuotes(text: string): string[] {
+// P2R-1 (replaces the P2-FIX3 word-count / speech-verb heuristic, which was
+// both leaky — «آمن تماماً» after «وصفت» passed — and too narrow — «بحسب»
+// misfired as a speech verb). A «»/"…"/“…” span is EXEMPT from the
+// invented-quotation check ONLY when it is demonstrably a transliterated source
+// NAME: (a) it carries no claim/safety word, AND (b) its consonant skeleton
+// matches a Latin token sequence of the verified source at ≥ 0.8 (the P2-A4
+// transliteration mapper; digits kept, acronyms also read letter by letter).
+// «كار-تي» (CAR-T), «تراي نت إكس» (TriNetX), «سي دي 19» (CD19), «نيتشر»
+// (Nature) are exempt; every other span is checked as before, whatever its
+// length or the words around it.
+const QUOTE_CLAIM_LEXICON = [
+  "آمن", "أمان", "خطر", "خطير", "فعال", "فعالية", "شفاء", "مضمون", "تحت السيطرة", "لا خطر", "نهائي",
+].map((w) => normalizeForCompare(w));
+export const QUOTE_NAME_MATCH_THRESHOLD = 0.8;
+
+// P2R2-A: the ~200 most common English words. A Latin window containing any of
+// them is never treated as a source NAME — sentence-initial "Some"/"There"
+// matched short Arabic words («سام»، «ثورة») in the P2R review.
+const ENGLISH_COMMON_WORDS = new Set(`
+the be to of and a in that have i it for not on with he as you do at this but his by
+from they we say her she or an will my one all would there their what so up out if
+about who get which go me when make can like time no just him know take people into
+year your good some could them see other than then now look only come its over think
+also back after use two how our work first well way even new want because any these
+give day most us is are was were been has had did does said says may might must shall
+should very more such many much each own same both few under while where why through
+during before between against again further once here those off down above below until
+being having doing very per via whether however since though although still yet ever
+never always often also several another every either neither nor upon within without
+among across around behind beyond near toward towards onto off out about rare serious
+urgent immediate good safe risk warning recall recalls recalled recalling product
+products patient patients people health food drug drugs company companies report
+reports reported according announced announce today said state states united national
+department agency administration consumers consumer customers customer use used using
+lot lots batch batches number numbers label labels date dates sold distributed store
+stores market markets retail online information contact call please note notice
+`.split(/\s+/).filter(Boolean));
+
+type LatinWindow = { variants: SkelTok[][]; len: number };
+const latinWindowCache = new Map<string, LatinWindow[]>();
+
+/** A token reads as an acronym / mixed-case name (CD19, CAR, TriNetX, HeFH). */
+function isAcronymish(t: string): boolean {
+  return (t.match(/[A-Z]/g) ?? []).length >= 2 || (/[A-Z]/.test(t) && /\d/.test(t));
+}
+
+/**
+ * Latin token windows (1–3 adjacent tokens joined only by space/hyphen/slash)
+ * with skeleton variants (each token phonetic or, for an acronym, spelled
+ * letter by letter). P2R2-A: a window is kept only when it is a plausible
+ * PROPER NAME — no token is a common English word, and it is multi-token, or an
+ * acronym/mixed-case token, or a token that appears capitalised in a
+ * NON-sentence-initial position somewhere in the text ("published in Nature").
+ * `requireName: false` (the draft's own gloss parentheses) skips only the
+ * proper-name test, never the common-word test.
+ */
+function latinWindows(text: string, requireName: boolean): LatinWindow[] {
+  const key = `${requireName ? "n" : "g"}\u0000${text ?? ""}`;
+  const hit = latinWindowCache.get(key);
+  if (hit) return hit;
+  const src = text ?? "";
+  const toks: { t: string; start: number; end: number }[] = [];
+  const re = /[A-Za-z][A-Za-z0-9]*|[0-9]+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) toks.push({ t: m[0], start: m.index, end: m.index + m[0].length });
+  // Tokens seen capitalised mid-sentence (not at text start / after . ! ? : or a line break).
+  const midCaps = new Set<string>();
+  for (const tk of toks) {
+    if (!/^[A-Z]/.test(tk.t)) continue;
+    const before = src.slice(0, tk.start).replace(/[\s"'“”«»(\[]+$/u, "");
+    if (before && !/[.!?:؟\n]$/.test(before)) midCaps.add(tk.t);
+  }
+  const options = (t: string): SkelTok[][] => {
+    const seen = new Map<string, SkelTok[]>();
+    const put = (sk: SkelTok[]) => {
+      if (sk.length) seen.set(sk.map((x) => [...x].sort().join("")).join("|"), sk);
+    };
+    for (const v of latinVariants(t)) put(v);
+    if (/^[A-Z0-9]{1,6}$/.test(t) && /[A-Z]/.test(t)) put(letterNameSkeleton(t));
+    return [...seen.values()];
+  };
+  const common = (t: string) => ENGLISH_COMMON_WORDS.has(t.toLowerCase());
+  const out: LatinWindow[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    if (!/^[A-Z0-9]/.test(toks[i].t) || common(toks[i].t)) continue;
+    let combos: SkelTok[][] = options(toks[i].t);
+    const parts = [toks[i].t];
+    for (let k = i; k < Math.min(toks.length, i + 3); k++) {
+      if (k > i) {
+        if (!/^[\s\-/]*$/.test(src.slice(toks[k - 1].end, toks[k].start))) break;
+        if (common(toks[k].t)) break;
+        parts.push(toks[k].t);
+        const next = options(toks[k].t);
+        const merged: SkelTok[][] = [];
+        for (const a of combos) for (const b of next) merged.push(collapseSkeleton([...a, ...b]));
+        combos = merged.slice(0, 64);
+      }
+      const name = parts.length >= 2 || parts.some(isAcronymish) || parts.some((p) => midCaps.has(p));
+      if ((!requireName || name) && combos.length) {
+        out.push({ variants: combos, len: Math.min(...combos.map((c) => c.length)) });
+      }
+    }
+  }
+  if (latinWindowCache.size > 32) latinWindowCache.clear();
+  latinWindowCache.set(key, out);
+  return out;
+}
+
+/** The Latin text inside the draft's own gloss parentheses «عربي (Latin)». */
+function draftGlossLatin(draftText: string): string {
+  return [...(draftText ?? "").matchAll(/\(([^()\n]{1,80})\)/g)]
+    .map((m) => m[1])
+    .filter((x) => /[A-Za-z]/.test(x))
+    .join("\n");
+}
+
+/** Is quoted span `q` a transliterated NAME (see above)? P2R2-A: its skeleton
+ *  needs ≥3 consonants (under every variant), no claim word, and a ≥0.8 match
+ *  against (a) a Latin sequence in the draft's own gloss parentheses, or (b) a
+ *  plausible proper-name sequence of the verified source. */
+export function isTransliteratedSourceName(q: string, sourceText: string, draftText = ""): boolean {
+  if (!/[؀-ۿ]/.test(q ?? "")) return false;
+  const qn = normalizeForCompare(q);
+  if (QUOTE_CLAIM_LEXICON.some((w) => qn.includes(w))) return false;
+  const ar = arabicVariants(q.replace(/[-–]/g, " "));
+  if (Math.min(...ar.map((a) => a.length)) < 3) return false;
+  const arLen = Math.max(...ar.map((a) => a.length));
+  const windows = [...latinWindows(draftGlossLatin(draftText), false), ...latinWindows(sourceText, true)];
+  for (const w of windows) {
+    if (w.len > arLen * 2 || arLen > w.len * 2) continue;
+    if (bestSkeletonRatio(ar, w.variants) >= QUOTE_NAME_MATCH_THRESHOLD) return true;
+  }
+  return false;
+}
+
+/** Extract quotation spans (Arabic «…», ASCII "…", curly “…”). With the
+ *  verified `sourceText`, a span that is a transliterated source name is not a
+ *  quotation (isTransliteratedSourceName); without it, every span is returned. */
+export function extractQuotes(text: string, sourceText?: string): string[] {
   const out: string[] = [];
+  const src = text ?? "";
   const patterns = [/«([^»]+)»/g, /"([^"]+)"/g, /\u201C([^\u201D]+)\u201D/g];
   for (const re of patterns) {
     let m: RegExpExecArray | null;
-    while ((m = re.exec(text ?? "")) !== null) {
+    while ((m = re.exec(src)) !== null) {
       const q = m[1].trim();
-      if (q) out.push(q);
+      if (!q) continue;
+      if (sourceText !== undefined && isTransliteratedSourceName(q, sourceText, src)) continue;
+      out.push(q);
     }
   }
   return out;
@@ -571,11 +1158,21 @@ const OFFICIAL_ACTION_PATTERNS: { code: string; patterns: RegExp[] }[] = [
     /توقف(?:وا)? عن (?:الاستخدام|الاستعمال|استخدام|استعمال|تناول)/,
     /عدم (?:استخدام|استعمال|تناول)/,
     /لا تستخدم/, /لا تستعمل/, /الكف عن/,
+    // P2-FIX1: transitive imperative/plural ("أوقف/أوقفوا استخدام …").
+    /أوقف(?:وا)? (?:الاستخدام|الاستعمال|استخدام|استعمال|تناول)/,
     /stop using/, /discontinue/, /do not use/, /cease use/,
   ] },
   { code: "avoid", patterns: [/تجنب/, /الامتناع عن/, /avoid/, /refrain from/] },
   { code: "return", patterns: [
     /إعادة (?:المنتج|الدواء|المستحضر|العبوة)/, /أعيدوا/, /إرجاع/, /استرجاع/,
+    // P2-FIX1 / P2R-3: singular imperative "أعد/أعده/أعدها" counts as a return
+    // ONLY with an explicit object in the pattern — the product/stock
+    // (المنتج/العبوات/الكميات…) or a return destination (إلى المورد/الصيدلية/
+    // مكان الشراء…). A bare «أعدّه»/«أعدها» is the verb "prepared" («تقرير أعدّه
+    // فريق»، «دراسة أعدها باحثون») and never an official action.
+    /(?:^|[^\p{L}])[وف]?أعد(?:ه|ها|هما)?(?![\p{L}])\s*(?:ال)?(?:منتج|دواء|مستحضر|عبوة|عبوات|كمية|كميات|مخزون)(?![\p{L}])/u,
+    /(?:^|[^\p{L}])[وف]?أعد(?:ه|ها|هما)?(?![\p{L}])\s*(?:إلى|الى)\s*(?:ال)?(?:مورد|موزع|صيدلية|صيدلي|شركة|بائع|متجر|مكان الشراء|نقطة الشراء)/u,
+    /(?:^|[^\p{L}])[وف]?أعد(?:ه|ها|هما)?(?![\p{L}])\s*(?:(?:إلى|الى)\s*)?مكان الشراء/u,
     /إعادة المنتج إلى مكان الشراء/, /إعادة العبوة إلى الصيدلية/, /الاستبدال أو الإرجاع/,
     /return (?:the|it|them|any|all|unused|recalled|product|item|medication|drug)/,
     /return\b[^.]{0,20}(?:place|point) of purchase/,
@@ -591,15 +1188,24 @@ const OFFICIAL_ACTION_PATTERNS: { code: string; patterns: RegExp[] }[] = [
     // product. This is a bounded whitelist of grammatical variants — never
     // free-form fuzzy matching — so "التخلص منه" counts the same as
     // "التخلص من المنتج", while an unrelated pronoun cannot invent a discard.
-    /التخلص من (?:ال)?(?:منتج|دواء|مستحضر|عبوة|عبوات|كمية|كميات|مخزون)/,
+    //
+    // P2-FIX2: the bounded object whitelist also names the product FORMS a
+    // recall commonly refers to (أقراص/حقن/بخاخ/مستحضرات) and the stock words
+    // "غير المستخدم"/"المتبقي" (the unused/remaining product), e.g.
+    // «التخلّص من غير المستخدم أو إعادته». Still a closed list — no fuzzy match.
+    /التخلص من (?:ال)?(?:منتج|دواء|مستحضر|عبوة|عبوات|كمية|كميات|مخزون|أقراص|حقن|بخاخ|متبقي)/,
+    /التخلص من غير المستخدم/,
     /التخلص من الكميات المتأثرة/,
     /التخلص من(?:ه|ها|هما)/,
-    /تخلص(?:وا)? من (?:ال)?(?:منتج|دواء|عبوة|عبوات|كمية|كميات|مخزون)/,
+    /تخلص(?:وا)? من (?:ال)?(?:منتج|دواء|مستحضر|عبوة|عبوات|كمية|كميات|مخزون|أقراص|حقن|بخاخ|متبقي)/,
+    /تخلص(?:وا)? من غير المستخدم/,
     /تخلص(?:وا)? من(?:ه|ها|هما)/,
-    /إتلاف (?:ال)?(?:منتج|دواء|عبوة|عبوات|كمية|كميات|مخزون)/,
+    /إتلاف (?:ال)?(?:منتج|دواء|مستحضر|عبوة|عبوات|كمية|كميات|مخزون|أقراص|حقن|بخاخ|متبقي)/,
+    /إتلاف غير المستخدم/,
     /إتلاف الكميات المتأثرة/,
     /إتلاف(?:ه|ها|هما)/,
-    /رمي (?:ال)?(?:منتج|دواء|عبوة)/,
+    /رمي (?:ال)?(?:منتج|دواء|مستحضر|عبوة|أقراص|حقن|بخاخ|متبقي)/,
+    /رمي غير المستخدم/,
     /discard/, /dispose of/, /throw (?:it|them|the product|the item)? ?away/,
   ] },
   { code: "check", patterns: [
@@ -608,11 +1214,24 @@ const OFFICIAL_ACTION_PATTERNS: { code: string; patterns: RegExp[] }[] = [
   ] },
   { code: "contact", patterns: [
     /التواصل مع/, /الاتصال (?:بـ|ب)/, /تواصلوا/, /راجعوا الجهة/,
+    // P2-FIX1: imperative singular/plural source forms ("اتصل/اتصلوا بالشركة",
+    // "تواصل/تواصلوا مع", "راجع/راجعوا الشركة/الصيدلية"). A call to the DOCTOR /
+    // emergency stays seek_help only, so it never licenses an invented
+    // "contact the company" in the article.
+    /(?:^|[^\p{L}])[وف]?اتصل(?:وا)? (?:بـ ?|ب)(?!(?:ال)?طبيب|الطوارئ|أقرب|اقرب)/u,
+    // P2R-3: «تواصل مع» counts as contact only with an explicit object (the
+    // company / regulator / pharmacy / supplier); «تواصل مع الطبيب» is seek_help.
+    /(?:^|[^\p{L}])[وف]?تواصل(?:وا)? مع (?:ال)?(?:شركة|هيئة|جهة|صيدلية|صيدلي|مورد|موزع|مصنع)/u,
+    /(?:^|[^\p{L}])[وف]?راجع(?:وا)? (?:الجهة|الشركة|الصيدلية|الصيدلي|المورد|الموزع|مكان الشراء)/u,
     /contact (?:the|your|their|a) /, /reach out to/,
   ] },
   { code: "seek_help", patterns: [
     /مراجعة (?:الطبيب|الطوارئ|أقرب)/, /استشارة (?:الطبيب|طبيب|مختص)/,
     /راجع(?:وا)? الطبيب/, /اتصل(?:وا)? بالطبيب/,
+    // P2-FIX1: imperative forms aimed at a clinician / emergency care.
+    /(?:^|[^\p{L}])[وف]?راجع(?:وا)? (?:طبيب|الطوارئ|أقرب|اقرب)/u,
+    /(?:^|[^\p{L}])[وف]?اتصل(?:وا)? (?:بـ ?|ب)(?:طبيب|الطوارئ|أقرب|اقرب)/u,
+    /(?:^|[^\p{L}])[وف]?تواصل(?:وا)? مع (?:ال)?طبيب/u,
     /طلب (?:المساعدة|الرعاية|المشورة) الطبية/,
     /seek (?:medical|immediate|urgent|emergency)/, /consult (?:a |your |their )?doctor/,
     /contact (?:their|your|a|the) (?:doctor|physician|health ?care provider|healthcare provider)/,
@@ -979,6 +1598,327 @@ function findIdentityOccurrences(
   return out;
 }
 
+// --- P2-A4: transliteration plausibility (name_transliteration_suspect) -----
+//
+// REVIEW-ONLY signal, never blocking. For a glossed identity «عربي (Latin)» the
+// Arabic rendering before the parenthesis is reduced to a CONSONANT skeleton
+// and compared with the Latin name's consonant skeleton (longest common
+// subsequence over compatible sound classes). A rendering that loses or swaps
+// consonants (سكيترا for Spectra — the P is gone) scores low and is flagged for
+// a human; a faithful one (سبكترا) scores ~1. The exact Latin identity inside
+// the gloss is still what the factual entity check validates — this layer only
+// warns that the Arabic spelling may be invented.
+
+// Sound classes. Latin consonants map to one or more classes; each Arabic
+// letter maps to the set of Latin classes it can render. Vowels (and the
+// Arabic long-vowel/hamza letters) carry no skeleton weight.
+const AR_SKELETON: Record<string, string[]> = {
+  "ب": ["B", "P"], "پ": ["P"], "ت": ["T"], "ط": ["T"], "ث": ["T", "S"], "ج": ["J", "G"],
+  "چ": ["CH"], "ح": ["H"], "خ": ["K", "H"], "د": ["D"], "ض": ["D"], "ذ": ["D", "Z"],
+  "ر": ["R"], "ز": ["Z", "S"], "س": ["S", "Z"], "ص": ["S"], "ش": ["SH", "CH", "S"],
+  "ظ": ["Z", "D"], "غ": ["G"], "گ": ["G"], "ف": ["F", "V", "P"], "ڤ": ["V", "F"],
+  "ق": ["K", "G"], "ك": ["K", "G", "CH"], "ل": ["L"], "م": ["M"], "ن": ["N"], "ه": ["H"],
+};
+// Arabic letters that are vowels / hamza seats / ignorable for the skeleton.
+const AR_SKELETON_SKIP = /[اأإآٱءؤئوىيةعـً-ٰٟ]/;
+
+type SkelTok = Set<string>;
+
+function collapseSkeleton(toks: SkelTok[]): SkelTok[] {
+  const out: SkelTok[] = [];
+  for (const t of toks) {
+    const prev = out[out.length - 1];
+    // Collapse only an IDENTICAL adjacent class (a doubled consonant / shadda),
+    // never two different letters that merely share a class.
+    if (prev && prev.size === t.size && [...t].every((c) => prev.has(c))) continue;
+    out.push(new Set(t));
+  }
+  return out;
+}
+
+/** Consonant skeleton of an Arabic word/phrase (vowel letters dropped,
+ *  adjacent same-class consonants — shadda/doubling — collapsed). Digit runs
+ *  (Arabic-Indic folded) are kept as exact tokens («سي دي 19» ↔ CD19).
+ *  P2R-7 variants: `tch` reads «تش» as ONE sound (نيتشر ↔ Nature); `dropFinalH`
+ *  treats a word-final ه as silent (نستله ↔ Nestle). */
+export function arabicSkeleton(
+  word: string,
+  opts: { tch?: boolean; dropFinalH?: boolean } = {},
+): SkelTok[] {
+  const toks: SkelTok[] = [];
+  const w = foldDigits(word ?? "");
+  for (let i = 0; i < w.length; i++) {
+    const ch = w[i];
+    if (/\d/.test(ch)) {
+      let j = i;
+      while (j + 1 < w.length && /\d/.test(w[j + 1])) j++;
+      toks.push(new Set([`#${w.slice(i, j + 1)}`]));
+      i = j;
+      continue;
+    }
+    if (AR_SKELETON_SKIP.test(ch)) continue;
+    if (opts.tch && ch === "ت" && w[i + 1] === "ش") {
+      toks.push(new Set(["T", "CH", "SH"]));
+      i++;
+      continue;
+    }
+    if (opts.dropFinalH && ch === "ه" && !/[\u0600-\u06FF]/.test(w[i + 1] ?? "")) continue;
+    const cls = AR_SKELETON[ch];
+    if (cls) toks.push(new Set(cls));
+  }
+  return collapseSkeleton(toks);
+}
+
+/** Consonant skeleton of a Latin word (digraphs ph/sh/ch/th/kh/gh/ck/qu/pf,
+ *  soft c/g before e/i/y, x = k+s, vowels and w/y dropped). Digit runs are
+ *  exact tokens. P2R-7 variants: `keepH` keeps every h (Boehringer ↔ بوهرنجر,
+ *  whose h Arabic voices); `initialXasZ` reads a word-initial x as ز (Xarelto ↔
+ *  زاريلتو) instead of كس. */
+export function latinSkeleton(
+  word: string,
+  opts: { keepH?: boolean; initialXasZ?: boolean } = {},
+): SkelTok[] {
+  const w = (word ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const toks: SkelTok[] = [];
+  const add = (...c: string[]) => toks.push(new Set(c));
+  for (let i = 0; i < w.length; i++) {
+    const c = w[i];
+    const n = w[i + 1] ?? "";
+    if (/\d/.test(c)) {
+      let j = i;
+      while (j + 1 < w.length && /\d/.test(w[j + 1])) j++;
+      add(`#${w.slice(i, j + 1)}`);
+      i = j;
+      continue;
+    }
+    const two = c + n;
+    if (two === "ph") { add("F"); i++; continue; }
+    if (two === "sh") { add("SH"); i++; continue; }
+    if (two === "ch") { add("CH", "SH", "K"); i++; continue; }
+    if (two === "th") { add("T"); i++; continue; }
+    if (two === "kh") { add("K", "H"); i++; continue; }
+    if (two === "gh") { add("G"); i++; continue; }
+    if (two === "ck") { add("K"); i++; continue; }
+    if (two === "qu") { add("K"); i++; continue; }
+    if (two === "pf" && i === 0) { add("F"); i++; continue; } // Pfizer: silent p
+    if ("aeiouwy".includes(c)) continue;
+    // h is voiced only before a vowel (Humira, Hydro); a silent h after a
+    // consonant (Rhine), before a consonant (John) or word-final (Sarah) is
+    // dropped — unless the keepH variant is being scored.
+    if (!opts.keepH && c === "h" && (n === "" || !"aeiouy".includes(n) || (i > 0 && !"aeiou".includes(w[i - 1])))) continue;
+    const soft = n !== "" && "eiy".includes(n);
+    switch (c) {
+      case "b": case "p": add("B", "P"); break;
+      case "t": add("T"); break;
+      case "d": add("D"); break;
+      case "j": add("J"); break;
+      case "g": if (soft) add("G", "J"); else add("G"); break;
+      case "k": case "q": add("K"); break;
+      case "c": if (soft) add("S", "Z"); else add("K"); break;
+      case "x":
+        if (i === 0 && opts.initialXasZ) add("Z", "S");
+        else { add("K"); add("S", "Z"); }
+        break;
+      case "s": add("S", "Z"); break;
+      case "z": add("Z", "S"); break;
+      case "f": add("F"); break;
+      case "v": add("V", "F"); break;
+      case "l": add("L"); break;
+      case "m": add("M"); break;
+      case "n": add("N"); break;
+      case "r": add("R"); break;
+      case "h": add("H"); break;
+      default: break;
+    }
+  }
+  return collapseSkeleton(toks);
+}
+
+// Spelled-out English letter names as Arabic writes them in acronyms
+// (CD → «سي دي», T → «تي», X → «إكس»): the consonant skeleton of each name.
+const LETTER_NAME_SKELETON: Record<string, string[][]> = {
+  a: [], b: [["B", "P"]], c: [["S", "Z"]], d: [["D"]], e: [], f: [["F"]], g: [["J", "G"]],
+  h: [["T"], ["SH", "CH"]], i: [], j: [["J", "G"]], k: [["K"]], l: [["L"]], m: [["M"]], n: [["N"]],
+  o: [], p: [["B", "P"]], q: [["K"]], r: [["R"]], s: [["S", "Z"]], t: [["T"]], u: [],
+  v: [["F", "V"]], w: [["D"], ["B", "P"], ["L"]], x: [["K"], ["S", "Z"]], y: [], z: [["Z", "S"]], 
+};
+
+/** Skeleton of an acronym read letter by letter («سي دي 19» for CD19). */
+export function letterNameSkeleton(token: string): SkelTok[] {
+  const toks: SkelTok[] = [];
+  const t = (token ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (/\d/.test(c)) {
+      let j = i;
+      while (j + 1 < t.length && /\d/.test(t[j + 1])) j++;
+      toks.push(new Set([`#${t.slice(i, j + 1)}`]));
+      i = j;
+      continue;
+    }
+    for (const cls of LETTER_NAME_SKELETON[c] ?? []) toks.push(new Set(cls));
+  }
+  return collapseSkeleton(toks);
+}
+
+function skeletonLcs(a: SkelTok[], b: SkelTok[]): number {
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const match = [...a[i - 1]].some((c) => b[j - 1].has(c));
+      dp[i][j] = match ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+/** Skeleton similarity in [0,1]: LCS / max(len). Symmetric — a rendering that
+ *  drops a consonant (سكيترا vs Spectra) or adds one is penalised. */
+export function skeletonSimilarity(arabic: string, latin: string): number {
+  return bestSkeletonRatio(arabicVariants(arabic), latinVariants(latin));
+}
+
+/** The Arabic skeleton variants scored for a rendering (P2R-7). */
+function arabicVariants(arabic: string): SkelTok[][] {
+  return [
+    arabicSkeleton(arabic),
+    arabicSkeleton(arabic, { tch: true }),
+    arabicSkeleton(arabic, { dropFinalH: true }),
+    arabicSkeleton(arabic, { tch: true, dropFinalH: true }),
+  ];
+}
+
+/** The Latin skeleton variants scored for a word (P2R-7). */
+function latinVariants(latin: string): SkelTok[][] {
+  return [
+    latinSkeleton(latin),
+    latinSkeleton(latin, { keepH: true }),
+    latinSkeleton(latin, { initialXasZ: true }),
+    latinSkeleton(latin, { keepH: true, initialXasZ: true }),
+  ];
+}
+
+/** Best LCS / max(len) over every (Arabic, Latin) skeleton variant pair. A
+ *  variant only ever reads a letter the way the other script plausibly writes
+ *  it, so a genuinely lost/swapped consonant (سكيترا vs Spectra) still scores
+ *  low under every variant. */
+function bestSkeletonRatio(as: SkelTok[][], ls: SkelTok[][]): number {
+  let best = 0;
+  for (const a of as) {
+    if (!a.length) continue;
+    for (const l of ls) {
+      if (!l.length) continue;
+      best = Math.max(best, skeletonLcs(a, l) / Math.max(a.length, l.length));
+    }
+  }
+  return best;
+}
+
+// Final threshold, tuned on the P2 fixture set (see salmaWriter.test.ts "P2-A4"):
+// the brief's starting value 0.6 let both known-bad renderings (سكيترا/Spectra
+// and إنليكيسايد/enlicitide, each 0.8 — one consonant lost of five) through, so
+// it was raised. Every one of the 20 correct fixture pairs scores 1.0.
+export const TRANSLITERATION_SUSPECT_THRESHOLD = 0.85;
+
+// Latin words that are normally TRANSLATED, not transliterated (descriptors,
+// institution words, nationality adjectives). They are excluded from scoring so
+// «جامعة هارفارد (Harvard University)» is judged on "Harvard" alone.
+const TRANSLATED_LATIN_WORDS = new Set([
+  "the", "of", "and", "for", "in", "on", "at", "a", "an", "us", "u", "s", "uk",
+  "university", "hospital", "hospitals", "health", "healthcare", "food", "drug", "drugs",
+  "administration", "organization", "organisation", "ministry", "center", "centre",
+  "centers", "centres", "institute", "institutes", "national", "international", "world",
+  "company", "co", "pharmaceuticals", "pharmaceutical", "pharma", "medical", "medicine",
+  "medicines", "laboratories", "laboratory", "labs", "foundation", "association", "society",
+  "college", "school", "agency", "authority", "department", "council", "clinic", "clinics",
+  "research", "cancer", "heart", "disease", "diseases", "control", "prevention", "services",
+  "service", "human", "public", "general", "group", "holdings", "global", "sciences",
+  "science", "biotech", "therapeutics", "european", "union", "federal", "state", "royal",
+  "children", "childrens", "women", "care", "system", "network", "trust", "board",
+  "commission", "office", "bureau", "corporation", "inc", "ltd", "llc", "plc", "gmbh", "sa",
+  "ag", "nv", "american", "british", "french", "german", "japanese", "swiss", "canadian",
+  "chinese", "indian", "korean", "saudi", "kuwaiti", "emirati", "arab", "arabian", "gulf",
+  "middle", "east", "australian", "danish", "swedish", "dutch", "italian", "spanish",
+  "hydrochloride", "sodium", "potassium", "calcium", "injection", "tablets", "tablet",
+  "capsules", "capsule", "solution", "suspension", "usp", "bp", "ndc", "lot",
+]);
+
+/** The Arabic text immediately before the `(` that opens a gloss at
+ *  `parenIdx` (up to ~40 chars, stopping at punctuation / a line break). */
+export function arabicRenderingWindow(text: string, parenIdx: number): string {
+  const before = (text ?? "").slice(Math.max(0, parenIdx - 40), parenIdx);
+  const cut = before.split(/[.,،؛:!?؟«»"()\[\]\n“”]/);
+  return (cut[cut.length - 1] ?? "").trim();
+}
+
+/** Strip a leading definite article / article-bearing proclitic for scoring. */
+function stripArticle(w: string): string {
+  const m = w.match(/^(?:[وف]?[بك]?ال|[وف]?لل)(.{2,})$/u);
+  return m ? m[1] : w;
+}
+
+/**
+ * Score an Arabic rendering window against a Latin identity: each scorable
+ * Latin word is matched to its best Arabic word (or a run of up to three
+ * adjacent Arabic words, for «أسترا زينيكا»), weighted by the Latin word's skeleton length. Returns
+ * null when nothing is scorable (acronyms, translated-only names). The chosen
+ * Arabic words (in window order) are returned as the rendering.
+ */
+export function transliterationScore(
+  window: string,
+  latinIdentity: string,
+  opts: { namesOnly?: boolean } = {},
+): { score: number; rendering: string } | null {
+  const identity = (latinIdentity ?? "").trim();
+  // An all-caps acronym (FDA, WHO, NHS) is translated, never transliterated.
+  if (/^[A-Z0-9.&\s-]{2,8}$/.test(identity)) return null;
+  const arWords = (window ?? "")
+    .split(/\s+/)
+    .map((w) => w.replace(/[^؀-ۿ]/g, ""))
+    .filter(Boolean);
+  if (!arWords.length) return null;
+  const candidates: { text: string; idx: number[] }[] = [];
+  arWords.forEach((w, i) => {
+    let text = "";
+    const idx: number[] = [];
+    for (let k = i; k < Math.min(arWords.length, i + 3); k++) {
+      text += stripArticle(arWords[k]);
+      idx.push(k);
+      candidates.push({ text, idx: [...idx] });
+    }
+  });
+  let totalWeight = 0;
+  let total = 0;
+  const used = new Set<number>();
+  for (const lw of identity.split(/[\s\-/]+/)) {
+    const lower = lw.toLowerCase().replace(/[^a-z]/g, "");
+    if (!lower || TRANSLATED_LATIN_WORDS.has(lower)) continue;
+    // An acronym word (SGLT2, CD19, HeFH, GLP-1) is spelled, not transliterated.
+    if (isAcronymGloss(lw)) continue;
+    // P2R-7a: in a self-identified gloss pair only proper-name words count —
+    // a capitalised word or an INN-style drug name; a lowercase common noun
+    // («مثبطات (inhibitors)») is a translation.
+    if (opts.namesOnly && !/^[A-Z]/.test(lw) && !DRUG_NAME_SUFFIX_RE.test(lower)) continue;
+    const skel = latinSkeleton(lower);
+    if (skel.length < 2) continue;
+    let best = 0;
+    let bestIdx: number[] = [];
+    for (const c of candidates) {
+      const s = skeletonSimilarity(c.text, lower);
+      if (s > best || (s === best && c.idx.length < bestIdx.length)) {
+        best = s;
+        bestIdx = c.idx;
+      }
+    }
+    for (const i of bestIdx) used.add(i);
+    totalWeight += skel.length;
+    total += best * skel.length;
+  }
+  if (totalWeight === 0) return null;
+  const rendering = arWords.filter((_, i) => used.has(i)).join(" ");
+  return { score: total / totalWeight, rendering };
+}
+
 export type ForeignNameStatus = {
   // "ok": exact identity present, first mention is an Arabic-first gloss, not in
   //       the title, not repeated. "missing": exact identity absent everywhere.
@@ -989,7 +1929,80 @@ export type ForeignNameStatus = {
   englishFirst: boolean;
   englishInTitle: boolean;
   englishRepeated: boolean;
+  // P2-A4: the Arabic rendering immediately before the first-mention gloss and
+  // its skeleton score vs the Latin identity (null when not glossed / not
+  // scorable). `transliterationSuspect` is a REVIEW signal only — it never
+  // changes `status`.
+  arabicRendering?: string | null;
+  transliterationScore?: number | null;
+  transliterationSuspect?: boolean;
 };
+
+// P2R-7a: INN-style drug-name endings — a single lowercase parenthetical with
+// one of these is a drug name («إنليكيسايد (enlicitide)»), not a translated
+// common noun («التهاب الكبد (hepatitis)»), so it is scored too.
+const DRUG_NAME_SUFFIX_RE =
+  /(?:mab|tide|nib|pril|sartan|olol|azole|cillin|mycin|floxacin|vir|statin|gliflozin|glutide|gliptin|parin|pron|cept|lukast|dronate|setron|triptan)$/;
+
+/**
+ * P2R-7a: EVERY Arabic-rendering + «(Latin)» gloss pair in a text, scored
+ * against its OWN parenthetical (the pair is self-identifying — no entity list
+ * needed). A parenthetical is a name when it carries a capitalised word that is
+ * not a normally-translated word, or is a single lowercase INN-style drug name;
+ * translations of common nouns, acronyms and descriptor-only glosses are not
+ * scored (transliterationScore returns null). Returns the suspect pairs.
+ */
+/** P2R2-E: a pure acronym / abbreviation (≥2 capitals, more capitals than
+ *  lowercase, ≤6 letters+digits: HeFH, GLP-1, LDL, SGLT2). A gloss whose Latin
+ *  side is one is an abbreviation expansion, never a transliteration. */
+export function isAcronymGloss(latin: string): boolean {
+  const core = (latin ?? "").replace(/[^A-Za-z0-9]/g, "");
+  const up = (core.match(/[A-Z]/g) ?? []).length;
+  const low = (core.match(/[a-z]/g) ?? []).length;
+  return core.length >= 2 && core.length <= 6 && up >= 2 && up > low;
+}
+
+export function suspectGlossPairs(text: string): { latin: string; rendering: string; score: number }[] {
+  const t = text ?? "";
+  const out: { latin: string; rendering: string; score: number }[] = [];
+  const re = /\(([^()\n]{2,80})\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    const latin = m[1].trim();
+    if (!/[A-Za-z]/.test(latin) || /[\u0600-\u06FF]/.test(latin)) continue;
+    if (isAcronymGloss(latin)) continue; // P2R2-E
+    let i = m.index - 1;
+    while (i >= 0 && /\s/.test(t[i])) i--;
+    if (i < 0 || !/[\u0600-\u06FF]/.test(t[i])) continue;
+    const words = latin.split(/[\s,]+/).filter(Boolean);
+    const named = words.some(
+      (w) =>
+        /^[A-Z][a-z]/.test(w) && !TRANSLATED_LATIN_WORDS.has(w.toLowerCase().replace(/[^a-z]/g, "")),
+    );
+    const drug = words.length === 1 && /^[a-z]+$/.test(words[0]) && DRUG_NAME_SUFFIX_RE.test(words[0]);
+    if (!named && !drug) continue;
+    const sc = transliterationScore(arabicRenderingWindow(t, i + 1), latin, { namesOnly: true });
+    if (sc && sc.score < TRANSLITERATION_SUSPECT_THRESHOLD) out.push({ latin, rendering: sc.rendering, score: sc.score });
+  }
+  return out;
+}
+
+/** P2-A4/A5: the Arabic rendering (and its score) of the first glossed
+ *  occurrence of `entity` in `visible`, or null when it is not glossed. */
+export function glossedRendering(
+  visible: string,
+  entity: string,
+): { rendering: string; score: number } | null {
+  const identity = stripFormalSuffixes(entity);
+  const occ = findIdentityOccurrences(visible ?? "", identity);
+  const first = occ.find((o) => o.isGloss);
+  if (!first) return null;
+  let i = first.index - 1;
+  while (i >= 0 && /\s/.test(visible[i])) i--;
+  const win = arabicRenderingWindow(visible, i);
+  const s = transliterationScore(win, identity);
+  return s ? { rendering: s.rendering, score: s.score } : null;
+}
 
 /**
  * Deterministically evaluate the Arabic-first naming contract for one protected
@@ -1022,6 +2035,7 @@ export function foreignEssentialNameStatus(input: {
   const englishInTitle = titleOcc.length > 0;
   const englishRepeated = occ.length >= 2;
   const clean = firstMentionGloss && !englishInTitle && !englishRepeated;
+  const g = firstMentionGloss ? glossedRendering(input.visible ?? "", input.entity) : null;
   return {
     status: clean ? "ok" : "flagged",
     present: true,
@@ -1029,7 +2043,18 @@ export function foreignEssentialNameStatus(input: {
     englishFirst,
     englishInTitle,
     englishRepeated,
+    arabicRendering: g ? g.rendering : null,
+    transliterationScore: g ? g.score : null,
+    transliterationSuspect: g ? g.score < TRANSLITERATION_SUSPECT_THRESHOLD : false,
   };
+}
+
+/** P2R2-F: a paired "X dba Y" entity (fetchSourceText stores "X, doing
+ *  business as Y" as ONE entity) → its two names, either of which satisfies
+ *  presence; null for an ordinary entity. */
+export function dbaAliases(entity: string): [string, string] | null {
+  const m = (entity ?? "").match(/^(.+?) dba (.+)$/);
+  return m ? [m[1].trim(), m[2].trim()] : null;
 }
 
 /**
@@ -1062,9 +2087,21 @@ export function checkFactGrounding(
       .map((e) => e.value)
       .filter((v): v is string => v !== null),
   );
-  for (const entry of extractNumberEntries(generated, "en")) {
+  // P2-A1: dates are grounded as DATES. A number that is a component of a draft
+  // date which FULLY matches a source date (month-name ↔ numeric, padding,
+  // d/m order) is validated by that match and not re-checked as a bare number
+  // (so «7 أكتوبر 2026» against a source "07/10/2026" — or the reverse — is not
+  // a false unsupported_number). Every other number keeps the strict check.
+  const dateCheck = unsupportedDates(generated, source.sourceText, srcNumbers);
+  const groundedDateSpans = dateCheck.supported.map((t) => [t.start, t.end] as const);
+  const inGroundedDate = (start: number, end: number) =>
+    groundedDateSpans.some(([a, b]) => start >= a && end <= b);
+  const unsupportedNumberSpans: [number, number][] = [];
+  for (const entry of scanNumberEntries(generated, "en")) {
+    if (inGroundedDate(entry.start, entry.end)) continue;
     if (entry.value === null || !srcNumbers.has(entry.value)) {
       errors.push(`unsupported_number:${entry.raw}`);
+      unsupportedNumberSpans.push([entry.start, entry.end]);
       logNumberDiagnostic({
         token: entry.raw,
         tokenValue: entry.value,
@@ -1074,9 +2111,17 @@ export function checkFactGrounding(
       });
     }
   }
+  // An unsupported DATE whose own numbers all exist in the source (wrong
+  // day/month combination, e.g. a changed "as of" date) is a blocking
+  // unsupported_date. When one of its numbers is already reported as
+  // unsupported_number the breach is already blocking — no double report.
+  for (const tok of dateCheck.unsupported) {
+    const alreadyReported = unsupportedNumberSpans.some(([a, b]) => a >= tok.start && b <= tok.end);
+    if (!alreadyReported) errors.push(`unsupported_date:${tok.raw}`);
+  }
 
   // 2) No invented quotations — a quoted span must appear in the source.
-  for (const q of extractQuotes(article.body)) {
+  for (const q of extractQuotes(article.body, source.sourceText)) {
     const qn = normalizeForCompare(q);
     if (qn && !srcNorm.includes(qn)) errors.push("invented_quotation");
   }
@@ -1121,12 +2166,28 @@ export function checkFactGrounding(
   //      numbers like a study's sample size or a regulation's fine/date): must be
   //      preserved. Missing is BLOCKING for a safety alert (a recall that drops
   //      the drug/authority it concerns is dangerous), a warning elsewhere.
-  const genNorm = normalizeForCompare(generated);
   const identifierNeeded = safetyIdentifierNeeded(source.sourceText);
   for (const ent of source.mustPreserve ?? []) {
     const vis = classifyEntityVisibility(ent, profile, source.sourceText);
     if (vis === "verification_only") continue;
     if (vis === "conditional" && !identifierNeeded) continue;
+
+    // P2R2-F: a "X dba Y" pair is preserved by EITHER name (same severity when
+    // neither appears). Each name is judged by the ordinary presence rules.
+    const aliases = dbaAliases(ent);
+    if (aliases) {
+      const visible = `${article.excerpt}\n${article.body}`;
+      const present = aliases.some((a) =>
+        /[A-Za-z]/.test(a)
+          ? foreignEssentialNameStatus({ title: article.title, visible, entity: a }).present
+          : arabicEntityPresent(a, generated)
+      );
+      if (!present) {
+        if (profile === "safety_alert") errors.push(`missing_essential_entity:${ent}`);
+        else warnings.push(`missing_essential_entity:${ent}`);
+      }
+      continue;
+    }
 
     // The essential identity (formal/regulatory suffixes removed) is what must
     // survive — never a shortened or altered form. A FOREIGN essential name is
@@ -1145,7 +2206,11 @@ export function checkFactGrounding(
     // blocking/warning severity below.
     const countryEqs = arabicCountryEquivalents(idNorm);
     if (countryEqs.length > 0) {
-      const present = genNorm.includes(idNorm) || countryEqs.some((eq) => genNorm.includes(eq));
+      // P2-B8: Arabic-aware (folded token) match, so «سعودي»/«السعودية» both
+      // preserve "Saudi" — still REQUIRED in one language or the other.
+      const present =
+        arabicEntityPresent(identity, generated) ||
+        COUNTRY_ARABIC_EQUIVALENTS[idNorm].some((eq) => arabicEntityPresent(eq, generated));
       if (!present) {
         if (profile === "safety_alert") errors.push(`missing_essential_entity:${ent}`);
         else warnings.push(`missing_essential_entity:${ent}`);
@@ -1153,8 +2218,20 @@ export function checkFactGrounding(
       continue;
     }
 
+    // P2-B8: a known REGULATOR (FDA/WHO/EMA/SFDA/CDC) is preserved by any
+    // member of its fixed equivalence group («إدارة الغذاء والدواء» for FDA) —
+    // the same narrow treatment as countries; still REQUIRED, same severity.
+    const regGroup = regulatorGroup(identity);
+    if (regGroup) {
+      if (!regulatorPresent(regGroup, generated)) {
+        if (profile === "safety_alert") errors.push(`missing_essential_entity:${ent}`);
+        else warnings.push(`missing_essential_entity:${ent}`);
+      }
+      continue;
+    }
+
     if (!foreign) {
-      if (!genNorm.includes(idNorm)) {
+      if (!arabicEntityPresent(identity, generated)) {
         if (profile === "safety_alert") errors.push(`missing_essential_entity:${ent}`);
         else warnings.push(`missing_essential_entity:${ent}`);
       }
@@ -1179,6 +2256,15 @@ export function checkFactGrounding(
     if (rep.englishInTitle) warnings.push(`essential_entity_english_in_title:${ent}`);
     if (rep.englishFirst) warnings.push(`essential_entity_not_arabic_first:${ent}`);
     if (rep.englishRepeated) warnings.push(`essential_entity_english_repeated:${ent}`);
+    // P2-A4: the Arabic rendering before the gloss does not plausibly spell the
+    // Latin identity (review-only; the exact Latin identity is still verified).
+    if (rep.transliterationSuspect) warnings.push(`name_transliteration_suspect:${ent}`);
+  }
+  // P2R-7a: every other gloss pair in the visible story, self-identified.
+  for (const g of suspectGlossPairs(`${article.excerpt}\n${article.body}`)) {
+    if (!warnings.some((w) => w.startsWith("name_transliteration_suspect:") && normalizeForCompare(w).includes(normalizeForCompare(g.latin)))) {
+      warnings.push(`name_transliteration_suspect:${g.latin}`);
+    }
   }
 
   // 6) Safety-alert official actions & unaffected-batch reassurance (blocking).
@@ -1728,6 +2814,12 @@ export function validateArticle(input: {
 // or announcing body. Validators/guards unchanged.
 // e2.1.1: list compression uses a count only when the source states it
 // (unsupported_number guard); «» reserved for real quotations (quote guard).
+// e2.2 (P2 §Names policy — the only prompt change in Phase 2): transliterate
+// only well-established/unambiguous names, otherwise keep the Latin name with
+// an Arabic descriptor (never invent a spelling); keep "X doing business as Y"
+// direction; keep recall severity class and the "as of DATE" on injury counts;
+// lot/batch = دفعة/تشغيلة, never عبوة; never write «لم يذكر المصدر…» — omit;
+// a title uses a generic Arabic descriptor when a name can't be rendered safely.
 
 const STANDARD_NEWS_INSTRUCTIONS =
   "خبر صحي: ابدأ بما حدث ولماذا يهمّ القارئ، ثم أضف ما يلزم لفهمه فقط: ما الذي تغيّر ومن المتأثّر. لا تُضِف سياقاً إلا إذا كان القارئ لا يفهم الخبر بدونه، ولا تُقحم فقرة «لماذا يهمّ؟» منفصلة إذا كانت الأهمية واضحة من المقدّمة.";
@@ -1746,7 +2838,7 @@ const PROFILE_INSTRUCTIONS: Record<WritingProfile, string> = {
 
 /**
  * Build the Arabic writing instructions for a profile. This is the writer
- * prompt (prompt version e2.1.1-salma-writer). It is intentionally distinct from
+ * prompt (prompt version e2.2-salma-writer). It is intentionally distinct from
  * the discovery/selection prompt in index.ts. `body` must be plain Arabic
  * paragraphs separated by blank lines (the frontend renders paragraphs only —
  * no Markdown/HTML).
@@ -1824,11 +2916,20 @@ ${PROFILE_INSTRUCTIONS[profile]}
 - لكل اسم أجنبي أساسي (الأدوية والشركات والمنتجات والجهات): اكتب الاسم بالعربية أولاً، ثم ضَع الاسم الأصلي الدقيق كما ورد في المصدر بين قوسين مرّة واحدة عند أوّل ذكر، مثل «سيكلوفوسفاميد (Cyclophosphamide)»، وبعدها استخدم العربية وحدها.
 - علامتا التنصيص «» في المخرجات مخصّصتان حصراً للكلام المنقول حرفياً من المصدر. لا تضع بينهما أسماء أو أدوية أو مجلات أو برامج أو مصطلحات: الاسم المعرّب يُكتب مجرّداً بلا «»، والأصل الأجنبي بين قوسين () مرّة واحدة عند أوّل ذكر. (علامات «» في هذه التعليمات تحدّد الأمثلة فقط ولا تُنسخ إلى النص.)
 - لا تحذف الاسم الأصلي ولا تختصره ولا تبدّل أي جزء من هويته، بما في ذلك الواصفات الكيميائية مثل Hydrochloride، حتى لا تضيع الهوية الدقيقة للمنتج أو الجهة. المسموح بإسقاطه من الاسم فقط: USP وNDC وLot وInc وLLC وLtd وكلمات الشكل الصيدلاني مثل for Injection؛ وكل ما عدا ذلك في الاسم يبقى كما ورد.
+- انقل إلى العربية فقط الأسماء الراسخة أو التي لا لبس في نطقها. إذا لم تكن متأكداً من النطق الصحيح فلا تخترع تهجئة عربية أبداً: أبقِ الاسم اللاتيني الأصلي كما هو مسبوقاً بوصف عربي، مثل: شركة Spectra Medical.
+- صيغة «X doing business as Y» تبقى باتجاهها: X هي الجهة القانونية وY هو الاسم التجاري («شركة X التي تعمل باسم Y»)، ولا تعكسها.
+
+أمانة تفاصيل السحب والإصابات:
+- إذا ذكر المصدر تصنيف خطورة السحب (مثل Class I أو «الفئة الأولى» أو «الأكثر خطورة») فأبقِه في المقال بصياغة عربية واضحة.
+- أي عدد إصابات أو بلاغات أو وفيات مقرون في المصدر بتاريخ («حتى تاريخ…» / as of) يبقى مقروناً بالتاريخ نفسه كما ورد.
+- lot وbatch تعني «دفعة» أو «تشغيلة»، ولا تُترجم أبداً إلى «عبوة».
+- لا تكتب في نص المقال «لم يذكر المصدر…» أو أي صيغة مشابهة: إذا لم يذكر المصدر معلومة فاحذف الحديث عنها ببساطة.
 
 العنوان:
 - عنوان قصير يحمل الخبر نفسه، وينقل التطوّر الفعلي بلغة عربية سلسة وجذّابة دون مبالغة.
 - لا تنسخ العنوان الأصلي ولا تُنهِ العنوان باسم المصدر أو الموقع.
 - العنوان عربي بالكامل: حافظ على هوية المنتج والدواء والجهة والدولة بالعربية المفهومة، واترك الاسم الأجنبي لأوّل ذكر في النص.
+- إذا تعذّر نقل الاسم إلى العربية بأمان فاستخدم في العنوان وصفاً عربياً عاماً (مثل «شركة أمريكية للأجهزة الطبية» أو «دواء لعلاج السكري»)، ويبقى الاسم اللاتيني في النص.
 
 المقتطف (excerpt):
 - جملة واحدة قصيرة واضحة تنقل الخلاصة العملية بلغة بسيطة لا أكاديمية، دون حروف إنجليزية.

@@ -37,11 +37,13 @@ import {
 import {
   buildEditorInstructions,
   buildFactPacket,
+  editorDecisionAuditFields,
   type EditorArticle,
   EDITOR_RESPONSE_FORMAT,
   type EditorCallResult,
   type EditorialAudit,
   renderEditorPacket,
+  revalidateAgainstBaseline,
   runEditorPass,
 } from "./salmaEditor.ts";
 import {
@@ -157,6 +159,12 @@ export type WriterAudit = {
   source_extraction_method?: string | null;
   source_char_count?: number | null;
   source_word_count?: number | null;
+  // P2-D10: Editorial Director outcome (accepted|repaired|kept_original|
+  // factual_rejected) + its prompt version, persisted to ingestion_decisions
+  // via migration 20261023100100_editorial_outcome_audit.sql. Set once the
+  // editor has run; null/absent for decisions that never reached it.
+  editor_outcome?: string | null;
+  editor_prompt_version?: string | null;
 };
 
 // ---- OpenRouter web-search client ---------------------------------------
@@ -559,6 +567,8 @@ function fidelityIssueInstruction(code: string): string {
   switch (kind) {
     case "unsupported_number":
       return `الرقم أو التاريخ «${detail ?? ""}» غير وارد في نص المصدر. احذفه، أو استبدله بالقيمة الصحيحة كما وردت حرفيًا في المصدر، أو أعِد صياغة الجملة دون هذا الرقم بعربية صحفية بسيطة.`;
+    case "unsupported_date":
+      return `التاريخ «${detail ?? ""}» لا يطابق أي تاريخ ورد في نص المصدر. استبدله بالتاريخ الصحيح كما ورد في المصدر، أو احذفه وأعِد صياغة الجملة دونه بعربية صحفية بسيطة.`;
     case "unsupported_claim":
       return `الادّعاء المتعلق بـ«${detail ?? ""}» (فعالية أو موافقة أو نتيجة) غير مدعوم بنص المصدر. احذفه أو خفّف الصياغة لتطابق قوة ما ورد في المصدر فقط، بعربية صحفية بسيطة لا بأسلوب المصدر الرسمي، دون إضافة أي حكم جديد.`;
     case "invented_quotation":
@@ -618,8 +628,9 @@ export type WriterOutcome =
     readMinutes: number;
     audit: WriterAudit;
     // E1.4A editorial-director audit for the single edit attempt on this draft.
-    // Carried SEPARATELY from WriterAudit so the ingestion_decisions insert stays
-    // unchanged (no migration); surfaced only in the pilot HTTP report.
+    // Carried SEPARATELY from WriterAudit and surfaced in full in the pilot HTTP
+    // report; only its decision + prompt version reach ingestion_decisions
+    // (WriterAudit.editor_outcome / editor_prompt_version, P2-D10).
     editorial: EditorialAudit;
     // Post-editor source-fidelity stage audit (original error, repair attempt,
     // repair outcome, final validation, needs_human_review). Observability-only.
@@ -864,12 +875,21 @@ export async function writeArticle(input: {
   // ONE constrained repair when eligible, and re-validates (see fidelityRepair.ts).
   const writerReadMinutes = r.readMinutes ?? readingTimeMinutes(writerArticle.body);
   const packet = buildFactPacket({ profile, sourceText: verifiedFactText, mustPreserve });
-  const revalidate = (a: EditorArticle) => {
-    const v = validateFidelity({ title: a.title, excerpt: a.excerpt, body: a.body });
-    return v.ok
-      ? ({ ok: true, readMinutes: v.readMinutes, cleanTitle: v.cleanTitle } as const)
-      : ({ ok: false, reason: v.errors[0] ?? "validation_failed" } as const);
-  };
+  // P2-B6: the edit is judged against the WRITER draft's own errors — it fails
+  // re-validation only on errors the writer draft did not already carry, and
+  // the failure reason lists every new code (not just errors[0]). Inherited
+  // errors are NOT waived: the post-editor fidelity stage below validates the
+  // chosen draft in full and repairs or rejects it.
+  const writerBaselineErrors = validateFidelity({
+    title: writerArticle.title,
+    excerpt: writerArticle.excerpt,
+    body: writerArticle.body,
+  }).errors;
+  const revalidate = (a: EditorArticle) =>
+    revalidateAgainstBaseline(
+      validateFidelity({ title: a.title, excerpt: a.excerpt, body: a.body }),
+      writerBaselineErrors,
+    );
   const writerDraft: EditorArticle = {
     title: writerArticle.title,
     excerpt: writerArticle.excerpt,
@@ -942,6 +962,9 @@ export async function writeArticle(input: {
       };
     },
   });
+
+  // P2-D10: persist the editor outcome + prompt version on the decision row.
+  Object.assign(audit, editorDecisionAuditFields(editorial));
 
   // A hard-blocking breach, or a repairable breach still present after the single
   // repair, rejects: NO pending draft is created (the reason is audited).

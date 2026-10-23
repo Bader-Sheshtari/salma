@@ -409,7 +409,7 @@ test("parser accepts a well-formed editor object and rejects extras/malformed", 
 });
 
 test("editor instructions carry the prompt version and the strict schema", () => {
-  assert.equal(EDITOR_PROMPT_VERSION, "e2.1.1-salma-editor");
+  assert.equal(EDITOR_PROMPT_VERSION, "e2.2-salma-editor");
   const sys = buildEditorInstructions("safety_alert");
   assert.ok(sys.includes(EDITOR_PROMPT_VERSION));
   assert.ok(sys.includes("edit_applied"));
@@ -716,8 +716,10 @@ test("§14.22 a factual rejection never triggers a recovery call", async () => {
   assert.deepEqual(res.article, SAFETY_ORIGINAL);
 });
 
-// §14.23 A dropped required-audience-action rejection never triggers a recovery.
-test("§14.23 a dropped required-action rejection never triggers a recovery call", async () => {
+// §14.23 (updated by P2-B7) A dropped required action never triggers a
+// FORMATTING recovery — it now spends the single second call on a targeted
+// restore repair over the first edit; the restored edit is accepted.
+test("P2-B7 §14.23 a dropped required action triggers one restore repair, never a formatting recovery", async () => {
   const bad = editorJson({
     title: "سحب دواء سيكلوفوسفاميد للحقن",
     excerpt: "قرار احترازي لحماية المرضى من مضاعفات محتملة.",
@@ -727,11 +729,13 @@ test("§14.23 a dropped required-action rejection never triggers a recovery call
   });
   const seq = sequenceCall([ok(bad), ok(SAFETY_GOOD_EDIT)]);
   const res = await runSafetyWith(seq.call, okRevalidate);
-  assert.equal(seq.calls(), 1);
-  assert.match(res.audit.editor_rejection_reason ?? "", /editor_dropped_required_action/);
-  assert.equal(res.audit.editor_attempts, 1);
+  assert.equal(seq.calls(), 2);
   assert.equal(res.audit.recovery_attempted, false);
-  assert.deepEqual(res.article, SAFETY_ORIGINAL);
+  assert.equal(res.audit.second_attempt_type, "editorial_repair");
+  assert.equal(res.audit.decision, "repaired");
+  assert.equal(res.audit.final_draft_source, "repaired_edit");
+  assert.deepEqual(res.audit.repair_restored, ["stop_use"]);
+  assert.ok(res.audit.reasons.some((r) => r.startsWith("editor_dropped_required_action")));
 });
 
 // §14.24 Maximum editor calls is two, and the model requested is never swapped
@@ -937,7 +941,11 @@ test("§15.2 the verbose Papaverine version raises the E1.7 warnings", () => {
   );
   assert.ok(gate.needs_review.includes("editorial_incorrect_recall_attribution"));
   assert.ok(gate.needs_review.includes("editorial_unnecessary_batch_number"));
-  assert.ok(gate.needs_review.includes("editorial_unnecessary_formal_english"));
+  // P2-FIX4: the formal English here sits inside the permitted first-mention
+  // gloss «بابافيرين هيدروكلورايد (Papaverine Hydrochloride Injection, USP)», so
+  // it is identity, not unnecessary English. The USP label is still flagged.
+  assert.ok(!gate.needs_review.includes("editorial_unnecessary_formal_english"));
+  assert.ok(gate.needs_review.includes("editorial_unnecessary_label"));
   assert.ok(gate.needs_review.includes("editorial_unsupported_reassurance"));
 });
 
@@ -1003,7 +1011,11 @@ test("§15.6 the verbose Cyclophosphamide version raises the E1.7 detail warning
   assert.ok(gate.needs_review.includes("editorial_unnecessary_clinical_use"));
   assert.ok(gate.needs_review.includes("editorial_unnecessary_strength_or_packaging"));
   assert.ok(gate.needs_review.includes("editorial_excess_complications"));
-  assert.ok(gate.needs_review.includes("editorial_unnecessary_formal_english"));
+  // P2-FIX4: «منتج (Cyclophosphamide for Injection, USP)» is a gloss span
+  // (parenthetical immediately after Arabic text) → not formal-English; the
+  // USP label inside it is still flagged as an unnecessary label.
+  assert.ok(!gate.needs_review.includes("editorial_unnecessary_formal_english"));
+  assert.ok(gate.needs_review.includes("editorial_unnecessary_label"));
 });
 
 // §15.7 The compact target still preserves the essential risk and action and
@@ -1449,4 +1461,481 @@ test("editor entity check: dropping the country in BOTH languages is still a dro
     body: "أعلنت الجهات الصحية رصد ارتفاع موسمي في حالات الإنفلونزا.",
   };
   assert.deepEqual(droppedEssentialEntities(original, edited, packet), ["Kuwait"]);
+});
+
+// --- Phase 2 validator fixes (P2-FIX4, P2-FIX5) -----------------------------
+
+test("P2-FIX4 regression: formal identity inside a first-mention gloss does not flag", () => {
+  const gate = editorialGate(
+    {
+      title: "سحب دفعة من حقن بابافيرين",
+      excerpt: "دعوة إلى وقف استخدام الدفعة المتأثرة.",
+      summary: "التوقف عن الاستخدام.",
+      body:
+        "سحبت شركة أمريكان ريجنت دفعة من حقن بابافيرين هيدروكلورايد (Papaverine Hydrochloride Injection, USP) بعد العثور على جسيمات.\n\n" +
+        "كما سُحب مستحضر نوربيرين (NOREPIRIN 2 mg/ml Injection) احترازياً، ودعت إلى وقف الاستخدام.",
+    },
+    "safety_alert",
+    { sourceText: PAP_SOURCE },
+  );
+  assert.ok(!gate.needs_review.includes("editorial_unnecessary_formal_english"));
+});
+
+test("P2-FIX4 counter: formal English outside a gloss still flags; bare USP still flags", () => {
+  const outside = editorialGate(
+    {
+      title: "سحب دفعة من حقن بابافيرين",
+      excerpt: "دعوة إلى وقف استخدام الدفعة المتأثرة.",
+      summary: "التوقف عن الاستخدام.",
+      body: "سحبت الشركة دفعة من Papaverine Injection بعد العثور على جسيمات، ودعت إلى وقف الاستخدام.",
+    },
+    "safety_alert",
+    { sourceText: PAP_SOURCE },
+  );
+  assert.ok(outside.needs_review.includes("editorial_unnecessary_formal_english"));
+  // A parenthetical that follows LATIN text is not the gloss shape → still scanned.
+  const latinParen = editorialGate(
+    {
+      title: "سحب دفعة من حقن بابافيرين",
+      excerpt: "دعوة إلى وقف استخدام الدفعة المتأثرة.",
+      summary: "التوقف عن الاستخدام.",
+      body: "سحبت الشركة دفعة من حقن Papaverine (for Injection) بعد العثور على جسيمات، ودعت إلى وقف الاستخدام.",
+    },
+    "safety_alert",
+    { sourceText: PAP_SOURCE },
+  );
+  assert.ok(latinParen.needs_review.includes("editorial_unnecessary_formal_english"));
+  const bareUsp = editorialGate(
+    {
+      title: "سحب دفعة من حقن بابافيرين",
+      excerpt: "دعوة إلى وقف استخدام الدفعة المتأثرة.",
+      summary: "التوقف عن الاستخدام.",
+      body: "سحبت الشركة دفعة من حقن بابافيرين وفق معيار USP بعد العثور على جسيمات، ودعت إلى وقف الاستخدام.",
+    },
+    "safety_alert",
+    { sourceText: PAP_SOURCE },
+  );
+  assert.ok(bareUsp.needs_review.includes("editorial_unnecessary_label"));
+});
+
+const SFDA_SOURCE =
+  "قررت الهيئة العامة للغذاء والدواء سحب مستحضر نوربيرين من إنتاج شركة فارما المحدودة من الأسواق بعد رصد خلل في الجودة، ودعت إلى التوقف عن استخدامه.";
+const SFDA_REGULATOR_CREDITED: EditorArticle = {
+  title: "سحب مستحضر نوربيرين من الأسواق",
+  excerpt: "دعوة إلى التوقف عن استخدام المستحضر.",
+  summary: "التوقف عن الاستخدام.",
+  body: "سحبت الهيئة العامة للغذاء والدواء مستحضر نوربيرين من الأسواق بعد رصد خلل في الجودة، ودعت إلى التوقف عن استخدامه.",
+};
+
+test("P2-FIX5 regression: the SFDA regulator-initiated recall credited to the regulator does not flag", () => {
+  const gate = editorialGate(SFDA_REGULATOR_CREDITED, "safety_alert", { sourceText: SFDA_SOURCE });
+  assert.ok(!gate.needs_review.includes("editorial_incorrect_recall_attribution"));
+  // Mere co-occurrence of "شركة" and "سحب" far apart is not company initiation.
+  const farApart = editorialGate(SFDA_REGULATOR_CREDITED, "safety_alert", {
+    sourceText:
+      "أعلنت الجهة الرقابية سحب مستحضر نوربيرين من الأسواق بعد رصد خلل في الجودة. وأوضحت في بيان لاحق أن الصيدليات ستتلقى التعليمات تباعاً وأن الشركة المصنّعة أُبلغت بالقرار.",
+  });
+  assert.ok(!farApart.needs_review.includes("editorial_incorrect_recall_attribution"));
+});
+
+test("P2-FIX5 counter: a voluntary/company recall attributed to the FDA in the draft still flags", () => {
+  const regulatorCredited: EditorArticle = {
+    title: "سحب دفعة من حقن بابافيرين",
+    excerpt: "قرار احترازي لحماية المرضى.",
+    summary: "التوقف عن الاستخدام.",
+    body: "سحبت إدارة الغذاء والدواء الأميركية دفعة من حقن بابافيرين (Papaverine) بعد العثور على جسيمات، ودعت المرضى إلى وقف الاستخدام.",
+  };
+  const voluntary = editorialGate(regulatorCredited, "safety_alert", { sourceText: PAP_SOURCE });
+  assert.ok(voluntary.needs_review.includes("editorial_incorrect_recall_attribution"));
+  // Company recall verb adjacent to the company (no voluntary wording) still counts.
+  const companyVerb = editorialGate(regulatorCredited, "safety_alert", { sourceText: CYC_SOURCE });
+  assert.ok(companyVerb.needs_review.includes("editorial_incorrect_recall_attribution"));
+});
+
+// =========================================================================
+// Phase 2 (second pass) — P2-A2/A3/A4/A5 review flags, P2-B6 baseline
+// re-validation, P2-B7 targeted restore repair, P2-B8 dropped-entity guard,
+// P2-C9 decision trail, P2-D10 audit columns, P2-E11 editor names policy.
+// =========================================================================
+import {
+  draftCarriesSeverity,
+  editorDecisionAuditFields,
+  essentialEntityPresent,
+  renderingChanged,
+  repairIssueText,
+  revalidateAgainstBaseline,
+  sourceSeverityClass,
+} from "./salmaEditor.ts";
+
+const p2Article = (body: string, title = "سحب منتج طبي بعد بلاغات"): EditorArticle => ({
+  title,
+  excerpt: "تحذير يخص منتجاً طبياً متأثراً.",
+  summary: "على المستخدمين التوقف عن استخدام المنتج المتأثر.",
+  body,
+});
+const LOT_SOURCE = "The company is recalling one lot (lot number 25202) of its infusion pump after reports of overheating.";
+const PKG_SOURCE = "The company is recalling 5,000 bottles of its cough syrup sold in retail stores.";
+
+// --- P2-A2 scope_word_mismatch -----------------------------------------------
+test("P2-A2 عبوة used for a lot-scoped recall is flagged for review", () => {
+  const g = editorialGate(p2Article("سحبت الشركة عبوات من مضخة التسريب بعد بلاغات عن ارتفاع حرارتها."), "safety_alert", { sourceText: LOT_SOURCE });
+  assert.ok(g.needs_review.includes("scope_word_mismatch"));
+  assert.ok(!g.blocking.includes("scope_word_mismatch"));
+});
+
+test("P2-A2 a correct دفعة does not flag; a story genuinely about عبوات does not flag", () => {
+  const lotOk = editorialGate(p2Article("سحبت الشركة دفعة من مضخة التسريب بعد بلاغات عن ارتفاع حرارتها."), "safety_alert", { sourceText: LOT_SOURCE });
+  assert.ok(!lotOk.needs_review.includes("scope_word_mismatch"));
+  const pkgOk = editorialGate(p2Article("سحبت الشركة عبوات من شراب السعال بيعت في متاجر التجزئة."), "safety_alert", { sourceText: PKG_SOURCE });
+  assert.ok(!pkgOk.needs_review.includes("scope_word_mismatch"));
+  // Reverse direction: a package-scoped recall rendered as a دفعة flags.
+  const rev = editorialGate(p2Article("سحبت الشركة دفعة من شراب السعال بيعت في متاجر التجزئة."), "safety_alert", { sourceText: PKG_SOURCE });
+  assert.ok(rev.needs_review.includes("scope_word_mismatch"));
+  // "a lot of" (quantity idiom) is not a lot scope.
+  const idiom = editorialGate(p2Article("سحبت الشركة عبوات من شراب السعال."), "safety_alert", { sourceText: "A lot of consumers bought the syrup; the company is recalling it." });
+  assert.ok(!idiom.needs_review.includes("scope_word_mismatch"));
+});
+
+// --- P2-A3 missing_severity_class --------------------------------------------
+const CLASS_I_SOURCE = "The FDA has identified this as a Class I recall, the most serious type of recall, because use of the device may cause serious injury.";
+
+test("P2-A3 a lost 'Class I / most serious type' classification is flagged", () => {
+  assert.equal(sourceSeverityClass(CLASS_I_SOURCE), 1);
+  const g = editorialGate(p2Article("سحبت الشركة دفعة من الجهاز لأن استخدامه قد يسبب إصابات خطيرة."), "safety_alert", { sourceText: CLASS_I_SOURCE });
+  assert.ok(g.needs_review.includes("missing_severity_class"));
+});
+
+test("P2-A3 «الفئة الأكثر خطورة» or «الفئة الأولى» carries the classification", () => {
+  for (const body of [
+    "صنّفت الإدارة السحب ضمن الفئة الأكثر خطورة لأن استخدام الجهاز قد يسبب إصابات خطيرة.",
+    "صنّفت الإدارة السحب من الفئة الأولى لأن استخدام الجهاز قد يسبب إصابات خطيرة.",
+  ]) {
+    const g = editorialGate(p2Article(body), "safety_alert", { sourceText: CLASS_I_SOURCE });
+    assert.ok(!g.needs_review.includes("missing_severity_class"), body);
+  }
+  // Counter: a Class II DEVICE classification (no recall wording next to it) is not a recall class.
+  assert.equal(sourceSeverityClass("The pump is a Class II medical device sold in the US."), null);
+  // Class II recall needs the class number itself; «الفئة الثانية» carries it.
+  assert.equal(draftCarriesSeverity("سحب من الفئة الثانية", 2), true);
+  assert.equal(draftCarriesSeverity("سحب من الفئة الأكثر خطورة", 2), false);
+});
+
+// --- P2-A4 (gate) name_transliteration_suspect -------------------------------
+test("P2-A4 the gate flags a suspect gloss rendering for review only", () => {
+  const bad = editorialGate(p2Article("سحبت شركة سكيترا (Spectra) دفعة من جهازها بعد بلاغات."), "safety_alert", { essentialEntities: ["Spectra"] });
+  assert.ok(bad.needs_review.includes("name_transliteration_suspect"));
+  assert.ok(!bad.blocking.includes("name_transliteration_suspect"));
+  const good = editorialGate(p2Article("سحبت شركة سبكترا (Spectra) دفعة من جهازها بعد بلاغات."), "safety_alert", { essentialEntities: ["Spectra"] });
+  assert.ok(!good.needs_review.includes("name_transliteration_suspect"));
+});
+
+// --- P2-A5 name_rendering_changed --------------------------------------------
+test("P2-A5 a changed rendering before the same gloss flags; identical or restored-Latin does not", () => {
+  const orig = p2Article("سحبت شركة سكيترا (Spectra) دفعة من جهازها بعد بلاغات.");
+  assert.equal(renderingChanged(orig, p2Article("سحبت شركة سبكترا (Spectra) دفعة من جهازها بعد بلاغات."), ["Spectra"]), true);
+  assert.equal(renderingChanged(orig, p2Article("سحبت شركة سكيترا (Spectra) دفعة من الجهاز."), ["Spectra"]), false);
+  assert.equal(renderingChanged(orig, p2Article("سحبت شركة Spectra دفعة من جهازها بعد بلاغات."), ["Spectra"]), false);
+});
+
+test("P2-A5 runEditorPass marks an edit that changed the rendering name_rendering_changed (review)", async () => {
+  const src = "Spectra is recalling one lot of its infusion pump. Patients should stop using the pump and contact their doctor.";
+  const packet = buildFactPacket({ profile: "safety_alert", sourceText: src, mustPreserve: ["Spectra"] });
+  const original = p2Article("سحبت شركة سكيترا (Spectra) دفعة من مضخة التسريب، وعلى المرضى التوقف عن استخدام المضخة ومراجعة الطبيب لخطر الإصابة.");
+  const edited = editorJson({ ...p2Article("سحبت شركة سبكترا (Spectra) دفعة من مضخة التسريب، وعلى المرضى التوقف عن استخدام المضخة ومراجعة الطبيب لخطر الإصابة.") });
+  const res = await runEditorPass({
+    profile: "safety_alert", model: "m", original: { article: original, readMinutes: 1 }, packet,
+    call: countingCall(edited).call, revalidate: okRevalidate,
+  });
+  assert.equal(res.audit.decision, "accepted");
+  assert.ok(res.audit.editorial_review.includes("name_rendering_changed"));
+  assert.equal(res.audit.editorial_verdict, "needs_human_review");
+});
+
+// --- P2-B6 baseline re-validation --------------------------------------------
+test("P2-B6 revalidateAgainstBaseline fails only on new errors and lists every new code", () => {
+  const v = (errors: string[]) => ({ errors, readMinutes: 1, cleanTitle: "t" });
+  assert.deepEqual(revalidateAgainstBaseline(v(["unsupported_number:15"]), ["unsupported_number:15"]), { ok: true, readMinutes: 1, cleanTitle: "t" });
+  const r = revalidateAgainstBaseline(v(["unsupported_number:15", "unsupported_number:20", "invented_quotation"]), ["unsupported_number:15"]);
+  assert.equal(r.ok, false);
+  if (!r.ok) {
+    assert.equal(r.reason, "unsupported_number:20|invented_quotation");
+    assert.deepEqual(r.errors, ["unsupported_number:20", "invented_quotation"]);
+  }
+});
+
+// A baseline-aware real re-validator (what pipeline.ts wires in production).
+function baselineRevalidate(source: string, mustPreserve: string[], profile: WritingProfile, writer: EditorArticle): EditorRevalidate {
+  const run = (a: EditorArticle) =>
+    validateArticle({ article: { title: a.title, excerpt: a.excerpt, body: a.body, profile }, source: { sourceText: source, mustPreserve } });
+  const baseline = run(writer).errors;
+  return (a) => revalidateAgainstBaseline(run(a), baseline);
+}
+
+test("P2-B6 an inherited writer error + an otherwise clean edit → the edit is kept", async () => {
+  const writer: EditorArticle = { ...SAFETY_ORIGINAL, body: SAFETY_ORIGINAL.body + " وشمل السحب 15 دفعة." };
+  const edit = editorJson({
+    title: "سحب دواء سيكلوفوسفاميد للحقن بعد رصد جسيمات معدنية",
+    excerpt: "قرار السحب جاء احترازياً لحماية المرضى من مضاعفات محتملة نتيجة التلوث.",
+    summary: "ينبغي للمرضى والكوادر التوقف عن استخدام الدفعات المتأثرة فوراً.",
+    body: SAFETY_GOOD_EDIT_BODY + " وشمل السحب 15 دفعة.",
+  });
+  const res = await runSafetyWith(countingCall(edit).call, baselineRevalidate(SAFETY_SOURCE, SAFETY_MUST_PRESERVE, "safety_alert", writer), writer);
+  assert.equal(res.audit.edited_draft_accepted, true);
+  assert.equal(res.audit.decision, "accepted");
+  assert.ok(res.article.body.includes("15")); // inherited — the fidelity stage still validates/repairs it
+});
+
+test("P2-B6 an edit introducing a new unsupported_number is rejected with that code in the reason", async () => {
+  const writer: EditorArticle = { ...SAFETY_ORIGINAL, body: SAFETY_ORIGINAL.body + " وشمل السحب 15 دفعة." };
+  const edit = editorJson({
+    title: "سحب دواء سيكلوفوسفاميد للحقن بعد رصد جسيمات معدنية",
+    excerpt: "قرار السحب جاء احترازياً لحماية المرضى من مضاعفات محتملة نتيجة التلوث.",
+    summary: "ينبغي للمرضى والكوادر التوقف عن استخدام الدفعات المتأثرة فوراً.",
+    body: SAFETY_GOOD_EDIT_BODY + " وشمل السحب 15 دفعة و20 مستشفى.",
+  });
+  const res = await runSafetyWith(countingCall(edit).call, baselineRevalidate(SAFETY_SOURCE, SAFETY_MUST_PRESERVE, "safety_alert", writer), writer);
+  assert.equal(res.audit.edited_draft_accepted, false);
+  assert.equal(res.audit.decision, "factual_rejected");
+  assert.match(res.audit.editor_rejection_reason ?? "", /unsupported_number:20/);
+  assert.ok(!(res.audit.editor_rejection_reason ?? "").includes("unsupported_number:15"));
+  assert.deepEqual(res.audit.reasons, ["unsupported_number:20"]);
+  assert.deepEqual(res.article, writer);
+});
+
+// --- P2-B7 targeted restore repair -------------------------------------------
+const P2_DROPPED_ENTITY_EDIT = editorJson({
+  title: "سحب دواء للحقن بعد رصد جسيمات معدنية",
+  excerpt: "قرار السحب جاء احترازياً لحماية المرضى من مضاعفات محتملة نتيجة التلوث.",
+  summary: "ينبغي للمرضى والكوادر التوقف عن استخدام الدفعات المتأثرة فوراً.",
+  body: "رصدت السلطات الصحية جسيمات معدنية داخل قوارير من دواء مخصّص للحقن، وهو ما قد يعرّض المرضى لخطر التجلّط.\n\nونصحت الجهة المرضى والكوادر الطبية بالتوقف عن استخدام الدفعات المتأثرة.",
+});
+
+test("P2-B7 a dropped essential entity is restored by one repair and the repair is accepted", async () => {
+  const seq = sequenceCall([ok(P2_DROPPED_ENTITY_EDIT), ok(SAFETY_GOOD_EDIT)]);
+  let repairIssues: string[] = [];
+  const call: EditorCall = (m, o) => {
+    if (o?.repair) repairIssues = o.repair.issues;
+    return seq.call(m, o);
+  };
+  const res = await runSafetyWith(call, realRevalidate(SAFETY_SOURCE, SAFETY_MUST_PRESERVE, "safety_alert"));
+  assert.equal(seq.calls(), 2);
+  assert.deepEqual(repairIssues, ["restore_missing_entity:سيكلوفوسفاميد"]);
+  assert.equal(res.audit.decision, "repaired");
+  assert.equal(res.audit.final_draft_source, "repaired_edit");
+  assert.equal(res.audit.repair_attempted, true);
+  assert.deepEqual(res.audit.repair_restored, ["سيكلوفوسفاميد"]);
+  // Full trail: the validator's view (missing entity) AND the drop guard's.
+  assert.deepEqual(res.audit.reasons, [
+    "missing_essential_entity:سيكلوفوسفاميد",
+    "editor_dropped_essential_entity:سيكلوفوسفاميد",
+  ]);
+  assert.ok(res.article.body.includes("سيكلوفوسفاميد"));
+});
+
+test("P2-B7 a repair that does not restore the item → original kept (factual_rejected)", async () => {
+  const seq = sequenceCall([ok(P2_DROPPED_ENTITY_EDIT), ok(P2_DROPPED_ENTITY_EDIT)]);
+  const res = await runSafetyWith(seq.call, realRevalidate(SAFETY_SOURCE, SAFETY_MUST_PRESERVE, "safety_alert"));
+  assert.equal(seq.calls(), 2);
+  assert.deepEqual(res.article, SAFETY_ORIGINAL);
+  assert.equal(res.audit.final_draft_source, "original");
+  assert.equal(res.audit.decision, "factual_rejected");
+  assert.equal(res.audit.repair_attempted, true);
+  assert.deepEqual(res.audit.repair_restored, []);
+  assert.match(res.audit.editor_rejection_reason ?? "", /missing_essential_entity:سيكلوفوسفاميد/);
+  assert.ok(res.audit.reasons.includes("editor_dropped_essential_entity:سيكلوفوسفاميد"));
+  assert.ok(res.audit.reasons.some((r) => r.startsWith("restore_repair_failed")));
+});
+
+test("P2-B7 a restore repair that introduces a new factual error is discarded", async () => {
+  const badRepair = editorJson({
+    title: "سحب دواء سيكلوفوسفاميد للحقن بعد رصد جسيمات معدنية",
+    excerpt: "قرار السحب جاء احترازياً لحماية المرضى من مضاعفات محتملة نتيجة التلوث.",
+    summary: "ينبغي للمرضى والكوادر التوقف عن استخدام الدفعات المتأثرة فوراً.",
+    body: SAFETY_GOOD_EDIT_BODY + "\n\nوشمل السحب 40 دفعة.",
+  });
+  const seq = sequenceCall([ok(P2_DROPPED_ENTITY_EDIT), ok(badRepair)]);
+  const res = await runSafetyWith(seq.call, realRevalidate(SAFETY_SOURCE, SAFETY_MUST_PRESERVE, "safety_alert"));
+  assert.deepEqual(res.article, SAFETY_ORIGINAL);
+  assert.equal(res.audit.decision, "factual_rejected");
+  assert.ok(res.audit.reasons.some((r) => r.includes("unsupported_number:40")), res.audit.reasons.join(","));
+});
+
+test("P2-B7 droppedAllRisk → original kept with NO repair attempt", async () => {
+  const noRisk = editorJson({
+    title: "سحب دواء سيكلوفوسفاميد للحقن",
+    excerpt: "قرار تنظيمي روتيني يخص بعض الدفعات.",
+    summary: "التوقف عن استخدام الدفعات المتأثرة.",
+    body: "رصدت السلطات جسيمات معدنية داخل قوارير من دواء سيكلوفوسفاميد للحقن. ونصحت المرضى والكوادر بالتوقف عن استخدام الدفعات المتأثرة فوراً حرصاً على راحتهم.",
+  });
+  const seq = sequenceCall([ok(noRisk), ok(SAFETY_GOOD_EDIT)]);
+  const res = await runSafetyWith(seq.call, okRevalidate);
+  assert.equal(seq.calls(), 1);
+  assert.deepEqual(res.article, SAFETY_ORIGINAL);
+  assert.equal(res.audit.repair_attempted, false);
+  assert.equal(res.audit.decision, "factual_rejected");
+  assert.deepEqual(res.audit.reasons, ["editor_dropped_risk"]);
+});
+
+test("P2-B7 restore repair texts name the exact missing item; the repair prompt carries them", () => {
+  const t = repairIssueText("restore_missing_entity:سيكلوفوسفاميد");
+  assert.ok(t.includes("أعِد إلى النص العنصر الناقص: سيكلوفوسفاميد كما ورد في المصدر، دون تغيير أي شيء آخر"));
+  assert.ok(repairIssueText("restore_missing_action:stop_use").includes("التوقف عن استخدام"));
+  const sys = buildEditorInstructions("safety_alert", { repairIssues: ["restore_missing_entity:سيكلوفوسفاميد"] });
+  assert.ok(sys.includes("العنصر الناقص: سيكلوفوسفاميد"));
+});
+
+// --- P2-B8 dropped-entity guard (Arabic-aware, shared with the writer) -------
+test("P2-B8 the editor guard accepts Arabic-equivalent renderings but still catches a real drop", () => {
+  const packet: EditorFactPacket = {
+    profile: "safety_alert", sourceText: "", readerEssential: ["السعودية", "FDA", "Spectra"], conditional: [], verificationOnly: [], requiredActions: [],
+  };
+  const original = p2Article("أعلنت السعودية وإدارة الغذاء والدواء (FDA) سحب منتج شركة سبكترا (Spectra).");
+  const edited = p2Article("أعلن مسؤول سعودي وإدارة الغذاء والدواء الأمريكية سحب منتج شركة سبكترا (Spectra).");
+  assert.deepEqual(droppedEssentialEntities(original, edited, packet), []);
+  const dropped = p2Article("أعلن مسؤول سعودي سحب منتج إحدى الشركات.");
+  assert.deepEqual(droppedEssentialEntities(original, dropped, packet), ["FDA", "Spectra"]);
+  // The gloss in the excerpt still counts as present (same rule as the writer check).
+  assert.equal(essentialEntityPresent("Spectra", { ...p2Article("سحب منتج الشركة."), excerpt: "سحبت سبكترا (Spectra) منتجاً." }), true);
+});
+
+// --- P2-C9 decision trail -----------------------------------------------------
+test("P2-C9 every editor path yields the right decision + reasons", async () => {
+  const accepted = await runSafety(SAFETY_GOOD_EDIT, realRevalidate(SAFETY_SOURCE, SAFETY_MUST_PRESERVE, "safety_alert"));
+  assert.equal(accepted.res.audit.decision, "accepted");
+  assert.deepEqual(accepted.res.audit.reasons, []);
+  assert.equal(accepted.res.audit.repair_attempted, false);
+
+  const transport = await runSafetyWith(failingCall("editor_timeout").call, okRevalidate);
+  assert.equal(transport.audit.decision, "kept_original");
+  assert.deepEqual(transport.audit.reasons, ["editor_call_failed:editor_timeout"]);
+
+  const format = await runSafetyWith(sequenceCall([ok("nope"), ok("still nope")]).call, okRevalidate);
+  assert.equal(format.audit.decision, "kept_original");
+  assert.equal(format.audit.reasons.length, 2);
+
+  const factual = await runSafety(
+    editorJson({ title: "سحب دواء سيكلوفوسفاميد", excerpt: "قرار احترازي لحماية المرضى.", summary: "التوقف فوراً.", body: SAFETY_GOOD_EDIT_BODY + "\n\nوقالت الجهة إن «هذا الدواء آمن تماماً بعد السحب»." }),
+    realRevalidate(SAFETY_SOURCE, SAFETY_MUST_PRESERVE, "safety_alert"),
+  );
+  assert.equal(factual.res.audit.decision, "factual_rejected");
+  assert.deepEqual(factual.res.audit.reasons, ["invented_quotation"]);
+});
+
+// --- P2-D10 audit columns -----------------------------------------------------
+test("P2-D10 the decision-audit builder carries editor_outcome + editor_prompt_version", async () => {
+  assert.deepEqual(editorDecisionAuditFields(null), { editor_outcome: null, editor_prompt_version: null });
+  const { res } = await runSafety(SAFETY_GOOD_EDIT, okRevalidate);
+  assert.deepEqual(editorDecisionAuditFields(res.audit), { editor_outcome: "accepted", editor_prompt_version: "e2.2-salma-editor" });
+});
+
+// --- P2-E11 editor names policy ------------------------------------------------
+test("P2-E11 editor prompt carries the e2.2 names policy (fix a rendering only by restoring the original)", () => {
+  const p = buildEditorInstructions("safety_alert");
+  assert.ok(p.includes("e2.2-salma-editor"));
+  assert.ok(p.includes("الإصلاح الوحيد المسموح هو إعادة الاسم اللاتيني الأصلي"));
+  assert.ok(p.includes("شركة Spectra Medical"));
+  assert.ok(p.includes("doing business as"));
+  assert.ok(p.includes("ولا تُترجم أبداً إلى «عبوة»"));
+  assert.ok(p.includes("«لم يذكر المصدر…»"));
+  assert.ok(p.includes("Class I"));
+});
+
+// =========================================================================
+// Phase 2 review round (P2R) — editor-side regression + counter tests.
+// =========================================================================
+import { recallAdjacentUnit } from "./salmaEditor.ts";
+
+const P2R_REG_CREDIT = p2Article("سحبت هيئة الغذاء والدواء دواء سيكلوفوسفاميد بعد رصد جسيمات معدنية.");
+
+test("P2R-5 a regulator-issued recall order suppresses the mis-attribution flag", () => {
+  for (const src of [
+    "أصدرت هيئة الغذاء والدواء قراراً بسحب دواء سيكلوفوسفاميد من الأسواق، وأبلغت شركة التوزيع بذلك.",
+    "وجاء قرار الهيئة بسحب دواء سيكلوفوسفاميد بعد فحص عينات قدمتها شركة محلية.",
+  ]) {
+    const g = editorialGate(P2R_REG_CREDIT, "safety_alert", { sourceText: src });
+    assert.ok(!g.needs_review.includes("editorial_incorrect_recall_attribution"), src);
+  }
+});
+
+test("P2R-5 company initiation needs verb–company order; «مصنع الشركة وسحب» does not count", () => {
+  const noun = editorialGate(P2R_REG_CREDIT, "safety_alert", {
+    sourceText: "رُصدت جسيمات في مصنع الشركة وسحب دواء سيكلوفوسفاميد جاء بعد الفحص.",
+  });
+  assert.ok(!noun.needs_review.includes("editorial_incorrect_recall_attribution"));
+  const company = editorialGate(P2R_REG_CREDIT, "safety_alert", {
+    sourceText: "سحبت شركة سني فارماتيك دواء سيكلوفوسفاميد بعد رصد جسيمات، ونشرت الهيئة الإشعار.",
+  });
+  assert.ok(company.needs_review.includes("editorial_incorrect_recall_attribution"));
+});
+
+const P2R_LOT_AND_VIAL =
+  "Sunny Pharmtech is recalling one lot of Papaverine Hydrochloride Injection, 30 mg/mL, 10 mL single-dose vials. The recalled vials were distributed nationwide.";
+
+test("P2R-8 recall-adjacent unit: a lot-scoped recall that also mentions vials flags «عبوات»", () => {
+  assert.equal(recallAdjacentUnit(P2R_LOT_AND_VIAL), "batch");
+  const g = editorialGate(p2Article("سحبت الشركة عبوات من دواء بابافيرين للحقن بعد رصد جسيمات."), "safety_alert", { sourceText: P2R_LOT_AND_VIAL });
+  assert.ok(g.needs_review.includes("scope_word_mismatch"));
+  const ok = editorialGate(p2Article("سحبت الشركة دفعة من دواء بابافيرين للحقن بعد رصد جسيمات."), "safety_alert", { sourceText: P2R_LOT_AND_VIAL });
+  assert.ok(!ok.needs_review.includes("scope_word_mismatch"));
+});
+
+test("P2R-8 counter: a recall genuinely of bottles (lot number printed elsewhere) does not flag «عبوات»", () => {
+  const src = "The company is recalling 5,000 bottles of cough syrup. The lot number is printed on the label.";
+  assert.equal(recallAdjacentUnit(src), "package");
+  const g = editorialGate(p2Article("سحبت الشركة عبوات من شراب السعال بيعت في المتاجر."), "safety_alert", { sourceText: src });
+  assert.ok(!g.needs_review.includes("scope_word_mismatch"));
+});
+
+test("P2R-9 missing_severity_class: safety_alert only, recall-adjacent class phrase only", () => {
+  const draft = p2Article("سحبت الشركة دفعة من الجهاز لأن استخدامه قد يسبب إصابات خطيرة.");
+  const other = editorialGate(draft, "quick_news", { sourceText: CLASS_I_SOURCE });
+  assert.ok(!other.needs_review.includes("missing_severity_class"));
+  assert.equal(
+    sourceSeverityClass("قد يسبب الجهاز حروقاً من الدرجة الثانية. وقررت الشركة سحب الدفعة المتأثرة."),
+    null,
+  );
+  const burns = editorialGate(draft, "safety_alert", {
+    sourceText: "The device may cause second-degree burns. The company is recalling the affected lot.",
+  });
+  assert.ok(!burns.needs_review.includes("missing_severity_class"));
+  // Regression: a recall-adjacent Arabic class still counts.
+  assert.equal(sourceSeverityClass("صنّفت الهيئة السحب ضمن الفئة الأولى."), 1);
+});
+
+test("P2R-10 an over-long issues/changes item is truncated, the edit accepted and the truncation audited", async () => {
+  const long = "و".repeat(10) + " " + "تم تبسيط الصياغة وإعادة ترتيب الفقرات ".repeat(8);
+  const content = JSON.stringify({ ...JSON.parse(SAFETY_GOOD_EDIT), changes_made: [long] });
+  const parsed = parseEditorOutput(content);
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) {
+    assert.equal(parsed.output.changes_made[0].length, 160);
+    assert.ok(parsed.output.changes_made[0].endsWith("…"));
+    assert.equal(parsed.output.list_items_truncated, 1);
+  }
+  const { res } = await runSafety(content, okRevalidate);
+  assert.equal(res.audit.decision, "accepted");
+  assert.ok(res.audit.reasons.includes("editor_list_items_truncated:1"));
+  // Counter: an empty item is still a schema violation.
+  assert.equal(parseEditorOutput(JSON.stringify({ ...JSON.parse(SAFETY_GOOD_EDIT), changes_made: [" "] })).ok, false);
+});
+
+// --- Phase 2 final round (P2R2) ----------------------------------------------
+test("P2R2-G «قرار … بسحب» suppresses only with a regulator subject", () => {
+  const company = editorialGate(P2R_REG_CREDIT, "safety_alert", {
+    sourceText: "وجاء قرار الشركة بسحب دواء سيكلوفوسفاميد بعد رصد جسيمات، وسحبت شركة سني فارماتيك الدفعات.",
+  });
+  assert.ok(company.needs_review.includes("editorial_incorrect_recall_attribution"));
+  const regulator = editorialGate(P2R_REG_CREDIT, "safety_alert", {
+    sourceText: "وجاء قرار الهيئة بسحب دواء سيكلوفوسفاميد بعد فحص عينات، وسحبت شركة سني فارماتيك الدفعات.",
+  });
+  assert.ok(!regulator.needs_review.includes("editorial_incorrect_recall_attribution"));
+});
+
+test("P2R2-F the editor guard accepts either name of a dba pair, and catches dropping both", () => {
+  const packet: EditorFactPacket = {
+    profile: "safety_alert", sourceText: "", readerEssential: ["Elevaris Medical dba Spectra"], conditional: [], verificationOnly: [], requiredActions: [],
+  };
+  const original = p2Article("سحبت شركة إليفاريس ميديكال (Elevaris Medical) دفعة من المضخات.");
+  assert.deepEqual(droppedEssentialEntities(original, p2Article("سحبت شركة سبكترا (Spectra) دفعة من المضخات."), packet), []);
+  assert.deepEqual(droppedEssentialEntities(original, p2Article("سحبت شركة أمريكية دفعة من المضخات."), packet), ["Elevaris Medical dba Spectra"]);
 });
