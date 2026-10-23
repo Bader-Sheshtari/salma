@@ -42,7 +42,7 @@ import {
 // --- profile selection -----------------------------------------------------
 
 test("prompt version is the dedicated writer version", () => {
-  assert.equal(WRITER_PROMPT_VERSION, "e2.0-salma-writer");
+  assert.equal(WRITER_PROMPT_VERSION, "e2.1.1-salma-writer");
 });
 
 test("a medicine safety alert selects the safety_alert profile", () => {
@@ -1300,6 +1300,39 @@ test("e2.0 writing instructions keep fidelity, no-invention and Arabic-first nam
   // No numeric title target, and the prompt never models a blocked claim word.
   assert.ok(!instr.includes("8–12"));
   assert.ok(!instr.includes("أثبت"));
+});
+
+test("e2.1 writing instructions: must-keep list, intelligent compression, event-first lead", () => {
+  for (const profile of ["standard_news", "regulation_or_service", "safety_alert", "research_study"] as const) {
+    const instr = buildWritingInstructions(profile);
+    // Goal framing — not a word target; never cut a fact needed for safe reading.
+    assert.ok(instr.includes("أكبر قدر من المعلومة المفيدة بأقلّ جهد قراءة"), profile);
+    assert.ok(instr.includes("هذا ليس هدفاً لعدد الكلمات"), profile);
+    // Must-keep list, including the at-risk / not-at-risk groups.
+    assert.ok(instr.includes("ما لا يُحذف عند التبسيط أو الاختصار"), profile);
+    assert.ok(instr.includes("- الفئات الأكثر عرضة للخطر."), profile);
+    assert.ok(instr.includes("من لا يشمله الخطر، أو مستوى الخطر على عامة الناس، حين يذكره المصدر"), profile);
+    assert.ok(instr.includes("سطر واحد يوضّح استخدام المنتج حتى يعرف القارئ هل يعنيه"), profile);
+    assert.ok(instr.includes("لا في القائمة أعلاه"), profile);
+    // Intelligent compression.
+    assert.ok(instr.includes("القائمة التي تزيد على ثلاثة عناصر اختصرها بصيغة غير رقمية"), profile);
+    assert.ok(instr.includes("لا تذكر عدداً غير وارد نصاً في المصدر"), profile);
+    assert.ok(!/\d+\s*دولة/.test(instr), profile);
+    assert.ok(instr.includes("مخصّصتان حصراً للكلام المنقول حرفياً من المصدر"), profile);
+    assert.ok(instr.includes("الاسم المعرّب يُكتب مجرّداً بلا «»"), profile);
+    assert.ok(instr.includes("إلا إذا كان كل عنصر فيها يحتاجه القارئ بحدّ ذاته"), profile);
+    assert.ok(instr.includes("نتيجتان أو ثلاث نتائج ثانوية على الأكثر"), profile);
+    assert.ok(instr.includes("بدل تسميتها حين لا يضيف الاسم العلمي للقارئ شيئاً"), profile);
+    assert.ok(instr.includes("التوقّعات والتقديرات تبقى منسوبة إلى أصحابها"), profile);
+    // Lead opens with the event, not the monitoring/announcing body.
+    assert.ok(instr.includes("ولا افتتاح بالجهة التي ترصد الحدث أو تتابعه أو تعلنه"), profile);
+    // The one-time exact product-name gloss contract is unchanged.
+    assert.ok(instr.includes("الاسم الأصلي الدقيق كما ورد في المصدر بين قوسين مرّة واحدة"), profile);
+    assert.ok(!instr.includes("أثبت"), profile);
+  }
+  // Safety alerts carry the product-use line and risk groups in the profile guidance.
+  const safety = buildWritingInstructions("safety_alert");
+  assert.ok(safety.includes("استخدام المنتج كما يذكره المصدر"));
 });
 
 test("writing instructions carry the compression rules and optional summary field", () => {

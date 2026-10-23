@@ -409,7 +409,7 @@ test("parser accepts a well-formed editor object and rejects extras/malformed", 
 });
 
 test("editor instructions carry the prompt version and the strict schema", () => {
-  assert.equal(EDITOR_PROMPT_VERSION, "e2.0-salma-editor");
+  assert.equal(EDITOR_PROMPT_VERSION, "e2.1.1-salma-editor");
   const sys = buildEditorInstructions("safety_alert");
   assert.ok(sys.includes(EDITOR_PROMPT_VERSION));
   assert.ok(sys.includes("edit_applied"));
@@ -547,6 +547,52 @@ test("e2.0 editor prompt: context only when needed, material caveats, conditiona
   }
   // A stored quick_news profile is edited exactly like standard_news.
   assert.equal(buildEditorInstructions("quick_news"), buildEditorInstructions("standard_news"));
+});
+
+test("e2.1 editor prompt: grammar pass, honest changes_made, event-first lead, balance", () => {
+  for (const profile of ["standard_news", "regulation_or_service", "safety_alert", "research_study"] as const) {
+    const sys = buildEditorInstructions(profile);
+    // Mandatory final grammar / agreement / flow pass.
+    assert.ok(sys.includes("المراجعة النهائية الإلزامية"), profile);
+    assert.ok(sys.includes("مطابقة الفعل لفاعله في التذكير والتأنيث"), profile);
+    assert.ok(sys.includes("«يتابع المركز» لا «تتابع المركز»"), profile);
+    assert.ok(sys.includes("الانسياب والإيقاع"), profile);
+    // changes_made honesty.
+    assert.ok(sys.includes("أمانة changes_made"), profile);
+    assert.ok(sys.includes("الفروق الفعلية فقط"), profile);
+    assert.ok(sys.includes("«لم يتغيّر النص»"), profile);
+    assert.ok(sys.includes("لا تدّعِ أبداً تعديلاً لم يحدث"), profile);
+    // Lead must open with the event; drafts that open with the body are rewritten.
+    assert.ok(sys.includes("لا بالجهة التي ترصده أو تتابعه أو تعلنه"), profile);
+    assert.ok(sys.includes("فأعد كتابة المقدّمة إلزامياً"), profile);
+    // Balance: no forced changes to an excellent draft.
+    assert.ok(sys.includes("إذا كانت المسوّدة ممتازة أصلاً فلا تفرض عليها تغييرات"), profile);
+    assert.ok(sys.includes("غرض تحريري واضح"), profile);
+  }
+});
+
+test("e2.1 editor prompt: must-keep at-risk groups and intelligent list compression", () => {
+  for (const profile of ["standard_news", "regulation_or_service", "safety_alert", "research_study"] as const) {
+    const sys = buildEditorInstructions(profile);
+    assert.ok(sys.includes("أكبر قدر من المعلومة المفيدة بأقلّ جهد قراءة"), profile);
+    assert.ok(sys.includes("ما لا يُحذف عند التبسيط أو الاختصار"), profile);
+    assert.ok(sys.includes("- الفئات الأكثر عرضة للخطر."), profile);
+    assert.ok(sys.includes("من لا يشمله الخطر، أو مستوى الخطر على عامة الناس، حين يذكره المصدر"), profile);
+    assert.ok(sys.includes("لا في القائمة أعلاه"), profile);
+    assert.ok(sys.includes("القائمة التي تزيد على ثلاثة عناصر اختصرها بصيغة غير رقمية"), profile);
+    assert.ok(sys.includes("لا تذكر عدداً غير وارد نصاً في المصدر"), profile);
+    assert.ok(!/\d+\s*دولة/.test(sys), profile);
+    assert.ok(sys.includes("مخصّصتان حصراً للكلام المنقول حرفياً من المصدر"), profile);
+    assert.ok(sys.includes("الاسم المعرّب يُكتب مجرّداً بلا «»"), profile);
+    // Compression never removes a packet reader-essential name (guard-aligned).
+    assert.ok(sys.includes("لا تختصر إلى عدد أي اسم ورد في «حقائق أساسية للقارئ (يجب أن تظهر)»"), profile);
+    assert.ok(sys.includes("نتيجتان أو ثلاث نتائج ثانوية على الأكثر"), profile);
+    assert.ok(sys.includes("التوقّعات والتقديرات تبقى منسوبة إلى أصحابها"), profile);
+  }
+  // Safety alerts keep one product-use line; only LONG therapeutic-use lists go.
+  const safety = buildEditorInstructions("safety_alert");
+  assert.ok(safety.includes("أبقِ سطراً واحداً يوضّح استخدام المنتج كما يذكره المصدر"));
+  assert.ok(safety.includes("قوائم الاستخدامات العلاجية المطوّلة"));
 });
 
 test("editor prompt states the number-agreement rule and the direct-opening preference", () => {

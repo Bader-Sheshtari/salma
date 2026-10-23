@@ -195,3 +195,16 @@ test("e2.0 develop editor overlay protects facts and material caveats, not word 
   assert.ok(DEVELOP_EDITOR_OVERLAY.includes("لا يُسقط أي حقيقة أو دليل أو رقم أو تحفّظ جوهري"));
   assert.ok(DEVELOP_EDITOR_OVERLAY.includes("«ما لا نعرفه»"));
 });
+
+test("e2.1 develop overlays: grammar pass, attribution, compression — depth kept", () => {
+  const t = buildDevelopmentInstructions({ direction: "deeper_explainer", editorNote: null });
+  assert.ok(t.includes("الضغط في مادة معمّقة يخدم الوضوح لا القِصر"));
+  assert.ok(t.includes("وانسب التوقّعات والتقديرات إلى أصحابها"));
+  assert.ok(t.includes("لا تذكر عدداً غير وارد نصاً في المصدر"));
+  assert.ok(t.includes("الفئات الأكثر عرضة للخطر"));
+  assert.ok(t.includes("المعالجة السطحية لقصة كبيرة")); // depth mandate untouched
+  assert.ok(!t.includes("أثبت"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("المراجعة النهائية الإلزامية للقواعد والمطابقة والانسياب"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("أمانة changes_made"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("لا تحذف أقسام التحليل أو السياق")); // depth mandate untouched
+});
