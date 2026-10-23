@@ -282,7 +282,9 @@ export async function chatEditor(
         model,
         messages,
         temperature: 0.2,
-        max_tokens: 2200,
+        // e2.0: room for significance-based length (longer major stories and
+        // develop-story pieces) without truncating the strict JSON object.
+        max_tokens: 4000,
         response_format: EDITOR_RESPONSE_FORMAT,
       }),
       signal: AbortSignal.timeout(45000),
@@ -547,22 +549,26 @@ const WRITER_JSON_RECOVERY_MESSAGE = {
 // with the correct source value, or rewrite the sentence without the detail. It
 // returns the same strict writer JSON schema so parseWriterOutput can read it.
 
-/** Human-readable Arabic instruction for one deterministic fidelity issue code. */
+/** Human-readable Arabic instruction for one deterministic fidelity issue code.
+ *  e2.0: a repair restores/removes the fact faithfully but phrases it in simple
+ *  journalistic Arabic. Source-matched wording is demanded ONLY where exactness
+ *  is what the (unchanged) validator re-checks: the official action and the
+ *  unaffected-batch statement; exact source values for numbers. */
 function fidelityIssueInstruction(code: string): string {
   const [kind, detail] = code.split(/:(.+)/);
   switch (kind) {
     case "unsupported_number":
-      return `الرقم أو التاريخ «${detail ?? ""}» غير وارد في نص المصدر. احذفه، أو استبدله بالقيمة الصحيحة كما وردت حرفيًا في المصدر، أو أعِد صياغة الجملة دون هذا الرقم.`;
+      return `الرقم أو التاريخ «${detail ?? ""}» غير وارد في نص المصدر. احذفه، أو استبدله بالقيمة الصحيحة كما وردت حرفيًا في المصدر، أو أعِد صياغة الجملة دون هذا الرقم بعربية صحفية بسيطة.`;
     case "unsupported_claim":
-      return `الادّعاء المتعلق بـ«${detail ?? ""}» (فعالية أو موافقة أو نتيجة) غير مدعوم بنص المصدر. احذفه أو خفّف الصياغة لتطابق ما ورد في المصدر فقط، دون إضافة أي حكم جديد.`;
+      return `الادّعاء المتعلق بـ«${detail ?? ""}» (فعالية أو موافقة أو نتيجة) غير مدعوم بنص المصدر. احذفه أو خفّف الصياغة لتطابق قوة ما ورد في المصدر فقط، بعربية صحفية بسيطة لا بأسلوب المصدر الرسمي، دون إضافة أي حكم جديد.`;
     case "invented_quotation":
-      return "يوجد اقتباس مباشر بين علامتَي تنصيص غير وارد حرفيًا في نص المصدر. احذف الاقتباس أو أعِد صياغته بأسلوب غير مباشر دون علامات تنصيص، دون اختلاق أي كلام منسوب.";
+      return "يوجد اقتباس مباشر بين علامتَي تنصيص غير وارد حرفيًا في نص المصدر. احذف الاقتباس أو أعِد صياغته بأسلوب غير مباشر وبعربية بسيطة دون علامات تنصيص، دون اختلاق أي كلام منسوب.";
     case "missing_official_action":
       return "أشار المصدر إلى إجراء رسمي (سحب أو تحذير أو إيقاف أو ما شابه) لم يُذكر في المقال. أضِف هذا الإجراء فقط إذا ورد صراحةً في نص المصدر، بصياغة مطابقة للمصدر.";
     case "missing_unaffected_batch_statement":
-      return "ذكر المصدر أن دفعات أو منتجات أخرى غير متأثرة. أضِف هذا التوضيح فقط إذا ورد صراحةً في نص المصدر.";
+      return "ذكر المصدر أن دفعات أو منتجات أخرى غير متأثرة. أضِف هذا التوضيح فقط إذا ورد صراحةً في نص المصدر، بصياغة مطابقة للمصدر.";
     default:
-      return `أصلح المشكلة «${code}» بالاعتماد على نص المصدر فقط دون إضافة أي معلومة جديدة.`;
+      return `أصلح المشكلة «${code}» بالاعتماد على نص المصدر فقط دون إضافة أي معلومة جديدة، وبعربية صحفية بسيطة.`;
   }
 }
 
@@ -578,7 +584,7 @@ function buildFidelityRepairMessages(input: {
     "أنت محرّر تدقيق أمانة المصدر في «سلمى». مهمتك الوحيدة: إصلاح مخالفات الأمانة المُدرَجة أدناه بالاعتماد الحصري على نص المصدر المُرفق. " +
     "لا تُضِف أي حقيقة أو رقم أو تاريخ أو اقتباس أو ادّعاء أو سبب أو توصية أو نصيحة طبية غير واردة حرفيًا في نص المصدر. " +
     "لكل مخالفة اختر أحد الحلول: حذف الإضافة غير المدعومة، أو استبدالها بالقيمة الصحيحة من المصدر، أو إعادة صياغة الجملة دون التفصيلة غير المدعومة. " +
-    "لا تُغيّر أي معلومة صحيحة أخرى، وحافظ على الأسلوب العربي المتقن. " +
+    "لا تُغيّر أي معلومة صحيحة أخرى، وحافظ على أسلوب المقال: عربية فصحى صحفية بسيطة وطبيعية، لا أسلوب المصدر الرسمي، إلا حيث تطلب المخالفة صراحةً صياغة مطابقة للمصدر. " +
     "عقد الإخراج الإلزامي (يجب أن يطابق المُحلِّل تمامًا): أعِد المقال كاملًا ككائن JSON واحد صالح فقط. " +
     "ضمِّن الحقول النصية الثلاثة كلها في كل مرة: \"title\" و\"excerpt\" و\"body\"، وانسخ أي حقل لم تُعدّله كما هو حرفيًا من المسودة (لا تحذف أي حقل ولا تتركه فارغًا). " +
     "\"summary\" اختياري فقط؛ إذا أدرجته فليكن نصًا. لا تُضِف أي مفتاح آخر إطلاقًا، ولا تُعِد كائن تعديل جزئيًا أو مخططًا بديلًا أو قائمة تغييرات. " +

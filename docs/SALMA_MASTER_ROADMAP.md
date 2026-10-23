@@ -256,6 +256,7 @@ Ordered as in the original P1 list; the numbers are the stable P1 IDs.
 - **P1 #7** — **Comment/ratings/newsletter anti-spam** — anon inserts are unthrottled (`with check (true)`); moderation queue is floodable. Add rate limiting + honeypot (CAPTCHA optional).
 - **P1 #8** — **Repo/production drift reconciliation** — commit a migration reflecting the live ESL cron (`run_esl('live')`) so the repo is the source of truth again; same for any other out-of-band prod changes.
 - **P1 #9** — **Legacy cleanup** — retire or repurpose the no-op `salma-news-ingest` cron (fires 4×/day, rejected by pilot gate); reconcile local migration filenames vs applied remote versions; note the `ingest-news` publish branch is **default-on** (`radar_publish_mode` defaults to `"publish"`) and only ESL's hardcoded `"prepare"` prevents auto-publish — flip the default to `"prepare"` for structural safety.
+- **P1 #14** — **Security hardening: publishability gaps A/B/C** (staff direct-INSERT publish; uid-NULL transition-guard bypass; `esl_promote` publish default) — see `docs/SECURITY_HARDENING_PUBLISHABILITY.md`. Found 2026-10-23 during the editorial-standard Phase 0 audit. **OPEN — remediation needs owner approval.**
 
 P1 items that live in other sections: **P1 #4** and **P1 #12** and **P1 #13** → §2 (Website Excellence); **P1 #6** → §4 (Newsletter Engine); **P1 #10** → §6 (Analytics); **P1 #11** → §1 (Editorial Intelligence).
 

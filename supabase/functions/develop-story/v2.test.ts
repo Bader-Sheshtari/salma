@@ -18,6 +18,8 @@ import {
 } from "./sourceNetwork.ts";
 import { buildSearchTerm, classifyPubTypes, orderPubmedItems, type PubmedItem } from "./retrievers.ts";
 import {
+  buildDevelopmentInstructions,
+  DEVELOP_EDITOR_OVERLAY,
   newVsUpdateAdvice,
   parseBriefV2Output,
   type BriefV2,
@@ -167,4 +169,29 @@ test("newVsUpdateAdvice branches (advisory only)", () => {
     newVsUpdateAdvice({ ...VALID, new_now: [VALID.new_now[0]], changed: [] }, true).key,
     "follow_up",
   );
+});
+
+// ---- e2.0 development overlay: depth by significance, not word count -------
+
+test("e2.0 development instructions: no numeric word target, depth sections kept", () => {
+  const t = buildDevelopmentInstructions({ direction: "deeper_explainer", editorNote: null });
+  assert.ok(!t.includes("٤٥٠"));
+  assert.ok(!t.includes("٨٠٠"));
+  assert.ok(!t.includes("الطول المستهدف"));
+  assert.ok(t.includes("لا يوجد طول مستهدف"));
+  assert.ok(t.includes("المعالجة السطحية لقصة كبيرة"));
+  // After-the-News depth is preserved: ordered sections, unknowns, disputes.
+  assert.ok(t.includes("«ما لا نعرفه»"));
+  assert.ok(t.includes("فاعرضه كخلاف صريح بين الموقفين"));
+  assert.ok(t.includes("فقط إذا كان هناك أمر محدّد منتظر فعلاً"));
+  assert.ok(t.includes("المخبرية والتجارب على الحيوانات والدراسات على البشر"));
+  assert.ok(!t.includes("أثبت")); // never model a CLAIM_KEYWORDS word
+});
+
+test("e2.0 develop editor overlay protects facts and material caveats, not word count", () => {
+  assert.ok(!DEVELOP_EDITOR_OVERLAY.includes("٤٥٠"));
+  assert.ok(!DEVELOP_EDITOR_OVERLAY.includes("لا تختصرها"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("يجوز الاختصار من أجل الوضوح"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("لا يُسقط أي حقيقة أو دليل أو رقم أو تحفّظ جوهري"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("«ما لا نعرفه»"));
 });

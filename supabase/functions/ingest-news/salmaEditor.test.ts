@@ -409,6 +409,7 @@ test("parser accepts a well-formed editor object and rejects extras/malformed", 
 });
 
 test("editor instructions carry the prompt version and the strict schema", () => {
+  assert.equal(EDITOR_PROMPT_VERSION, "e2.0-salma-editor");
   const sys = buildEditorInstructions("safety_alert");
   assert.ok(sys.includes(EDITOR_PROMPT_VERSION));
   assert.ok(sys.includes("edit_applied"));
@@ -529,6 +530,23 @@ test("opening gate: a direct active 'سحبت شركة …' lead is NOT flagged"
     "safety_alert",
   );
   assert.ok(!g.needs_review.includes("editorial_press_release_opening"));
+});
+
+test("e2.0 editor prompt: context only when needed, material caveats, conditional closing", () => {
+  for (const profile of ["standard_news", "regulation_or_service", "safety_alert", "research_study"] as const) {
+    const sys = buildEditorInstructions(profile);
+    assert.ok(!sys.includes("أضف أهمّ سياق"), profile);
+    assert.ok(sys.includes("لا تُضِف سياقاً إلا إذا كان القارئ لا يفهم الخبر بدونه"), profile);
+    assert.ok(!sys.includes("بدقته وتحفّظاته كاملة"), profile);
+    assert.ok(sys.includes("كل تحفّظ يغيّر ما يجب أن يستنتجه القارئ أو يفعله"), profile);
+    assert.ok(sys.includes("فقط إذا ذكر المصدر أمراً محدّداً منتظراً فعلاً"), profile);
+    assert.ok(sys.includes("لا عدد كلمات مستهدف"), profile);
+    // Phase 1 guard alignment: never tell the editor to drop Hydrochloride.
+    assert.ok(!sys.includes("مثل Hydrochloride وfor Injection"), profile);
+    assert.ok(sys.includes("بما في ذلك الواصفات الكيميائية مثل Hydrochloride"), profile);
+  }
+  // A stored quick_news profile is edited exactly like standard_news.
+  assert.equal(buildEditorInstructions("quick_news"), buildEditorInstructions("standard_news"));
 });
 
 test("editor prompt states the number-agreement rule and the direct-opening preference", () => {

@@ -42,7 +42,7 @@ import {
 // --- profile selection -----------------------------------------------------
 
 test("prompt version is the dedicated writer version", () => {
-  assert.equal(WRITER_PROMPT_VERSION, "e1.4-salma-writer");
+  assert.equal(WRITER_PROMPT_VERSION, "e2.0-salma-writer");
 });
 
 test("a medicine safety alert selects the safety_alert profile", () => {
@@ -66,9 +66,17 @@ test("a peer-reviewed study selects the research_study profile", () => {
   assert.equal(p, "research_study");
 });
 
-test("a short generic announcement falls back to quick_news by length", () => {
+test("e2.0: quick_news is retired — a short generic announcement selects standard_news", () => {
+  // Length no longer picks a profile; targetWords is accepted but ignored.
   const p = selectProfile({ sourceText: "إعلان صحي عام قصير.", targetWords: 130 });
-  assert.equal(p, "quick_news");
+  assert.equal(p, "standard_news");
+});
+
+test("e2.0: a stored quick_news profile writes and is monitored like standard_news", () => {
+  assert.deepEqual(PROFILE_WORD_BANDS.quick_news, PROFILE_WORD_BANDS.standard_news);
+  const quick = buildWritingInstructions("quick_news");
+  const standard = buildWritingInstructions("standard_news");
+  assert.equal(quick, standard);
 });
 
 test("an explicit profile always wins over keyword inference", () => {
@@ -1246,6 +1254,52 @@ test("an oversized summary is a schema violation", () => {
   const r = parseWriterOutput(`{"title":"عنوان","excerpt":"","body":"نص كافٍ للخبر","summary":"${huge}"}`);
   assert.equal(r.ok, false);
   assert.equal(!r.ok && r.error, "writer_output_schema_invalid");
+});
+
+test("e2.0 writing instructions: lead-first, no numeric word targets, conditional closing", () => {
+  for (const profile of ["standard_news", "regulation_or_service", "safety_alert", "research_study"] as const) {
+    const instr = buildWritingInstructions(profile);
+    // Lead with the news; every sentence earns its place.
+    assert.ok(instr.includes("ابدأ بالخبر"), profile);
+    assert.ok(instr.includes("كل جملة يجب أن تستحقّ مكانها"), profile);
+    // Length follows significance — no article word targets of any kind.
+    assert.ok(instr.includes("لا يوجد عدد كلمات مستهدف"), profile);
+    assert.ok(!/\d+\s*[–-]\s*\d+\s*كلمة إجمالاً/.test(instr), profile);
+    assert.ok(!instr.includes("90–150"), profile);
+    assert.ok(!instr.includes("~"), profile);
+    // The fixed two-paragraph formula is gone; the closing is conditional.
+    assert.ok(!instr.includes("الفقرة الأولى ماذا حدث، والثانية"), profile);
+    assert.ok(instr.includes("فقط إذا ذكر المصدر أمراً محدّداً منتظراً فعلاً"), profile);
+    // Evidence distinctions and no generalization.
+    assert.ok(instr.includes("المخبرية والتجارب على الحيوانات والدراسات على البشر"), profile);
+    assert.ok(instr.includes("لا تعمّم نتيجة محدّدة إلى ادّعاء طبي أوسع"), profile);
+    // Style exemplars are framed as style only, never as verified facts.
+    assert.ok(instr.includes("أمثلة أسلوبية"), profile);
+    assert.ok(instr.includes("ليست حقائق مُتحقَّقاً منها"), profile);
+  }
+});
+
+test("e2.0 writing instructions keep fidelity, no-invention and Arabic-first naming mandates", () => {
+  const instr = buildWritingInstructions("safety_alert");
+  assert.ok(instr.includes("أمينة تماماً للمادة المصدرية"));
+  assert.ok(instr.includes("لا تختلق رقماً أو تاريخاً أو اقتباساً أو ادّعاءً"));
+  assert.ok(instr.includes("فرّق بين المؤشر والنتيجة"));
+  assert.ok(instr.includes("لا تدمج موافقات جهات مختلفة"));
+  // Exact original foreign name once in parentheses; chemical descriptors are
+  // NOT dropped (the unchanged guards treat them as identity).
+  assert.ok(instr.includes("الاسم الأصلي الدقيق كما ورد في المصدر بين قوسين مرّة واحدة"));
+  assert.ok(instr.includes("بما في ذلك الواصفات الكيميائية مثل Hydrochloride"));
+  assert.ok(instr.includes("العنوان عربي بالكامل"));
+  // Profile checklists are "include when material", while the official action
+  // and the main confirmed risk can never be dropped from a safety alert.
+  assert.ok(instr.includes("اذكر متى توفّرت"));
+  assert.ok(instr.includes("لا تُسقط أبداً الإجراء الذي طلبته الجهة الرسمية"));
+  // Product identity is unconditional; the unaffected-batch reassurance is kept.
+  assert.ok(instr.includes("واذكر دائماً هوية المنتج المتأثّر"));
+  assert.ok(instr.includes("غير متأثّرة فأبقِ هذا التوضيح"));
+  // No numeric title target, and the prompt never models a blocked claim word.
+  assert.ok(!instr.includes("8–12"));
+  assert.ok(!instr.includes("أثبت"));
 });
 
 test("writing instructions carry the compression rules and optional summary field", () => {
