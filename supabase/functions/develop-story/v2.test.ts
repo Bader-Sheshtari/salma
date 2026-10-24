@@ -11,12 +11,16 @@ import {
   depthCaps,
   detectClaimDomains,
   rankEvidence,
+  resolveDraftSourceLang,
   roleToClass,
   shouldSearchLiterature,
   shouldSearchOpenFda,
   shouldSearchTrials,
 } from "./sourceNetwork.ts";
 import { buildSearchTerm, classifyPubTypes, orderPubmedItems, type PubmedItem } from "./retrievers.ts";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { checkFactGrounding, numberLocaleForLang } from "../ingest-news/salmaWriter.ts";
 import {
   buildDevelopmentInstructions,
   DEVELOP_EDITOR_OVERLAY,
@@ -207,4 +211,43 @@ test("e2.1 develop overlays: grammar pass, attribution, compression — depth ke
   assert.ok(DEVELOP_EDITOR_OVERLAY.includes("المراجعة النهائية الإلزامية للقواعد والمطابقة والانسياب"));
   assert.ok(DEVELOP_EDITOR_OVERLAY.includes("أمانة changes_made"));
   assert.ok(DEVELOP_EDITOR_OVERLAY.includes("لا تحذف أقسام التحليل أو السياق")); // depth mandate untouched
+});
+
+
+// ---- P4R2: source language threaded into the draft stage ---------------------
+
+// D18 (hotnews.ro, Romanian), verbatim fragment: «peste 1.100 de pacienți».
+const D18_SOURCE =
+  "Datele din studiul de fază 3, care a inclus peste 1.100 de pacienți, au arătat, de asemenea, că vaccinul a redus riscul. Dintre cei care au primit vaccinul în plus față de Keytruda, 82,2% erau încă fără cancer după doi ani.";
+const d18Numbers = (draft: string, sourceLang: string | null) =>
+  checkFactGrounding({ title: "ع", excerpt: "", body: draft }, { sourceText: D18_SOURCE, sourceLang }, "research_study")
+    .errors.filter((e) => e.startsWith("unsupported_number"));
+
+test("P4R2 develop-story resolves the source language (draft_inputs first, then the origin article)", () => {
+  assert.equal(resolveDraftSourceLang({ source_lang: "ro" }, { source_lang: "en" }), "ro");
+  assert.equal(resolveDraftSourceLang({}, { source_lang: "ro" }), "ro");
+  assert.equal(resolveDraftSourceLang({ source_lang: "  " }, { source_lang: "ro" }), "ro");
+  assert.equal(resolveDraftSourceLang(null, null), null);
+  assert.equal(numberLocaleForLang("ro-RO"), "eu");
+  assert.equal(numberLocaleForLang("pt_BR"), "eu");
+});
+
+test("P4R2 D18: with the Romanian source language «1.100» grounds the draft's 1100 (and 82,2 ↔ 82.2)", () => {
+  const draft = "الدراسة كانت في المرحلة الثالثة وشملت أكثر من 1100 مريض. وبقي 82.2% بلا سرطان بعد عامين.";
+  assert.deepEqual(d18Numbers(draft, resolveDraftSourceLang({ source_lang: "ro" }, null)), []);
+  assert.deepEqual(d18Numbers("وشملت أكثر من 1,100 مريض.", "ro"), []);
+});
+
+test("P4R2 D18 counter: without a language «1.100» stays 1.1 (strict), and a wrong figure still fails under ro", () => {
+  assert.deepEqual(d18Numbers("وشملت أكثر من 1100 مريض.", null), ["unsupported_number:1100"]);
+  assert.deepEqual(d18Numbers("وشملت أكثر من 1101 مريض.", "ro"), ["unsupported_number:1101"]);
+  assert.deepEqual(d18Numbers("وبقي 82.3% بلا سرطان.", "ro"), ["unsupported_number:82.3"]);
+});
+
+test("P4R2 develop-story wiring: the draft stage no longer hard-codes sourceLang: null", () => {
+  const src = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
+  assert.ok(!src.includes("sourceLang: null"));
+  assert.ok(src.includes("const sourceLang = resolveDraftSourceLang(inputs, origin.original);"));
+  assert.ok(src.includes("source_lang: origin.kind === \"article\" ? origin.row.source_lang : null,"));
+  assert.equal((src.match(/sourceLang\b/g) ?? []).length, 3);
 });

@@ -409,7 +409,7 @@ test("parser accepts a well-formed editor object and rejects extras/malformed", 
 });
 
 test("editor instructions carry the prompt version and the strict schema", () => {
-  assert.equal(EDITOR_PROMPT_VERSION, "e2.2-salma-editor");
+  assert.equal(EDITOR_PROMPT_VERSION, "e2.3-salma-editor");
   const sys = buildEditorInstructions("safety_alert");
   assert.ok(sys.includes(EDITOR_PROMPT_VERSION));
   assert.ok(sys.includes("edit_applied"));
@@ -884,8 +884,10 @@ test("§14.31 the editor response_format is a strict json_schema for the exact o
 // calls the unaffected batches "safe".
 const PAP_SOURCE =
   "أعلنت شركة أمريكان ريجنت (American Regent) سحباً طوعياً لدفعة واحدة من حقن بابافيرين بعد العثور على جسيمات زجاجية ومادة كيميائية داخل بعض العبوات. والدفعات الأخرى غير مشمولة بالسحب. ودعت المرضى إلى وقف الاستخدام والتواصل مع الطبيب، وطلبت من المنشآت الصحية عدم استخدام الدفعة المتأثرة.";
+// P4R-8: the source carries the Latin drug name the target article glosses
+// (an invented gloss is now a blocking invented_foreign_gloss).
 const CYC_SOURCE =
-  "سحبت شركة سني فارماتيك (Sunny Pharmtech) ثلاث دفعات من حقن سيكلوفوسفاميد في الولايات المتحدة بعد العثور على جسيمات معدنية داخل بعض العبوات. وقد يسبب إعطاء الدواء عبر الوريد مع وجود هذه الجسيمات مضاعفات خطرة من بينها انسداد الأوعية الدموية. وطلبت الشركة من المستشفيات والصيدليات وقف استخدام الدفعات المتأثرة وعزلها وإعادتها وفق تعليمات السحب. ولم تُسجّل حتى الآن إصابات أو آثار جانبية مرتبطة بالمشكلة.";
+  "سحبت شركة سني فارماتيك (Sunny Pharmtech) ثلاث دفعات من حقن سيكلوفوسفاميد (Cyclophosphamide) في الولايات المتحدة بعد العثور على جسيمات معدنية داخل بعض العبوات. وقد يسبب إعطاء الدواء عبر الوريد مع وجود هذه الجسيمات مضاعفات خطرة من بينها انسداد الأوعية الدموية. وطلبت الشركة من المستشفيات والصيدليات وقف استخدام الدفعات المتأثرة وعزلها وإعادتها وفق تعليمات السحب. ولم تُسجّل حتى الآن إصابات أو آثار جانبية مرتبطة بالمشكلة.";
 
 // The user-approved compact target articles.
 const PAP_TARGET: EditorArticle = {
@@ -1825,13 +1827,13 @@ test("P2-C9 every editor path yields the right decision + reasons", async () => 
 test("P2-D10 the decision-audit builder carries editor_outcome + editor_prompt_version", async () => {
   assert.deepEqual(editorDecisionAuditFields(null), { editor_outcome: null, editor_prompt_version: null });
   const { res } = await runSafety(SAFETY_GOOD_EDIT, okRevalidate);
-  assert.deepEqual(editorDecisionAuditFields(res.audit), { editor_outcome: "accepted", editor_prompt_version: "e2.2-salma-editor" });
+  assert.deepEqual(editorDecisionAuditFields(res.audit), { editor_outcome: "accepted", editor_prompt_version: "e2.3-salma-editor" });
 });
 
 // --- P2-E11 editor names policy ------------------------------------------------
 test("P2-E11 editor prompt carries the e2.2 names policy (fix a rendering only by restoring the original)", () => {
   const p = buildEditorInstructions("safety_alert");
-  assert.ok(p.includes("e2.2-salma-editor"));
+  assert.ok(p.includes("e2.3-salma-editor"));
   assert.ok(p.includes("الإصلاح الوحيد المسموح هو إعادة الاسم اللاتيني الأصلي"));
   assert.ok(p.includes("شركة Spectra Medical"));
   assert.ok(p.includes("doing business as"));

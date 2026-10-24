@@ -44,6 +44,45 @@ export type FidelityRepairCall = (
   draft: FidelityArticle,
 ) => Promise<{ ok: true; article: FidelityArticle } | { ok: false; reason: string }>;
 
+/** P4R-7: build the single constrained-repair transport from injected parts so
+ *  its wiring is unit-testable. The repair returns the WRITER object, so the
+ *  caller passes the writer-shaped provider schema (WRITER_REPAIR_RESPONSE_FORMAT)
+ *  — never the editor's schema — and the strict writer parser. A transport or
+ *  parse failure is a plain reason; an empty summary keeps the draft's own
+ *  unless an issue is located in the summary (then it is cleared). */
+export function makeFidelityRepairCall<M>(deps: {
+  send: (messages: M, responseFormat: unknown) => Promise<{ ok: true; content: string } | { ok: false; reason: string }>;
+  buildMessages: (issues: string[], draft: FidelityArticle) => M;
+  responseFormat: unknown;
+  parse: (content: string) =>
+    | { ok: true; article: { title: string; excerpt: string; body: string; summary?: string } }
+    | { ok: false; error: string };
+}): FidelityRepairCall {
+  return async (issues, draft) => {
+    const res = await deps.send(deps.buildMessages(issues, draft), deps.responseFormat);
+    if (!res.ok) return { ok: false, reason: res.reason };
+    const parsed = deps.parse(res.content);
+    if (!parsed.ok) return { ok: false, reason: parsed.error };
+    // P4R3-5: an empty repaired summary normally keeps the draft's own — but
+    // when an issue is LOCATED in the summary (its detail appears there), the
+    // empty summary is the fix, so it is cleared instead of restoring the
+    // offending text.
+    const summaryTargeted = issues.some((code) => {
+      const detail = code.split(/:(.+)/)[1];
+      return !!detail && (draft.summary ?? "").includes(detail);
+    });
+    return {
+      ok: true,
+      article: {
+        title: parsed.article.title,
+        excerpt: parsed.article.excerpt,
+        summary: parsed.article.summary ?? (summaryTargeted ? "" : draft.summary),
+        body: parsed.article.body,
+      },
+    };
+  };
+}
+
 export type FidelityClass = "repairable" | "omission" | "blocking";
 
 // Repairable fidelity breaches: an ungrounded number/date, an unsupported
@@ -56,6 +95,10 @@ export const REPAIRABLE_FIDELITY_PREFIXES = [
   "unsupported_date",
   "unsupported_claim",
   "invented_quotation",
+  // P4R-8: a parenthetical Latin form the source never states — the single
+  // repair may delete it (the Arabic name then stands alone); still present at
+  // final validation → reject.
+  "invented_foreign_gloss",
 ] as const;
 
 // Omission-completeness breaches: the source stated an official action / an

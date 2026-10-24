@@ -42,7 +42,7 @@ import {
 // --- profile selection -----------------------------------------------------
 
 test("prompt version is the dedicated writer version", () => {
-  assert.equal(WRITER_PROMPT_VERSION, "e2.2-salma-writer");
+  assert.equal(WRITER_PROMPT_VERSION, "e2.3-salma-writer");
 });
 
 test("a medicine safety alert selects the safety_alert profile", () => {
@@ -1977,7 +1977,7 @@ test("P2-B8 folding never makes two different drug names equal (near-miss pairs)
 // --- P2-E11 names policy (prompt) ------------------------------------------
 test("P2-E11 writer prompt carries the e2.2 names policy", () => {
   const p = p2BuildWritingInstructions("safety_alert");
-  assert.ok(p.includes("e2.2-salma-writer"));
+  assert.ok(p.includes("e2.3-salma-writer"));
   assert.ok(p.includes("شركة Spectra Medical"));
   assert.ok(p.includes("لا تخترع تهجئة عربية"));
   assert.ok(p.includes("doing business as"));

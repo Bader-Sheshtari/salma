@@ -28,9 +28,15 @@ import {
   arabicEntityPresent,
   arabicMatchTokens,
   HEADLINE_OVERSTATEMENT_CUES,
+  NATURAL_ARABIC_LINES,
+  NO_INVENTED_LATIN_RULE,
+  RATIO_RULE,
+  sourceOrderCorrelation,
   classifyEntityVisibility,
   countWords,
   dbaAliases,
+  EXCERPT_DEFINITION,
+  excerptDuplicatesLead,
   extractOfficialActions,
   foldDigits,
   foreignEssentialNameStatus,
@@ -43,8 +49,9 @@ import {
   suspectGlossPairs,
   type WritingProfile,
 } from "./salmaWriter.ts";
+import { buildGlossaryPromptBlock } from "./glossaryAr.ts";
 
-export const EDITOR_PROMPT_VERSION = "e2.2-salma-editor" as const;
+export const EDITOR_PROMPT_VERSION = "e2.3-salma-editor" as const;
 
 // Provider-level structured-output contract (OpenRouter/OpenAI `response_format`).
 // The strongest structured-output mechanism the configured editor model supports:
@@ -191,7 +198,14 @@ const REPAIR_ISSUE_TEXT: Record<string, string> = {
     "خطأ في مطابقة العدد للمعدود: «ثلاث دفعات» لا «ثلاثة دفعات»، و«ثلاثة أدوية» لا «ثلاث أدوية».",
   editorial_press_release_opening:
     "المقدّمة تبدأ بصيغة إعلان (أعلنت/كشفت/وفقاً للإشعار): ابدأ بالفعل الحدثي المباشر.",
+  // P4R-9: the excerpt restates the lead — rewrite it under the e2.3 definition.
+  editorial_excerpt_duplicates_opening:
+    "المقتطف يكرّر المقدّمة: أعد كتابة المقتطف وحده ليجيب عن سؤال «لماذا يهمّني هذا؟» — العاقبة أو ما على المحكّ للقارئ كما يذكره المصدر — بينما تبقى المقدّمة للحدث نفسه. لا تُعِد استخدام أفعال المقدّمة ولا أسمائها الرئيسية إلا اسم الموضوع نفسه، ولا تُضِف عاقبة أو حقيقة لا يذكرها المصدر.",
 };
+
+// P4R-11: a restored item keeps its OWN source sentence's subject and scope.
+export const RESTORE_SCOPE_RULE =
+  "أعِده في جملته الخاصة بفاعله ونطاقه كما وردا في جملة المصدر نفسها، ولا تدمجه مع توصية أو إجراء موجّه إلى جمهور مختلف (مثل المرضى مقابل المنشآت الصحية أو الموزّعين).";
 
 // P2-B7: Arabic labels for the official-action codes a targeted restore repair
 // names (see salmaWriter OFFICIAL_ACTION_PATTERNS).
@@ -214,10 +228,10 @@ export const RESTORE_ENTITY_PREFIX = "restore_missing_entity:";
 export function repairIssueText(code: string): string {
   if (code.startsWith(RESTORE_ACTION_PREFIX)) {
     const a = code.slice(RESTORE_ACTION_PREFIX.length);
-    return `أعِد إلى النص العنصر الناقص: ${ACTION_RESTORE_LABEL[a] ?? a} كما ورد في المصدر، دون تغيير أي شيء آخر.`;
+    return `أعِد إلى النص العنصر الناقص: ${ACTION_RESTORE_LABEL[a] ?? a} كما ورد في المصدر، دون تغيير أي شيء آخر. ${RESTORE_SCOPE_RULE}`;
   }
   if (code.startsWith(RESTORE_ENTITY_PREFIX)) {
-    return `أعِد إلى النص العنصر الناقص: ${code.slice(RESTORE_ENTITY_PREFIX.length)} كما ورد في المصدر، دون تغيير أي شيء آخر.`;
+    return `أعِد إلى النص العنصر الناقص: ${code.slice(RESTORE_ENTITY_PREFIX.length)} كما ورد في المصدر، دون تغيير أي شيء آخر. ${RESTORE_SCOPE_RULE}`;
   }
   return REPAIR_ISSUE_TEXT[code] ?? code;
 }
@@ -245,6 +259,13 @@ export function repairIssueText(code: string): string {
 // original Latin name (a changed rendering is flagged name_rendering_changed);
 // keep "doing business as" direction, recall severity class, "as of DATE" on
 // injury counts; lot/batch = دفعة/تشغيلة never عبوة; no «لم يذكر المصدر…».
+// e2.3 (P4R remediation, prompt text): per-paragraph purpose test (cut a
+// paragraph whose removal changes nothing the reader knows/does/concludes),
+// paired with the unchanged don't-force-changes balance; the excerpt answers
+// «لماذا يهمّني هذا؟» while the lead states the event; natural-Arabic lines and
+// the ratio rule shared with the writer; the shared glossary + GCC regulator
+// country on first mention; carve-out — no Latin form in the source ⇒ the Arabic
+// name stands alone (invented_foreign_gloss blocks an invented one).
 export function buildEditorInstructions(
   profile: WritingProfile,
   opts: { strictJsonRecovery?: boolean; repairIssues?: string[] } = {},
@@ -260,6 +281,8 @@ ${PROFILE_EDIT_GUIDANCE[profile]}
 يمكنك: إعادة صياغة العنوان، وإعادة بناء المقدّمة، والاختصار، وحذف التكرار، وحذف المقدّمات والخاتمات المصطنعة، وحذف التفاصيل التنظيمية أو التقنية غير الضرورية، وتبسيط المصطلحات الطبية دون تغيير معناها، وتحسين الإيقاع والقواعد، وترتيب الحقائق حسب أهمّيتها للقارئ، ونقل الأسماء الأجنبية إلى العربية. القاعدة الحاكمة: كل جملة يجب أن تستحقّ مكانها — والطول تحدّده أهمية الخبر ومادته، لا عدد كلمات مستهدف.
 
 التوازن: إذا كانت المسوّدة ممتازة أصلاً فلا تفرض عليها تغييرات. كل تغيير يجب أن يكون له غرض تحريري واضح يمكن إثباته (دقّة أو وضوح أو قواعد أو ترتيب أو حذف حشو)؛ والإبقاء على نصّ جيّد كما هو قرار تحريري صحيح، لا تقصير.
+
+اختبار الغرض لكل فقرة (تفويض الحذف): اسأل عن كل فقرة: لو حُذفت، هل يتغيّر ما يعرفه القارئ أو ما يفعله أو ما يستنتجه؟ إن كان الجواب «لا» فاحذفها. هذا الاختبار يكمّل قاعدة التوازن ولا يناقضها: لا تحذف فقرة تحمل عنصراً من قائمة «ما لا يُحذف» أدناه، ولا تُجرِ تغييرات أخرى لا غرض لها.
 
 الهدف: أكبر قدر من المعلومة المفيدة بأقلّ جهد قراءة. هذا ليس هدفاً لعدد الكلمات: لا تحذف أبداً حقيقة يحتاجها القارئ ليفهم الخبر بدقّة أو يفسّره تفسيراً آمناً.
 
@@ -284,6 +307,7 @@ ${PROFILE_EDIT_GUIDANCE[profile]}
 سياسة التعريب أولاً (إلزامية لكل اسم أجنبي أساسي: الأدوية والشركات والمنتجات والجهات):
 - اكتب الاسم بالعربية أولاً (تعريباً أو نقحرةً)، ثم ضَع الاسم الأجنبي الأصلي الدقيق بين قوسين عند أوّل ذكر فقط، هكذا: «سيكلوفوسفاميد (Cyclophosphamide)»، «سني فارماتيك (Sunny Pharmtech)»، «بابافيرين (Papaverine)»، «أمريكان ريجنت (American Regent)».
 - لا تحذف الاسم الأجنبي الأصلي بالكامل مطلقاً: يجب أن يظهر الاسم الأصلي الدقيق مرّة واحدة بالضبط بين قوسين عند أوّل ذكر، حتى لا تضيع الهوية الدقيقة للمنتج أو الجهة، ولا تختصره أو تبدّله بصيغة قد تغيّر الهوية.
+- استثناء: ${NO_INVENTED_LATIN_RULE} وإذا وجدت في المسوّدة قوساً لاتينياً لا يرد في المصدر فاحذفه.
 - بعد أوّل ذكر، استخدم العربية وحدها، ولا تكرّر الاسم الإنجليزي ولا القوس التوضيحي في المقتطف أو بقية النص.
 - العنوان عربي بالكامل: لا تضع أي حروف إنجليزية في العنوان إطلاقاً.
 - علامتا التنصيص «» في المخرجات مخصّصتان حصراً للكلام المنقول حرفياً من المصدر. لا تضع بينهما أسماء أو أدوية أو مجلات أو برامج أو مصطلحات: الاسم المعرّب يُكتب مجرّداً بلا «»، والأصل الأجنبي بين قوسين () مرّة واحدة عند أوّل ذكر. (علامات «» في هذه التعليمات تحدّد الأمثلة فقط ولا تُنسخ إلى النص.)
@@ -292,6 +316,8 @@ ${PROFILE_EDIT_GUIDANCE[profile]}
 - إذا وجدت في المسوّدة تعريباً تشكّ في صحّته فلا تستبدله بتعريب آخر من عندك: الإصلاح الوحيد المسموح هو إعادة الاسم اللاتيني الأصلي كما ورد في المصدر مسبوقاً بوصف عربي. وإن كان التعريب سليماً فأبقِه كما هو حرفياً.
 - صيغة «X doing business as Y» تبقى باتجاهها: X هي الجهة القانونية وY هو الاسم التجاري، ولا تعكسها.
 - العنوان: إذا تعذّر نقل الاسم إلى العربية بأمان فاستخدم وصفاً عربياً عاماً (مثل «شركة أمريكية للأجهزة الطبية»)، ويبقى الاسم اللاتيني في النص.
+
+${buildGlossaryPromptBlock()}
 
 أمانة تفاصيل السحب والإصابات:
 - أبقِ تصنيف خطورة السحب إن ذكره المصدر (مثل Class I أو «الفئة الأولى» أو «الأكثر خطورة») بصياغة عربية واضحة، ولا تحذفه عند الاختصار.
@@ -331,8 +357,11 @@ ${PROFILE_EDIT_GUIDANCE[profile]}
 المراجعة النهائية الإلزامية (قبل إخراج JSON، على العنوان والمقتطف والملخّص والنص):
 - القواعد والمطابقة: راجع مطابقة الفعل لفاعله في التذكير والتأنيث («يتابع المركز» لا «تتابع المركز»، «أعلنت الوزارة» لا «أعلن الوزارة»)، ومطابقة الصفة لموصوفها والضمير لما يعود إليه، ومطابقة العدد للمعدود كما سبق. صحّح كل خطأ تجده، وأزل «» عن أي اسم أو مصطلح ليس كلاماً منقولاً.
 - الانسياب والإيقاع: تأكّد أن الجمل تتتابع بربط طبيعي، وأن الجمل المتجاورة لا تبدأ بالصيغة نفسها، وأنه لا توجد جملة مقطوعة أو انتقال مفاجئ.
+- ${RATIO_RULE}
 
-المقتطف والملخّص لهما وظيفتان مختلفتان: المقتطف يشرح الحدث المركزي ويدعم العنوان دون تكراره حرفياً؛ والملخّص «باختصار» جملة واحدة قصيرة تضيف للقارئ شيئاً لا يقوله المقتطف (الخلاصة العملية أو ما يعنيه الخبر له)، مختلفة عن العنوان والمقتطف والمقدّمة. لا تُكرّر الجملة نفسها في أكثر من حقل، ولا تجعل الملخّص إعادة صياغة للمقتطف.
+${NATURAL_ARABIC_LINES}
+
+المقتطف والملخّص لهما وظيفتان مختلفتان: ${EXCERPT_DEFINITION} والملخّص «باختصار» جملة واحدة قصيرة تضيف للقارئ شيئاً لا يقوله المقتطف (مثل ما ينبغي فعله أو ما الذي يُنتظر لاحقاً، متى ذكره المصدر)، مختلفة عن العنوان والمقتطف والمقدّمة. لا تُكرّر الجملة نفسها في أكثر من حقل، ولا تجعل الملخّص إعادة صياغة للمقتطف. وإذا كان مقتطف المسوّدة يعيد صياغة المقدّمة فأعد كتابته وفق هذا التعريف.
 
 عقد المخرجات: أعد كائن JSON واحداً فقط، دون أي نصّ قبله أو بعده ودون أسيجة برمجية، بالحقول التالية حصراً ولا غير:
 {"title":"…","excerpt":"…","summary":"…","body":"فقرات مفصولة بسطر فارغ","edit_applied":true,"editorial_verdict":"ready" أو "needs_human_review","issues_found":["…"],"changes_made":["…"]}
@@ -626,6 +655,9 @@ const REPAIRABLE_EDITORIAL_CODES: ReadonlySet<string> = new Set([
   "editorial_unnecessary_label",
   "editorial_arabic_agreement_error",
   "editorial_press_release_opening",
+  // P4R-9: an excerpt restating the lead is a wording issue the one editorial
+  // repair can fix (rewrite the excerpt as the stake, facts unchanged).
+  "editorial_excerpt_duplicates_opening",
 ]);
 
 /** The deterministic, repairable editorial issues raised by the gate (blocking +
@@ -649,6 +681,8 @@ const EDITORIAL_MAX_ENGLISH_TOKENS = 3;
 // phrase, not an identity — flagged as excessive foreign text inside the gloss.
 const EDITORIAL_MAX_PAREN_LATIN_WORDS = 4;
 const EDITORIAL_MAX_IDENTIFIERS = 2;
+// Excerpt↔title and summary↔excerpt near-duplication (raw words). The
+// excerpt↔lead test uses content words at 0.5 (P4R-9, excerptDuplicatesLead).
 const EDITORIAL_DUP_JACCARD = 0.7;
 // A single paragraph longer than this (words) reads as a wall of text.
 const EDITORIAL_MAX_PARAGRAPH_WORDS = 90;
@@ -1025,8 +1059,9 @@ export function editorialGate(
     review.add("editorial_excerpt_duplicates_title");
   }
   {
-    const firstPara = normalizeForCompare(body.split(/\n\s*\n/)[0] ?? "");
-    if (exNorm && firstPara && (firstPara.includes(exNorm) || jaccard(exNorm, firstPara) >= EDITORIAL_DUP_JACCARD)) {
+    // P4R-9: content-word Jaccard vs the lead paragraph (salmaWriter
+    // excerptDuplicatesLead, threshold EDITORIAL_EXCERPT_LEAD_JACCARD = 0.5).
+    if (exNorm && excerptDuplicatesLead(excerpt, body)) {
       review.add("editorial_excerpt_duplicates_opening");
     }
     const suNorm = normalizeForCompare(summary);
@@ -1193,6 +1228,16 @@ export function editorialGate(
   }
   // P2R-7a: every rendering + «(Latin)» gloss pair, not only packet entities.
   if (suspectGlossPairs(`${visible}\n${summary}`).length) review.add("name_transliteration_suspect");
+
+  // P4R-5: the body follows the source's order of fact anchors (Spearman ρ ≥
+  // 0.8 over ≥5 matched numbers/Latin names/entities). Measurement only: it is
+  // recorded in the ADVISORY tier (editorial_advisory in the audit) so it never
+  // changes the verdict, never blocks and never triggers a repair. (On the
+  // Phase-4 corpus it fires on roughly half of the drafts — as needs_review it
+  // would flip those verdicts; promote it only deliberately.)
+  if (opts.sourceText && body && sourceOrderCorrelation(body, opts.sourceText, { entities: opts.essentialEntities }).fires) {
+    advisory.add("source_order_paraphrase");
+  }
 
   return {
     blocking: [...blocking],
@@ -1428,6 +1473,31 @@ export type EditorialAudit = {
   reasons: string[];
   repair_attempted: boolean;
   repair_restored: string[];
+  // P4R2: semantic fidelity checker outcome (semanticCheck.ts). Present only
+  // when SEMANTIC_CHECK_ENABLED is on; absent (undefined) otherwise.
+  semantic_check?: SemanticCheckAudit;
+};
+
+/** P4R2: compact semantic-check audit. Quotes the mismatching pairs so an
+ *  editor sees exactly which sentence changed meaning on which dimension. */
+export type SemanticCheckAudit = {
+  status: "passed" | "mismatch" | "checker_failed";
+  model: string | null;
+  pairs_checked: number;
+  pairs_truncated: number;
+  unaligned: number;
+  failure_reason: string | null;
+  editor_reverted: boolean;
+  review_required: boolean;
+  blocking: string[];
+  findings: {
+    pair_id: string;
+    kind: "editor_changed" | "editor_added" | "writer_risk";
+    field: string;
+    codes: string[];
+    candidate: string;
+    reference: string[];
+  }[];
 };
 
 export type EditorDecision = "accepted" | "repaired" | "kept_original" | "factual_rejected";

@@ -24,6 +24,7 @@ import {
   selectProfile,
   validateArticle,
   WRITER_PROMPT_VERSION,
+  WRITER_REPAIR_RESPONSE_FORMAT,
   type WritingProfile,
 } from "./salmaWriter.ts";
 import {
@@ -68,6 +69,7 @@ import {
   type FidelityRepairAudit,
   type FidelityValidation,
   finalizeWriterDraft,
+  makeFidelityRepairCall,
 } from "./fidelityRepair.ts";
 import {
   analyzeEvidence,
@@ -82,6 +84,14 @@ import {
   EVIDENCE_RESPONSE_FORMAT,
   renderEvidenceGuidanceBlock,
 } from "./evidenceIntelligence.ts";
+import {
+  applySemanticDecision,
+  maybeRunSemanticCheck,
+  SEMANTIC_MAX_TOKENS,
+  SEMANTIC_RESPONSE_FORMAT,
+  semanticCheckEnabled,
+  semanticModel,
+} from "./semanticCheck.ts";
 
 // ---- OpenRouter usage/cost accounting -------------------------------------
 //
@@ -140,6 +150,10 @@ export const WRITER_CONFIG: WriterModelConfig = {
 // and no retry. google/gemini-3-flash-preview must never be configured here
 // (assertEditorConfig enforces this at run start, same rule as the writer).
 export const EDITOR_MODEL = Deno.env.get("OPENROUTER_EDITOR_MODEL") || "openai/gpt-5.4-mini";
+// P4R2: semantic fidelity checker. DEFAULT OFF — only SEMANTIC_CHECK_ENABLED
+// = "true"/"1" turns it on; while off, no code path calls OpenRouter for it.
+export const SEMANTIC_CHECK_ENABLED = semanticCheckEnabled((k) => Deno.env.get(k));
+export const SEMANTIC_MODEL = semanticModel((k) => Deno.env.get(k));
 
 export function assertEditorConfig(model: string): void {
   if (!model || !model.trim()) throw new Error("editor model is not configured");
@@ -273,7 +287,10 @@ export async function chatWriter(
 export async function chatEditor(
   model: string,
   messages: { role: string; content: string }[],
-  opts: { usage?: LlmUsage } = {},
+  // P4R-7: `responseFormat` overrides the provider schema for a call that does
+  // NOT return the editor object (the constrained fidelity repair returns the
+  // writer object). Omitted → EDITOR_RESPONSE_FORMAT (the editor pass).
+  opts: { usage?: LlmUsage; responseFormat?: unknown } = {},
 ): Promise<EditorCallResult> {
   const apiKey = Deno.env.get("OPENROUTER_API_KEY");
   if (!apiKey) return { ok: false, reason: "editor_api_key_missing" };
@@ -293,7 +310,7 @@ export async function chatEditor(
         // e2.0: room for significance-based length (longer major stories and
         // develop-story pieces) without truncating the strict JSON object.
         max_tokens: 4000,
-        response_format: EDITOR_RESPONSE_FORMAT,
+        response_format: opts.responseFormat ?? EDITOR_RESPONSE_FORMAT,
       }),
       signal: AbortSignal.timeout(45000),
     });
@@ -555,7 +572,10 @@ const WRITER_JSON_RECOVERY_MESSAGE = {
 // using ONLY the extracted source. It never adds a new fact/number/quote/claim/
 // cause/recommendation/advice; it may delete the unsupported addition, replace it
 // with the correct source value, or rewrite the sentence without the detail. It
-// returns the same strict writer JSON schema so parseWriterOutput can read it.
+// returns the WRITER object (title/excerpt/summary/body), requested from the
+// provider with WRITER_REPAIR_RESPONSE_FORMAT (P4R-7 — previously the editor's
+// schema was sent, forcing editor-only keys the writer parser rejects) and read
+// by parseWriterOutput.
 
 /** Human-readable Arabic instruction for one deterministic fidelity issue code.
  *  e2.0: a repair restores/removes the fact faithfully but phrases it in simple
@@ -573,6 +593,8 @@ function fidelityIssueInstruction(code: string): string {
       return `الادّعاء المتعلق بـ«${detail ?? ""}» (فعالية أو موافقة أو نتيجة) غير مدعوم بنص المصدر. احذفه أو خفّف الصياغة لتطابق قوة ما ورد في المصدر فقط، بعربية صحفية بسيطة لا بأسلوب المصدر الرسمي، دون إضافة أي حكم جديد.`;
     case "invented_quotation":
       return "يوجد اقتباس مباشر بين علامتَي تنصيص غير وارد حرفيًا في نص المصدر. احذف الاقتباس أو أعِد صياغته بأسلوب غير مباشر وبعربية بسيطة دون علامات تنصيص، دون اختلاق أي كلام منسوب.";
+    case "invented_foreign_gloss":
+      return `الصيغة اللاتينية «${detail ?? ""}» بين القوسين غير واردة في نص المصدر. احذف القوسين وما بينهما واترك الاسم العربي وحده، أو استبدلها بالصيغة اللاتينية الواردة حرفيًا في المصدر إن وُجدت. لا تخترع أي صيغة لاتينية.`;
     case "missing_official_action":
       return "أشار المصدر إلى إجراء رسمي (سحب أو تحذير أو إيقاف أو ما شابه) لم يُذكر في المقال. أضِف هذا الإجراء فقط إذا ورد صراحةً في نص المصدر، بصياغة مطابقة للمصدر.";
     case "missing_unaffected_batch_statement":
@@ -597,7 +619,7 @@ function buildFidelityRepairMessages(input: {
     "لا تُغيّر أي معلومة صحيحة أخرى، وحافظ على أسلوب المقال: عربية فصحى صحفية بسيطة وطبيعية، لا أسلوب المصدر الرسمي، إلا حيث تطلب المخالفة صراحةً صياغة مطابقة للمصدر. " +
     "عقد الإخراج الإلزامي (يجب أن يطابق المُحلِّل تمامًا): أعِد المقال كاملًا ككائن JSON واحد صالح فقط. " +
     "ضمِّن الحقول النصية الثلاثة كلها في كل مرة: \"title\" و\"excerpt\" و\"body\"، وانسخ أي حقل لم تُعدّله كما هو حرفيًا من المسودة (لا تحذف أي حقل ولا تتركه فارغًا). " +
-    "\"summary\" اختياري فقط؛ إذا أدرجته فليكن نصًا. لا تُضِف أي مفتاح آخر إطلاقًا، ولا تُعِد كائن تعديل جزئيًا أو مخططًا بديلًا أو قائمة تغييرات. " +
+    "وضمِّن \"summary\" نصًا دائمًا: انسخه من المسودة كما هو، أو اتركه نصًا فارغًا \"\" إذا لم يكن في المسودة ملخّص. لا تُضِف أي مفتاح آخر إطلاقًا، ولا تُعِد كائن تعديل جزئيًا أو مخططًا بديلًا أو قائمة تغييرات. " +
     "كل القيم نصوص فقط. لا تُحِط الإخراج بأسيجة برمجية (```) ولا تكتب أي تعليق أو نص قبل القوس { أو بعده }.";
   const user = [
     input.sourceName ? `المصدر المُتحقَّق منه: ${input.sourceName}` : "",
@@ -767,11 +789,12 @@ export async function writeArticle(input: {
   // Build the full source-fidelity validation once; reused by the writer-stage
   // structural gate, the Editorial Director's re-validation, and the post-editor
   // fidelity stage — always over the SAME verified source text.
-  const validateFidelity = (a: { title: string; excerpt: string; body: string }): FidelityValidation => {
+  const validateFidelity = (a: { title: string; excerpt: string; body: string; summary?: string }): FidelityValidation => {
     const v = validateArticle({
       // The writer output no longer echoes a profile field (strict 3-field
       // schema); use the deterministic routing profile computed above.
-      article: { title: a.title, excerpt: a.excerpt, body: a.body, profile },
+      // P4R-8: the summary is passed so invented_foreign_gloss covers it.
+      article: { title: a.title, excerpt: a.excerpt, body: a.body, summary: a.summary ?? "", profile },
       source: {
         sourceText: verifiedFactText,
         originalTitle,
@@ -884,10 +907,11 @@ export async function writeArticle(input: {
     title: writerArticle.title,
     excerpt: writerArticle.excerpt,
     body: writerArticle.body,
+    summary: writerArticle.summary ?? "",
   }).errors;
   const revalidate = (a: EditorArticle) =>
     revalidateAgainstBaseline(
-      validateFidelity({ title: a.title, excerpt: a.excerpt, body: a.body }),
+      validateFidelity({ title: a.title, excerpt: a.excerpt, body: a.body, summary: a.summary }),
       writerBaselineErrors,
     );
   const writerDraft: EditorArticle = {
@@ -897,9 +921,13 @@ export async function writeArticle(input: {
     body: writerArticle.body,
   };
 
+  // P4R2: semantic-check outcome carried from the editor stage to the final
+  // decision (review flag + safety_alert blocking codes). Untouched when off.
+  let semanticReview = false;
+  let semanticBlocking: string[] = [];
   const { editorial, fidelity } = await finalizeWriterDraft<EditorialAudit>({
     runEditor: async () => {
-      const editorPass = await runEditorPass({
+      let editorPass = await runEditorPass({
         profile,
         model: EDITOR_MODEL,
         original: { article: writerDraft, readMinutes: writerReadMinutes },
@@ -929,6 +957,40 @@ export async function writeArticle(input: {
         revalidate,
         verificationOnly: packet.verificationOnly,
       });
+      // P4R2: semantic fidelity check (ONE call per article, only when the
+      // flag is on — maybeRunSemanticCheck returns null without any call when
+      // off). Editor-pair mismatch → revert to the writer draft; writer-pair
+      // mismatch → needs_human_review (blocking for a safety_alert risk/action
+      // sentence); checker failure → needs_human_review. Never upgrades.
+      const semantic = await maybeRunSemanticCheck({
+        enabled: SEMANTIC_CHECK_ENABLED,
+        model: SEMANTIC_MODEL,
+        writer: writerDraft,
+        edited: editorPass.audit.edited_draft_accepted ? editorPass.article : null,
+        sourceText: verifiedFactText,
+        call: (messages) =>
+          isForbiddenWriterModel(SEMANTIC_MODEL)
+            ? Promise.resolve({ ok: false as const, reason: "semantic_model_forbidden" })
+            : chatJson(messages, {
+              model: SEMANTIC_MODEL,
+              temperature: 0,
+              maxTokens: SEMANTIC_MAX_TOKENS,
+              responseFormat: SEMANTIC_RESPONSE_FORMAT,
+              timeoutMs: 45000,
+              usage: input.usage,
+            }),
+      });
+      if (semantic) {
+        const applied = applySemanticDecision(
+          editorPass,
+          { article: writerDraft, readMinutes: writerReadMinutes },
+          semantic,
+          profile,
+        );
+        editorPass = applied.pass;
+        semanticReview = applied.reviewRequired;
+        semanticBlocking = applied.blocking;
+      }
       // The editor's chosen draft (an accepted edit, else the writer draft) is the
       // single draft the fidelity stage validates and may repair.
       const chosen: FidelityArticle = {
@@ -939,32 +1001,37 @@ export async function writeArticle(input: {
       };
       return { article: chosen, readMinutes: editorPass.readMinutes, audit: editorPass.audit };
     },
-    validate: (a) => validateFidelity({ title: a.title, excerpt: a.excerpt, body: a.body }),
+    validate: (a) => validateFidelity({ title: a.title, excerpt: a.excerpt, body: a.body, summary: a.summary }),
     // Exactly ONE constrained repair via the existing editor model (non-Gemini,
-    // asserted at run start). No loop, no fallback expansion.
-    repair: async (issues, draft) => {
-      const res = await chatEditor(
-        EDITOR_MODEL,
+    // asserted at run start). No loop, no fallback expansion. P4R-7: the call
+    // requests the WRITER-shaped schema (the editor schema stays on the editor
+    // pass only) and is parsed by the strict writer parser.
+    repair: makeFidelityRepairCall<{ role: string; content: string }[]>({
+      send: (messages, responseFormat) =>
+        chatEditor(EDITOR_MODEL, messages, { usage: input.usage, responseFormat }),
+      buildMessages: (issues, draft) =>
         buildFidelityRepairMessages({ verifiedFactText, sourceName: input.sourceName ?? null, draft, issues }),
-        { usage: input.usage },
-      );
-      if (!res.ok) return { ok: false, reason: res.reason };
-      const parsed = parseWriterOutput(res.content);
-      if (!parsed.ok) return { ok: false, reason: parsed.error };
-      return {
-        ok: true,
-        article: {
-          title: parsed.article.title,
-          excerpt: parsed.article.excerpt,
-          summary: parsed.article.summary ?? draft.summary,
-          body: parsed.article.body,
-        },
-      };
-    },
+      responseFormat: WRITER_REPAIR_RESPONSE_FORMAT,
+      parse: parseWriterOutput,
+    }),
   });
 
   // P2-D10: persist the editor outcome + prompt version on the decision row.
   Object.assign(audit, editorDecisionAuditFields(editorial));
+
+  // P4R2: a writer sentence whose MEANING departs from the source on a
+  // safety_alert risk/action sentence is blocking (flag-on only; empty when off).
+  if (semanticBlocking.length && fidelity.decision !== "reject") {
+    return {
+      ok: false,
+      rejection: `semantic_blocking:${semanticBlocking.join("|")}`,
+      audit,
+      editorial,
+      fidelity: fidelity.audit,
+      writerAttempts: r.writerAttempts,
+      writerSecondAttempt: r.secondAttemptType,
+    };
+  }
 
   // A hard-blocking breach, or a repairable breach still present after the single
   // repair, rejects: NO pending draft is created (the reason is audited).
@@ -995,7 +1062,8 @@ export async function writeArticle(input: {
     audit,
     editorial,
     fidelity: fidelity.audit,
-    needsHumanReview: fidelity.decision === "needs_human_review",
+    // P4R2: a semantic review flag (flag-on only) also routes to human review.
+    needsHumanReview: fidelity.decision === "needs_human_review" || semanticReview,
     writerAttempts: r.writerAttempts,
     writerSecondAttempt: r.secondAttemptType,
   };

@@ -14,7 +14,9 @@
 // (see salmaWriter.test.ts). index.ts would wire these into a run later; this
 // checkpoint is local implementation + testing only (no live model call added).
 
-export const WRITER_PROMPT_VERSION = "e2.2-salma-writer" as const;
+import { buildGlossaryPromptBlock } from "./glossaryAr.ts";
+
+export const WRITER_PROMPT_VERSION = "e2.3-salma-writer" as const;
 
 // --- Profiles (Step 3) -----------------------------------------------------
 
@@ -246,6 +248,8 @@ export const REGULATOR_EQUIVALENTS: readonly (readonly string[])[] = [
     "FDA", "U.S. FDA", "US FDA", "Food and Drug Administration",
     "U.S. Food and Drug Administration", "US Food and Drug Administration",
     "إدارة الغذاء والدواء", "إدارة الغذاء والدواء الأمريكية", "هيئة الغذاء والدواء الأمريكية",
+    // P4R-3: the glossary's approved «الأميركية» spelling of the same body.
+    "إدارة الغذاء والدواء الأميركية", "هيئة الغذاء والدواء الأميركية",
   ],
   ["WHO", "World Health Organization", "World Health Organisation", "منظمة الصحة العالمية"],
   ["EMA", "European Medicines Agency", "وكالة الأدوية الأوروبية", "الوكالة الأوروبية للأدوية"],
@@ -261,6 +265,8 @@ export const REGULATOR_EQUIVALENTS: readonly (readonly string[])[] = [
     "Centers for Disease Control", "مراكز السيطرة على الأمراض والوقاية منها",
     "مراكز مكافحة الأمراض والوقاية منها", "المراكز الأمريكية لمكافحة الأمراض",
     "مراكز السيطرة على الأمراض", "مراكز مكافحة الأمراض",
+    // P4R-3: the glossary's approved «الأميركية» spelling of the same body.
+    "المراكز الأميركية لمكافحة الأمراض",
   ],
 ];
 
@@ -512,7 +518,8 @@ const EU_NUMBER_LANGS = new Set([
 
 /** Map a source language code to its numeric separator convention. */
 export function numberLocaleForLang(lang?: string | null): NumberLocale {
-  const l = (lang ?? "").trim().toLowerCase();
+  // P4R2: a region/script subtag ("ro-RO", "pt_BR") reads as its language.
+  const l = (lang ?? "").trim().toLowerCase().split(/[-_]/)[0];
   return EU_NUMBER_LANGS.has(l) ? "eu" : "en";
 }
 
@@ -521,7 +528,7 @@ export function numberLocaleForLang(lang?: string | null): NumberLocale {
 // (thousand/million/billion, optionally plural). No other multipliers, no
 // rounding, no inferred arithmetic.
 const SCALE_WORDS: { re: RegExp; exp: number }[] = [
-  { re: /^(?:ألف|آلاف|الف|آلآف)$/u, exp: 3 },
+  { re: /^(?:ألف|آلاف|الف|آلآف|ألفاً|ألفًا|ألفا)$/u, exp: 3 },
   { re: /^(?:مليون|ملايين)$/u, exp: 6 },
   { re: /^(?:مليار|مليارات|بليون)$/u, exp: 9 },
   { re: /^thousands?$/i, exp: 3 },
@@ -609,27 +616,52 @@ export function parseNumberToken(token: string, locale: NumberLocale): string | 
 export function extractNumberEntries(
   text: string,
   locale: NumberLocale,
+  opts: NumberScanOptions = {},
 ): { raw: string; value: string | null }[] {
-  const folded = foldDigits(text ?? "")
-    .replace(/٬/g, ",") // Arabic thousands separator
-    .replace(/٫/g, "."); // Arabic decimal separator
-  const re =
-    /(\d[\d.,]*)\s*(ألف|آلاف|الف|آلآف|مليون|ملايين|مليار|مليارات|بليون|thousands?|millions?|billions?)?/giu;
-  const out: { raw: string; value: string | null }[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(folded)) !== null) {
-    if (!m[1]) {
-      if (m.index === re.lastIndex) re.lastIndex++;
-      continue;
-    }
-    const raw = m[1].replace(/[.,]+$/, ""); // drop a trailing sentence separator
-    let value = parseNumberToken(raw, locale);
-    const exp = scaleExponent(m[2]);
-    if (value !== null && exp > 0) value = applyScale(value, exp);
-    out.push({ raw, value });
-  }
-  return out;
+  return scanNumberEntries(text, locale, opts).map(({ raw, value }) => ({ raw, value }));
 }
+
+// P4R-6 / P4R3-2: thousands groups written with a SPACE: "19 161", "694 000".
+// Only a typographic separator — NBSP (U+00A0), thin space (U+2009) or narrow
+// NBSP (U+202F) — folds by default (the extractor keeps an &nbsp; between
+// digits as U+00A0). A PLAIN space folds only when the caller says the text is
+// in a space-grouping language (SPACE_GROUP_LANGS), so "phase 3 100 patients"
+// never becomes 3100. Every group after the first must be EXACTLY three digits
+// and the run may not be followed by another digit ("2024 158" never merges).
+const HARD_GROUP_SEP = "[\\u00A0\\u2009\\u202F]";
+const SPACE_GROUP_SEP = "[ \\u00A0\\u2009\\u202F]";
+const SCALE_WORD_SRC =
+  "ألفاً|ألفًا|ألفا|ألف|آلاف|الف|آلآف|مليون|ملايين|مليار|مليارات|بليون|thousands?|millions?|billions?";
+const numberScanSrc = (sep: string) =>
+  `(\\d{1,3}(?:${sep}\\d{3})+(?:[.,]\\d+)?(?!\\d)|\\d[\\d.,]*)(?:\\s*(${SCALE_WORD_SRC})(?![\\p{L}]))?`;
+
+// Languages whose typography groups thousands with a (plain) space.
+const SPACE_GROUP_LANGS = new Set([
+  "fr", "fra", "fre", "ro", "ron", "rum", "de", "deu", "ger", "pl", "pol", "cs", "ces", "cze", "sk", "slk", "slo",
+  "sv", "swe", "no", "nb", "nor", "fi", "fin", "ru", "rus", "uk", "ukr", "bg", "bul", "hu", "hun", "et", "est",
+  "lv", "lav", "lt", "lit",
+]);
+
+/** P4R3-2: does `lang` group thousands with a plain space? */
+export function spaceGroupingLang(lang?: string | null): boolean {
+  return SPACE_GROUP_LANGS.has((lang ?? "").trim().toLowerCase().split(/[-_]/)[0]);
+}
+
+/** Options for the numeric scan (P4R-6). */
+export type NumberScanOptions = {
+  // A token that is unparseable under `locale` (e.g. "82,2" under `en`, where a
+  // comma must be followed by exactly three digits) is re-read with the OTHER
+  // convention. Only an unparseable token is re-read, so an `en`-valid "1,500"
+  // is never reinterpreted as 1.5 (no ambiguous widening).
+  decimalCommaFallback?: boolean;
+  // Also emit each digit group of a space-grouped figure as its own value
+  // ("19 161" → 19, 161 and 19161). Used on the SOURCE side only so a source
+  // that genuinely lists two adjacent figures keeps supporting both, exactly as
+  // before the space fold existed.
+  keepGroupParts?: boolean;
+  // P4R3-2: also fold PLAIN-space groups (space-grouping source languages only).
+  plainSpaceGroups?: boolean;
+};
 
 /** Number entries WITH their character span in `text` (same scan as
  *  extractNumberEntries; foldDigits and the ٬/٫ folds are length-preserving, so
@@ -638,10 +670,18 @@ export function extractNumberEntries(
 function scanNumberEntries(
   text: string,
   locale: NumberLocale,
+  opts: NumberScanOptions = {},
 ): { raw: string; value: string | null; start: number; end: number }[] {
   const folded = foldDigits(text ?? "").replace(/٬/g, ",").replace(/٫/g, ".");
-  const re =
-    /(\d[\d.,]*)\s*(ألف|آلاف|الف|آلآف|مليون|ملايين|مليار|مليارات|بليون|thousands?|millions?|billions?)?/giu;
+  const sep = opts.plainSpaceGroups ? SPACE_GROUP_SEP : HARD_GROUP_SEP;
+  const re = new RegExp(numberScanSrc(sep), "giu");
+  const spaceRe = new RegExp(sep, "g");
+  const other: NumberLocale = locale === "eu" ? "en" : "eu";
+  const parse = (tok: string): string | null => {
+    const v = parseNumberToken(tok, locale);
+    if (v !== null || !opts.decimalCommaFallback) return v;
+    return parseNumberToken(tok, other);
+  };
   const out: { raw: string; value: string | null; start: number; end: number }[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(folded)) !== null) {
@@ -649,13 +689,32 @@ function scanNumberEntries(
       if (m.index === re.lastIndex) re.lastIndex++;
       continue;
     }
-    const raw = m[1].replace(/[.,]+$/, "");
-    let value = parseNumberToken(raw, locale);
+    const written = m[1].replace(/[.,]+$/, ""); // drop a trailing sentence separator
+    const spaced = spaceRe.test(written);
+    spaceRe.lastIndex = 0;
+    const raw = spaced ? written.replace(spaceRe, " ") : written;
+    let value = parse(spaced ? written.replace(spaceRe, "") : written);
     const exp = scaleExponent(m[2]);
     if (value !== null && exp > 0) value = applyScale(value, exp);
-    out.push({ raw, value, start: m.index, end: m.index + raw.length });
+    out.push({ raw, value, start: m.index, end: m.index + written.length });
+    if (spaced && opts.keepGroupParts) {
+      let offset = m.index;
+      for (const part of written.split(spaceRe)) {
+        const p = part.replace(/[.,]+$/, "");
+        out.push({ raw: p, value: parse(p), start: offset, end: offset + p.length });
+        offset += part.length + 1;
+      }
+    }
   }
   return out;
+}
+
+/** P4R-6 / P4R3-3: the decimal-comma fallback applies only when the source
+ *  language is EXPLICITLY non-English. Unset (null) and English keep the strict
+ *  comma-as-thousands reading. */
+export function sourceDecimalCommaFallback(lang?: string | null): boolean {
+  const l = (lang ?? "").trim().toLowerCase().split(/[-_]/)[0];
+  return l !== "" && l !== "en" && l !== "eng";
 }
 
 // --- P2-A1: date grounding (unsupported_date, blocking) --------------------
@@ -2062,8 +2121,83 @@ export function dbaAliases(entity: string): [string, string] | null {
  * pending draft. Nothing is silently repaired — a factual contradiction is a
  * rejection, not a rewrite.
  */
+// --- P4R-8: invented foreign gloss (blocking) -------------------------------
+//
+// A parenthetical carrying Latin letters is a claim about the exact foreign
+// identity, so it must come from the source. Compared on lowercase letter/digit
+// token runs (spacing/punctuation-insensitive), after dropping the approved
+// labels that may be omitted from an identity (USP/NDC/Lot/Inc/LLC/Ltd and the
+// dosage-form phrase "for Injection"). Never a fuzzy match.
+const GLOSS_DROPPABLE_TOKENS = new Set(["usp", "ndc", "lot", "inc", "llc", "ltd"]);
+
+function glossTokens(text: string): string[] {
+  const toks = (text ?? "")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .filter((t) => !GLOSS_DROPPABLE_TOKENS.has(t));
+  const out: string[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    if (toks[i] === "for" && toks[i + 1] === "injection") {
+      i++;
+      continue;
+    }
+    out.push(toks[i]);
+  }
+  return out;
+}
+
+function containsTokenRun(hay: string[], needle: string[]): boolean {
+  if (!needle.length || needle.length > hay.length) return false;
+  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
+    return true;
+  }
+  return false;
+}
+
+// P4R3-4: statistic / identifier brackets are not name glosses.
+const GLOSS_STAT_START_RE = /^(?:CI|HR|OR|RR|aOR|aHR|IRR|p|n)\b/i;
+
+/** A parenthetical that could be a NAME gloss: not a statistic or figure
+ *  (no digit, no %), not opening with a statistic token (CI/HR/OR/RR/p/n), and
+ *  not a bare acronym of ≤6 uppercase letters («(FDA)»، «(WHO)»). */
+export function isNameLikeGloss(inner: string): boolean {
+  const t = (inner ?? "").trim();
+  if (/[0-9%٪\u0660-\u0669]/.test(t)) return false;
+  if (GLOSS_STAT_START_RE.test(t)) return false;
+  if (/^[A-Z]{2,6}$/.test(t)) return false;
+  return true;
+}
+
+/** Parenthetical Latin spans (≥2 Latin letters) in `fields` that the source
+ *  does not contain. A bare dosage-form "Injection" is also tolerated when the
+ *  source states the identity with "for Injection" (the approved droppable). */
+export function inventedForeignGlosses(fields: string[], sourceText: string): string[] {
+  const src = glossTokens(sourceText);
+  const srcNoInjection = src.filter((t) => t !== "injection");
+  const out: string[] = [];
+  for (const field of fields) {
+    for (const m of (field ?? "").matchAll(/\(([^()\n]*)\)/g)) {
+      const inner = m[1];
+      if ((inner.match(/[A-Za-z]/g) ?? []).length < 2) continue;
+      if (!isNameLikeGloss(inner)) continue;
+      // Only the Latin-script part is an identity claim; Arabic words inside the
+      // parentheses («(أي Enfilbry)») are not compared.
+      const latinPart = inner.replace(/[؀-ۿ]+/g, " ");
+      const toks = glossTokens(latinPart);
+      if (!toks.length) continue;
+      if (containsTokenRun(src, toks)) continue;
+      const noInj = toks.filter((t) => t !== "injection");
+      if (noInj.length && containsTokenRun(srcNoInjection, noInj)) continue;
+      out.push(inner.trim());
+    }
+  }
+  return dedupeStrings(out);
+}
+
 export function checkFactGrounding(
-  article: { title: string; excerpt: string; body: string },
+  article: { title: string; excerpt: string; body: string; summary?: string },
   source: { sourceText: string; mustPreserve?: string[]; sourceLang?: string | null },
   profile: WritingProfile,
 ): { errors: string[]; warnings: string[] } {
@@ -2081,9 +2215,17 @@ export function checkFactGrounding(
   //    (`01`/`09` in `2026-09-01`) matches "1 سبتمبر 2026". A value genuinely
   //    absent in ANY convention, or a token that cannot be parsed unambiguously,
   //    still yields `unsupported_number` (fail closed) — the safeguard is intact.
+  // P4R-6: space-grouped source figures ("19 161", NBSP/thin/narrow-NBSP too)
+  // are folded (their groups stay individually supported as before), and a
+  // decimal-comma source figure ("82,2") is read as a decimal when the source
+  // language is unset or not English. The draft side folds the same way.
   const sourceLocale = numberLocaleForLang(source.sourceLang);
   const srcNumbers = new Set(
-    extractNumberEntries(source.sourceText, sourceLocale)
+    extractNumberEntries(source.sourceText, sourceLocale, {
+      decimalCommaFallback: sourceDecimalCommaFallback(source.sourceLang),
+      keepGroupParts: true,
+      plainSpaceGroups: spaceGroupingLang(source.sourceLang),
+    })
       .map((e) => e.value)
       .filter((v): v is string => v !== null),
   );
@@ -2097,7 +2239,9 @@ export function checkFactGrounding(
   const inGroundedDate = (start: number, end: number) =>
     groundedDateSpans.some(([a, b]) => start >= a && end <= b);
   const unsupportedNumberSpans: [number, number][] = [];
-  for (const entry of scanNumberEntries(generated, "en")) {
+  for (const entry of scanNumberEntries(generated, "en", {
+    decimalCommaFallback: sourceDecimalCommaFallback(source.sourceLang),
+  })) {
     if (inGroundedDate(entry.start, entry.end)) continue;
     if (entry.value === null || !srcNumbers.has(entry.value)) {
       errors.push(`unsupported_number:${entry.raw}`);
@@ -2124,6 +2268,18 @@ export function checkFactGrounding(
   for (const q of extractQuotes(article.body, source.sourceText)) {
     const qn = normalizeForCompare(q);
     if (qn && !srcNorm.includes(qn)) errors.push("invented_quotation");
+  }
+
+  // 2b) P4R-8: no invented foreign gloss — every parenthetical Latin span in
+  //     the title/excerpt/body/summary must exist in the verified source
+  //     (case-insensitive, modulo the approved droppable labels and spacing).
+  //     A Latin form the source never states («إنفيلبراي (Enfilbry)» against an
+  //     Arabic-only source) is an invented identity. Blocking, repairable.
+  for (const span of inventedForeignGlosses(
+    [article.title, article.excerpt, article.body, article.summary ?? ""],
+    source.sourceText,
+  )) {
+    errors.push(`invented_foreign_gloss:${span}`);
   }
 
   // 3) No unsupported strong efficacy/approval claim.
@@ -2353,8 +2509,152 @@ export const EDITORIAL_MAX_ENGLISH_TOKENS = 3;
 // Verification-only identifiers (lot/NDC/registration codes) visible beyond this
 // are flagged as regulatory clutter.
 export const EDITORIAL_MAX_IDENTIFIERS = 2;
-// Excerpt vs. title / opening-paragraph near-duplication threshold.
+// Excerpt vs. title near-duplication threshold (raw normalized words).
 const EDITORIAL_DUP_JACCARD = 0.7;
+// P4R-9: excerpt vs. LEAD paragraph threshold, computed on CONTENT words
+// (stopwords and one/two-letter tokens removed, article/proclitic folded). The
+// excerpt answers «لماذا يهمّني هذا؟» while the lead states the event, so a
+// content-word overlap of half or more means the excerpt restates the lead.
+export const EDITORIAL_EXCERPT_LEAD_JACCARD = 0.5;
+
+// Arabic function words (normalized with normalizeForCompare + foldArabicToken)
+// that carry no content for the duplicate test.
+const AR_STOPWORDS = new Set(
+  [
+    "في", "من", "الى", "إلى", "على", "عن", "ان", "أن", "إن", "او", "أو", "ثم", "بعد", "قبل", "مع",
+    "هذا", "هذه", "ذلك", "تلك", "التي", "الذي", "الذين", "اللذين", "اللتين", "كما", "قد", "لا", "لم",
+    "لن", "ما", "كل", "بين", "حتى", "عند", "اذ", "إذ", "اي", "أي", "هو", "هي", "هم", "كان", "كانت",
+    "يكون", "تكون", "بها", "به", "لها", "له", "منها", "منه", "فيها", "فيه", "عليها", "عليه", "انها",
+    "أنها", "انه", "أنه", "بانها", "بأنها", "بانه", "بأنه", "وقد", "وفي", "ومن", "وعلى", "الا", "إلا",
+    "غير", "نحو", "حيث", "ضمن", "خلال", "لدى", "منذ", "عبر", "اذا", "إذا", "وان", "وأن", "كذلك",
+    "ايضا", "أيضا", "أيضاً", "فقط", "بعض", "عدة", "the", "a", "an", "of", "and", "in", "to", "for",
+  ].map((w) => foldArabicToken(normalizeForCompare(w))),
+);
+
+/** Content-word set of a text: normalized + folded tokens minus stopwords and
+ *  tokens of ≤2 letters (digits are kept — a figure is content). */
+export function contentWordSet(text: string): Set<string> {
+  return new Set(
+    arabicMatchTokens(text).filter((t) => !AR_STOPWORDS.has(t) && (t.length > 2 || /\d/.test(t))),
+  );
+}
+
+function setJaccard(sa: Set<string>, sb: Set<string>): number {
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let inter = 0;
+  for (const x of sa) if (sb.has(x)) inter++;
+  return inter / (sa.size + sb.size - inter);
+}
+
+/** P4R-9: does the excerpt restate the lead (first body paragraph)? True when
+ *  the lead contains the excerpt verbatim (normalized) or their content-word
+ *  Jaccard reaches EDITORIAL_EXCERPT_LEAD_JACCARD. Shared by the writer
+ *  warnings and the editorial gate. */
+export function excerptDuplicatesLead(excerpt: string, body: string): boolean {
+  const ex = normalizeForCompare(excerpt ?? "");
+  const leadRaw = (body ?? "").trim().split(/\n\s*\n/)[0] ?? "";
+  const lead = normalizeForCompare(leadRaw);
+  if (!ex || !lead) return false;
+  if (lead.includes(ex)) return true;
+  return setJaccard(contentWordSet(excerpt), contentWordSet(leadRaw)) >= EDITORIAL_EXCERPT_LEAD_JACCARD;
+}
+
+// --- P4R-5: source-order paraphrase (advisory) ------------------------------
+//
+// A draft that walks the source paragraph by paragraph keeps the source's order
+// of fact anchors. We match anchors (numbers by VALUE, Latin name tokens, and
+// any supplied entities) between the draft body and the source, take each
+// anchor's FIRST position on both sides, and compute Spearman's rank
+// correlation. ρ ≥ SOURCE_ORDER_RHO over ≥ SOURCE_ORDER_MIN_ANCHORS matched
+// anchors flags `source_order_paraphrase`. Measurement only: never an error,
+// never a repair trigger, never touches factual validation.
+export const SOURCE_ORDER_RHO = 0.8;
+export const SOURCE_ORDER_MIN_ANCHORS = 5;
+
+const ORDER_LATIN_RE = /[A-Za-z][A-Za-z0-9\-]{2,}/g;
+
+function firstAnchorPositions(
+  text: string,
+  numLocale: NumberLocale,
+  decimalCommaFallback: boolean,
+  entities: string[],
+): Map<string, number> {
+  const pos = new Map<string, number>();
+  const put = (k: string, i: number) => {
+    if (!pos.has(k) || (pos.get(k) as number) > i) pos.set(k, i);
+  };
+  for (const e of scanNumberEntries(text, numLocale, { decimalCommaFallback })) {
+    // Single-digit integers are too common to be anchors.
+    if (e.value === null || (/^\d$/.test(e.value))) continue;
+    put(`n:${e.value}`, e.start);
+  }
+  for (const m of (text ?? "").matchAll(ORDER_LATIN_RE)) {
+    const k = m[0].toLowerCase();
+    if (ENGLISH_COMMON_WORDS.has(k)) continue;
+    put(`l:${k}`, m.index ?? 0);
+  }
+  const norm = (text ?? "").toLowerCase();
+  for (const ent of entities) {
+    const e = (ent ?? "").trim();
+    if (e.length < 3 || /^[\d\s.,]+$/.test(e)) continue;
+    const i = norm.indexOf(e.toLowerCase());
+    if (i >= 0) put(`e:${normalizeForCompare(e)}`, i);
+  }
+  return pos;
+}
+
+function averageRanks(xs: number[]): number[] {
+  const idx = xs.map((v, i) => [v, i] as const).sort((a, b) => a[0] - b[0]);
+  const ranks = new Array<number>(xs.length);
+  for (let i = 0; i < idx.length; ) {
+    let j = i;
+    while (j + 1 < idx.length && idx[j + 1][0] === idx[i][0]) j++;
+    const r = (i + j) / 2 + 1;
+    for (let k = i; k <= j; k++) ranks[idx[k][1]] = r;
+    i = j + 1;
+  }
+  return ranks;
+}
+
+function pearson(a: number[], b: number[]): number | null {
+  const n = a.length;
+  if (n < 2) return null;
+  const ma = a.reduce((s, x) => s + x, 0) / n;
+  const mb = b.reduce((s, x) => s + x, 0) / n;
+  let num = 0, da = 0, db = 0;
+  for (let i = 0; i < n; i++) {
+    num += (a[i] - ma) * (b[i] - mb);
+    da += (a[i] - ma) ** 2;
+    db += (b[i] - mb) ** 2;
+  }
+  if (da === 0 || db === 0) return null;
+  return num / Math.sqrt(da * db);
+}
+
+/** P4R-5: Spearman correlation between the draft-body and source order of the
+ *  matched fact anchors. `fires` when ρ ≥ SOURCE_ORDER_RHO with at least
+ *  SOURCE_ORDER_MIN_ANCHORS matched anchors. */
+export function sourceOrderCorrelation(
+  draftBody: string,
+  sourceText: string,
+  opts: { sourceLang?: string | null; entities?: string[] } = {},
+): { matched: number; rho: number | null; fires: boolean } {
+  const entities = opts.entities ?? [];
+  const d = firstAnchorPositions(draftBody, "en", true, entities);
+  const s = firstAnchorPositions(
+    sourceText,
+    numberLocaleForLang(opts.sourceLang),
+    sourceDecimalCommaFallback(opts.sourceLang),
+    entities,
+  );
+  const keys = [...d.keys()].filter((k) => s.has(k));
+  if (keys.length < SOURCE_ORDER_MIN_ANCHORS) return { matched: keys.length, rho: null, fires: false };
+  const rho = pearson(
+    averageRanks(keys.map((k) => d.get(k) as number)),
+    averageRanks(keys.map((k) => s.get(k) as number)),
+  );
+  return { matched: keys.length, rho, fires: rho !== null && rho >= SOURCE_ORDER_RHO };
+}
 
 // A Latin-script run of ≥4 chars starting with a letter: a candidate English
 // technical token / medicine name inside an Arabic article.
@@ -2419,11 +2719,9 @@ export function editorialQualityWarnings(
     const ti = normalizeForCompare(title);
     if (ex && ti && (ex === ti || jaccard(ex, ti) >= EDITORIAL_DUP_JACCARD)) {
       warnings.push("editorial_excerpt_duplicates_title");
-    } else {
-      const firstPara = normalizeForCompare((body.split(/\n\s*\n/)[0] ?? ""));
-      if (ex && firstPara && (firstPara.includes(ex) || jaccard(ex, firstPara) >= EDITORIAL_DUP_JACCARD)) {
-        warnings.push("editorial_excerpt_duplicates_opening");
-      }
+    } else if (excerptDuplicatesLead(excerpt, body)) {
+      // P4R-9: content-word overlap with the lead (see excerptDuplicatesLead).
+      warnings.push("editorial_excerpt_duplicates_opening");
     }
   }
 
@@ -2462,7 +2760,35 @@ export type WriterArticle = {
 };
 
 // Only these keys may appear on the writer object; any other key is rejected.
-const WRITER_ALLOWED_FIELDS = ["title", "excerpt", "body", "summary"] as const;
+export const WRITER_ALLOWED_FIELDS = ["title", "excerpt", "body", "summary"] as const;
+
+// P4R-7: provider structured-output contract for the constrained source-fidelity
+// REPAIR call. The repair returns the WRITER object (parsed by parseWriterOutput),
+// so it must not be sent the editor's schema (which forces edit_applied /
+// editorial_verdict / issues_found / changes_made — keys parseWriterOutput
+// rightly rejects). Strict mode on the OpenAI-compatible editor model requires
+// EVERY property to be listed in `required`, so summary is required at the
+// provider level but may be "" — parseWriterOutput treats an empty summary as
+// absent and the pipeline then keeps the draft's own summary. The parser stays
+// the sole authority (title/excerpt/body required, no extra keys).
+export const WRITER_REPAIR_RESPONSE_FORMAT = {
+  type: "json_schema",
+  json_schema: {
+    name: "salma_writer_repair_output",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title", "excerpt", "summary", "body"],
+      properties: {
+        title: { type: "string" },
+        excerpt: { type: "string" },
+        summary: { type: "string" },
+        body: { type: "string" },
+      },
+    },
+  },
+} as const;
 // The subset that MUST be present and non-empty (summary is optional).
 const WRITER_REQUIRED_FIELDS = ["title", "excerpt", "body"] as const;
 
@@ -2715,7 +3041,9 @@ const MIN_BODY_WORDS = 25; // shorter than this is not a real article for any pr
  * Reading time is always recomputed from the final Arabic body (Step 8).
  */
 export function validateArticle(input: {
-  article: { title: string; excerpt: string; body: string; profile?: WritingProfile };
+  // `summary` (optional, the «باختصار» box) is checked only by the P4R-8
+  // invented-foreign-gloss rule; every other check keeps its existing scope.
+  article: { title: string; excerpt: string; body: string; summary?: string; profile?: WritingProfile };
   source: {
     sourceText: string;
     originalTitle?: string | null;
@@ -2756,7 +3084,11 @@ export function validateArticle(input: {
 
   // Fact grounding (blocking) — only meaningful when there is a body to check.
   if (body) {
-    const fg = checkFactGrounding({ title: head.cleanTitle, excerpt: article.excerpt ?? "", body }, source, profile);
+    const fg = checkFactGrounding(
+      { title: head.cleanTitle, excerpt: article.excerpt ?? "", body, summary: article.summary ?? "" },
+      source,
+      profile,
+    );
     errors.push(...fg.errors);
     warnings.push(...fg.warnings);
 
@@ -2778,6 +3110,16 @@ export function validateArticle(input: {
     warnings.push(
       ...readabilityWarnings({ title: head.cleanTitle, excerpt: article.excerpt ?? "", body }),
     );
+
+    // P4R-5: the draft follows the source's order of fact anchors (advisory).
+    if (
+      sourceOrderCorrelation(body, source.sourceText, {
+        sourceLang: source.sourceLang,
+        entities: source.mustPreserve,
+      }).fires
+    ) {
+      warnings.push("source_order_paraphrase");
+    }
   }
 
   const ok = errors.length === 0;
@@ -2820,6 +3162,40 @@ export function validateArticle(input: {
 // direction; keep recall severity class and the "as of DATE" on injury counts;
 // lot/batch = دفعة/تشغيلة, never عبوة; never write «لم يذكر المصدر…» — omit;
 // a title uses a generic Arabic descriptor when a name can't be rendered safely.
+// e2.3 (P4R remediation, prompt text): extraction as a PROCEDURE (state the
+// one-sentence core answer to «ما الجديد الذي يهم القارئ؟», order paragraphs by
+// importance to it, never mirror the source's paragraph order, drop source
+// paragraphs that add nothing); the excerpt answers «لماذا يهمّني هذا؟» (stake)
+// while the lead states the event, without reusing the lead's verbs/key nouns;
+// targeted natural-Arabic lines (verb–subject agreement, وسيط vs متوسط, a
+// no-calques list); the injected glossary (glossaryAr.ts) + GCC regulator
+// country on first mention; no Latin gloss the source does not contain; ratios
+// repeat the denominator noun. Factual guards unchanged in strictness.
+
+// P4R-1: extraction procedure (writer only).
+const EXTRACTION_PROCEDURE = `طريقة الاستخلاص (إجراء إلزامي قبل الكتابة):
+1. حدّد داخلياً — دون أن تكتبه في المخرجات — جواباً من جملة واحدة عن سؤال «ما الجديد الذي يهم القارئ؟». هذا هو جوهر الخبر.
+2. رتّب الفقرات بحسب أهميتها لهذا الجواب: الأهم أولاً ثم ما يليه، لا بحسب موقعها في المصدر.
+3. ممنوع أن تحاكي ترتيب فقرات المصدر فقرةً فقرة، إلا إذا تطابق ترتيب الأهمية مع ترتيب المصدر فعلاً.
+4. أسقط كل فقرة من المصدر لا تضيف شيئاً إلى ما يعرفه القارئ أو يفعله أو يستنتجه بشأن هذا الجوهر.`;
+
+// P4R-2: targeted natural-Arabic lines (shared wording with the editor prompt).
+export const NATURAL_ARABIC_LINES = `عربية طبيعية لا مترجمة:
+- طابق الفعل لفاعله في التذكير والتأنيث: «يتابع المركز» لا «تتابع المركز»، و«أعلنت الوزارة» لا «أعلن الوزارة»، و«قال الباحثون» لا «قالت الباحثون».
+- الإحصاء: median = «الوسيط»، وmean/average = «المتوسط»؛ لا تكتب «متوسط» حين يذكر المصدر median.
+- تجنّب القوالب المترجمة حرفياً: «تأكّد الفحص» ← «أكّد الفحص»، «قام بإجراء» ← «أجرى»، «لعب دوراً» ← «أسهم»، «على أساس يومي» ← «يومياً»، «في نفس الوقت» ← «في الوقت نفسه»، «تمّ اكتشاف» ← «اكتُشف»، «بشكل كبير» ← «كثيراً»، «من قِبَل» بعد المبني للمجهول ← اذكر الفاعل مباشرة.`;
+
+// P4R-11: ratio rule (shared wording with the editor prompt).
+export const RATIO_RULE =
+  "النِّسب والمقامات: في صيغة «وفاة واحدة من كل ثماني وفيات» كرّر اسم المقام كما ورد في المصدر («من كل ثماني وفيات») ولا تستنتجه أو تستبدله بمعدود آخر، ولا تحذفه («واحدة من كل ثمانٍ» وحدها ممنوعة).";
+
+// P4R-8: no invented Latin form (shared wording with the editor prompt).
+export const NO_INVENTED_LATIN_RULE =
+  "إذا لم يرد في المصدر أي شكل لاتيني للاسم، فيبقى الاسم العربي وحده: ممنوع اختراع صيغة لاتينية أو وضع ترجمة إنجليزية من عندك بين قوسين. ما بين القوسين يُنسخ من المصدر حرفياً فقط.";
+
+// P4R-1: excerpt definition (shared wording with the editor prompt).
+export const EXCERPT_DEFINITION =
+  "المقتطف يجيب عن سؤال «لماذا يهمّني هذا؟»: العاقبة أو ما على المحكّ للقارئ كما يذكره المصدر، بينما تذكر المقدّمة الحدث نفسه. لا يعيد المقتطف استخدام أفعال المقدّمة ولا أسمائها الرئيسية إلا اسم الموضوع نفسه، ولا يضيف عاقبة لا يذكرها المصدر.";
 
 const STANDARD_NEWS_INSTRUCTIONS =
   "خبر صحي: ابدأ بما حدث ولماذا يهمّ القارئ، ثم أضف ما يلزم لفهمه فقط: ما الذي تغيّر ومن المتأثّر. لا تُضِف سياقاً إلا إذا كان القارئ لا يفهم الخبر بدونه، ولا تُقحم فقرة «لماذا يهمّ؟» منفصلة إذا كانت الأهمية واضحة من المقدّمة.";
@@ -2838,7 +3214,7 @@ const PROFILE_INSTRUCTIONS: Record<WritingProfile, string> = {
 
 /**
  * Build the Arabic writing instructions for a profile. This is the writer
- * prompt (prompt version e2.2-salma-writer). It is intentionally distinct from
+ * prompt (prompt version e2.3-salma-writer). It is intentionally distinct from
  * the discovery/selection prompt in index.ts. `body` must be plain Arabic
  * paragraphs separated by blank lines (the frontend renders paragraphs only —
  * no Markdown/HTML).
@@ -2854,9 +3230,11 @@ ${PROFILE_INSTRUCTIONS[profile]}
 
 أسلوب سلمى:
 - عربية فصحى حديثة بسيطة وطبيعية وأنيقة، هادئة وموثوقة، مناسبة للكويت والخليج دون لهجة، ومفهومة لغير المتخصّص. اكتب كصحفي لا كناسخٍ لبيان رسمي، وابتعد عن اللغة المراسمية أو التنظيمية أو الدعائية.
-- استخلص المعلومة الأساسية ولا تُعِد صياغة المصدر جملةً جملة: حدّد ما يحتاج القارئ أن يعرفه، ثم اكتبه بلغتك.
+- استخلص المعلومة الأساسية ولا تُعِد صياغة المصدر جملةً جملة: حدّد ما يحتاج القارئ أن يعرفه، ثم اكتبه بلغتك (اتّبع «طريقة الاستخلاص» أدناه).
 - تجنّب: نسخ عنوان المصدر، وذكر اسم المصدر في العنوان، والإثارة، والوعود المبالغ فيها، والمقدّمات غير الضرورية، وتكرار الشرح نفسه بصيغ مختلفة، والتفاصيل التقنية الزائدة عن حاجة القارئ، والخاتمات المصطنعة أو المكرّرة، والاقتباسات المختلقة، والنصائح أو التأويلات غير المدعومة.
 - عبارات ممنوعة صراحةً: ${bannedList}.
+
+${EXTRACTION_PROCEDURE}
 
 ابدأ بالخبر:
 - الجملة الأولى تحمل الخبر أو الخلاصة الأهم مباشرة: ماذا حدث أو ماذا وجد الباحثون، ومعه لماذا يهمّ حين يأتي ذلك طبيعياً — لا خلفيات ولا تمهيد قبل الخبر، ولا افتتاح بالجهة التي ترصد الحدث أو تتابعه أو تعلنه («تتابع الوزارة…»، «يراقب المركز…»، «أعلنت»، «كشفت»، «وفقاً للبيان») إلا إذا كانت هوية الجهة نفسها هي الخبر؛ افتح بالحدث ثم انسبه إلى الجهة.
@@ -2873,6 +3251,9 @@ ${PROFILE_INSTRUCTIONS[profile]}
 - مصدرك قد يكون مكتوباً بلغة تقنية أو تنظيمية — انقل الحقيقة نفسها بلغة صحفية بسيطة، لا تنسخ أسلوب المصدر.
 - قوة ادّعاء العنوان لا تتجاوز أقوى ادّعاء مدعوم في النص: تجنّب صيغ الإحلال والحسم مثل «تحل محل» و«يقضي على» و«نهاية عصر» ما لم تدعمها الأدلة فعلاً؛ فضّل «يضيف خياراً فموياً» أو «أول علاج فموي من فئة…».
 - تجنّب عبارات الحشو الآلية إلا لضرورة حقيقية: «من المهم الإشارة إلى»، «تجدر الإشارة»، «في هذا السياق»، «من جهة أخرى»، وتكرار «ليس فقط… بل…». وتجنّب البنى المتناظرة المتكررة بين الفقرات.
+- ${RATIO_RULE}
+
+${NATURAL_ARABIC_LINES}
 
 الأمانة العلمية والطبية (لا تنازل عنها):
 - ميّز دائماً وبصراحة بين نتائج التجارب المخبرية والتجارب على الحيوانات والدراسات على البشر. نتيجة على الخلايا أو الفئران لا تُكتب كأنها ثبتت لدى الإنسان؛ وإذا كانت الأدلة مخبرية أو حيوانية فقط فاذكر ذلك، وأن فعاليتها لدى البشر لم تُختبر أو لم تثبت بعد.
@@ -2917,7 +3298,10 @@ ${PROFILE_INSTRUCTIONS[profile]}
 - علامتا التنصيص «» في المخرجات مخصّصتان حصراً للكلام المنقول حرفياً من المصدر. لا تضع بينهما أسماء أو أدوية أو مجلات أو برامج أو مصطلحات: الاسم المعرّب يُكتب مجرّداً بلا «»، والأصل الأجنبي بين قوسين () مرّة واحدة عند أوّل ذكر. (علامات «» في هذه التعليمات تحدّد الأمثلة فقط ولا تُنسخ إلى النص.)
 - لا تحذف الاسم الأصلي ولا تختصره ولا تبدّل أي جزء من هويته، بما في ذلك الواصفات الكيميائية مثل Hydrochloride، حتى لا تضيع الهوية الدقيقة للمنتج أو الجهة. المسموح بإسقاطه من الاسم فقط: USP وNDC وLot وInc وLLC وLtd وكلمات الشكل الصيدلاني مثل for Injection؛ وكل ما عدا ذلك في الاسم يبقى كما ورد.
 - انقل إلى العربية فقط الأسماء الراسخة أو التي لا لبس في نطقها. إذا لم تكن متأكداً من النطق الصحيح فلا تخترع تهجئة عربية أبداً: أبقِ الاسم اللاتيني الأصلي كما هو مسبوقاً بوصف عربي، مثل: شركة Spectra Medical.
+- ${NO_INVENTED_LATIN_RULE}
 - صيغة «X doing business as Y» تبقى باتجاهها: X هي الجهة القانونية وY هو الاسم التجاري («شركة X التي تعمل باسم Y»)، ولا تعكسها.
+
+${buildGlossaryPromptBlock()}
 
 أمانة تفاصيل السحب والإصابات:
 - إذا ذكر المصدر تصنيف خطورة السحب (مثل Class I أو «الفئة الأولى» أو «الأكثر خطورة») فأبقِه في المقال بصياغة عربية واضحة.
@@ -2932,8 +3316,9 @@ ${PROFILE_INSTRUCTIONS[profile]}
 - إذا تعذّر نقل الاسم إلى العربية بأمان فاستخدم في العنوان وصفاً عربياً عاماً (مثل «شركة أمريكية للأجهزة الطبية» أو «دواء لعلاج السكري»)، ويبقى الاسم اللاتيني في النص.
 
 المقتطف (excerpt):
-- جملة واحدة قصيرة واضحة تنقل الخلاصة العملية بلغة بسيطة لا أكاديمية، دون حروف إنجليزية.
-- لا تكرّر العنوان ولا الجملة الأولى من النص حرفياً.
+- ${EXCERPT_DEFINITION}
+- جملة واحدة قصيرة واضحة بلغة بسيطة لا أكاديمية، دون حروف إنجليزية.
+- لا تكرّر العنوان ولا الجملة الأولى من النص، ولا تُعِد صياغتها بمفردات قريبة.
 
 النص:
 - افتح بالخبر نفسه: ماذا حدث، أين، من المتأثّر، وما الجديد — لا بلغة إعلانية ولا بتكرار العنوان.
@@ -2942,7 +3327,7 @@ ${PROFILE_INSTRUCTIONS[profile]}
 - يجب أن تبقى الأرقام والتواريخ وأحجام الدراسات وأسماء الأدوية والمنظمات والدول والإجراءات الرسمية — حيثما ذُكرت — أمينة تماماً للمادة المصدرية.
 
 الملخّص «باختصار» (اختياري):
-- إن أضفته، فاجعله جملة واحدة موجزة للقارئ المستعجل، مختلفةً عن المقتطف ولا تكرّره. لا تُضِفه إذا لم يقدّم شيئاً جديداً.
+- إن أضفته، فاجعله جملة واحدة موجزة للقارئ المستعجل، مختلفةً عن المقتطف ولا تكرّره (مثل ما ينبغي فعله أو ما الذي يُنتظر لاحقاً، متى ذكره المصدر). لا تُضِفه إذا لم يقدّم شيئاً جديداً.
 
 استخدم فقط الحقائق والاستشهادات المُتحقَّق منها والمُرفقة. لا تختلق رقماً أو تاريخاً أو اقتباساً أو ادّعاءً.
 

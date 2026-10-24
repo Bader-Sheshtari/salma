@@ -310,7 +310,11 @@ async function collectCappedText(
 
 function decodeEntities(s: string): string {
   return (s ?? "")
-    .replace(/&nbsp;/gi, " ")
+    // P4R3-2: keep a non-breaking space as U+00A0 so a digit group written
+    // "19&nbsp;161" survives as a thousands separator (cleanText keeps it only
+    // between digits; everywhere else it collapses to a plain space).
+    .replace(/&nbsp;/gi, "\u00A0")
+    .replace(/&thinsp;/gi, "\u2009")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
@@ -333,7 +337,13 @@ function stripTags(html: string): string {
 }
 
 function cleanText(s: string): string {
-  return decodeEntities(stripTags(s)).replace(/\s+/g, " ").trim();
+  return decodeEntities(stripTags(s))
+    // P4R3-2: protect NBSP / thin / narrow-NBSP digit-group separators
+    // ("19 161") from the whitespace collapse, then restore them as U+00A0.
+    .replace(/(\d)[\u00A0\u2009\u202F](?=\d{3}(?!\d))/g, "$1\uE000")
+    .replace(/\s+/g, " ")
+    .replace(/\uE000/g, "\u00A0")
+    .trim();
 }
 
 /** Remove non-editorial blocks (scripts, styles, chrome, ads) wholesale. */
@@ -460,7 +470,7 @@ function extractTitle(html: string): string {
   const ld = extractJsonLdField(html, "headline");
   if (ld) return ld;
   const og = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
-  if (og?.[1]) return decodeEntities(og[1]).trim();
+  if (og?.[1]) return decodeEntities(og[1]).replace(/\s+/g, " ").trim();
   const t = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   return t ? cleanText(t[1]) : "";
 }
@@ -606,6 +616,22 @@ const RECALL_PRODUCT_RE = new RegExp(
   "g",
 );
 
+// P4R-10: verbs that open a sentence, never a product name. Matched on the
+// FIRST word of a capture (an optional و/ف conjunction stripped, hamza folded).
+const CAPTURE_VERB_PREFIXES = [
+  "تعتمد", "اعتمدت", "توافق", "وافقت", "تعلن", "اعلنت", "يعلن", "اعلن", "تحذر", "حذرت",
+  "تسحب", "سحبت", "تضبط", "ضبطت", "تطلق", "اطلقت", "تصدر", "اصدرت", "توضح", "اوضحت",
+  "تؤكد", "اكدت", "تكشف", "كشفت", "تدشن", "يدشن", "يدشنان", "تمنح", "منحت", "تقر", "اقرت",
+  "تجيز", "اجازت", "تسجل", "سجلت", "تعين", "عينت",
+];
+function startsWithVerb(capture: string): boolean {
+  const first = (capture.trim().split(/\s+/)[0] ?? "")
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[أإآ]/g, "ا");
+  const bare = first.replace(/^[وف](?=.{3,})/, "");
+  return CAPTURE_VERB_PREFIXES.includes(first) || CAPTURE_VERB_PREFIXES.includes(bare);
+}
+
 /**
  * Extract essential entities that appear IN the verified source text: the
  * registered organization name (only if present in the text), country names,
@@ -664,18 +690,46 @@ export function extractEssentialEntities(
   // phrase bounded by a dosage-form/reason cue so only the product name is
   // captured. Only names that are clearly delimited are taken — no free-form
   // guessing — because a wrong or invented product name is worse than none.
-  const productRes = [
-    /(?:دواء|عقار|لقاح|مستحضر صيدلاني|مستحضر|منتج)\s*«([^»]{2,60})»/g,
-    /(?:دواء|عقار|لقاح|مستحضر صيدلاني|مستحضر|منتج)\s*"([^"]{2,60})"/g,
+  //
+  // P4R-10: the Arabic keyword must be a WHOLE word (optionally with «ال»), so
+  // «دواء» inside «والدواء» (the agency name «الغذاء والدواء») never anchors a
+  // capture; an ASCII-quoted capture must start at an OPENING quote (an even
+  // number of `"` precede it on the line), so a CLOSING quote after a quoted
+  // agency name never pairs with the next opening one; and a capture that
+  // starts with a verb («تعتمد تسجيل مستحضر») is a sentence, not a name.
+  // P4R3-1: an optional single attached proclitic (و/ف/ب/ل/ك) is allowed
+  // («ودواء»، «بلقاح»); the agency name «(ال)غذاء والدواء» is excluded by a
+  // direct negative match, not by the word boundary.
+  const AR_PRODUCT_KW =
+    "(?<![\\p{L}])(?<!غذاء\\s*)[وفبلك]?(?:ال)?(?:دواء|عقار|لقاح|مستحضر صيدلاني|مستحضر|منتج)(?![\\p{L}])";
+  const productRes: { re: RegExp; asciiQuote: boolean }[] = [
+    { re: new RegExp(`${AR_PRODUCT_KW}\\s*«([^»\\n]{2,60})»`, "gu"), asciiQuote: false },
+    { re: new RegExp(`${AR_PRODUCT_KW}\\s*"([^"\\n]{2,60})"`, "gu"), asciiQuote: true },
     // P2-FIX6: "a single lot of / a single batch of / one batch of" prefixes, and
     // the prefix group is case-insensitive ("Recall of A Single Lot of …"),
     // aligned with safetyIdentifierNeeded. The capture still requires an
     // uppercase initial and keeps the original boundary lookahead.
-    new RegExp(RECALL_PRODUCT_RE.source, "g"),
+    { re: new RegExp(RECALL_PRODUCT_RE.source, "g"), asciiQuote: false },
   ];
-  for (const re of productRes) {
+  for (const { re, asciiQuote } of productRes) {
     let m: RegExpExecArray | null;
-    while ((m = re.exec(t)) !== null) out.push(m[1].trim());
+    while ((m = re.exec(t)) !== null) {
+      const cap = m[1].trim();
+      if (asciiQuote) {
+        const openIdx = m.index + m[0].lastIndexOf(`"${m[1]}"`);
+        const lineStart = t.lastIndexOf("\n", openIdx - 1) + 1;
+        const quotesBefore = (t.slice(lineStart, openIdx).match(/"/g) ?? []).length;
+        if (quotesBefore % 2 !== 0) {
+          re.lastIndex = m.index + 1; // a closing quote — rescan from just after the keyword start
+          continue;
+        }
+      }
+      if (startsWithVerb(cap)) {
+        re.lastIndex = m.index + 1;
+        continue;
+      }
+      out.push(cap);
+    }
   }
 
   // P2R-7b: recall / approval name-capture shapes (capitalised names only):
