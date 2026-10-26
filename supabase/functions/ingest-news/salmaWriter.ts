@@ -650,8 +650,12 @@ export type NumberEntry = {
   // Preferred reading (`locale` first, else the other convention); null when
   // the token has no valid reading at all.
   value: string | null;
-  // Every candidate value of this token (see NF-1).
+  // PRIMARY (unambiguous) candidate values of this token (see NF-1 / NF3).
   values: string[];
+  // NF3: ALTERNATE (ambiguous) candidate values — source side only. A draft
+  // figure supported ONLY by these is neither accepted nor unsupported: it is
+  // raised as ambiguous_numeric_format (review).
+  alternates: string[];
   start: number;
   end: number;
 };
@@ -679,31 +683,39 @@ export function europeanNumberConvention(text: string, sourceLang?: string | nul
   return /(?<![\d.,])\d+,\d{1,2}(?![\d])/.test(t) || /(?<![\d.,])\d{1,3}(?:\.\d{3}){2,}(?![\d.,])/.test(t);
 }
 
-function tokenReadings(
-  tok: string,
-  side: NumberSide,
-  locale: NumberLocale,
-  european = true,
-): { value: string | null; values: string[] } {
+type Readings = { value: string | null; values: string[]; alternates: string[] };
+
+/** Candidate readings of one separator-bearing token (no spaces).
+ *  NF3: on the SOURCE side the reading consistent with the document's detected
+ *  convention is PRIMARY and the other valid reading is ALTERNATE ("1.100" in
+ *  an English-convention document: 1.1 primary, 1100 alternate; in a European
+ *  one the reverse). A decimal reading of "a[.,]000" is implausible and never
+ *  a candidate. The DRAFT side has the single house reading. */
+function tokenReadings(tok: string, side: NumberSide, locale: NumberLocale, european = false): Readings {
   const en = parseNumberToken(tok, "en");
   const eu = parseNumberToken(tok, "eu");
   const preferred = (locale === "eu" ? eu ?? en : en ?? eu) ?? null;
-  if (side === "draft" || !european) {
+  if (side === "draft") {
     // The house reading (comma thousands, period decimal); a decimal comma
     // only when that reading is invalid ("82,2").
     const v = en ?? eu;
-    return { value: side === "draft" ? v : preferred, values: v === null ? [] : [v] };
+    return { value: v, values: v === null ? [] : [v], alternates: [] };
   }
-  const values: string[] = [];
-  for (const [v, conv] of [[en, "en"], [eu, "eu"]] as const) {
-    if (v === null || values.includes(v)) continue;
-    // A decimal reading of "a[.,]000" is implausible (it is a thousands group).
-    const dec = conv === "en" ? "." : ",";
+  const implausible = (v: string | null, conv: "en" | "eu") => {
+    if (v === null) return true;
     const m = tok.match(/^\d+([.,])(\d{3})$/);
-    if (m && m[1] === dec && m[2] === "000") continue;
-    values.push(v);
-  }
-  return { value: preferred, values };
+    return !!m && m[1] === (conv === "en" ? "." : ",") && m[2] === "000";
+  };
+  const conv: [string | null, "en" | "eu"] = european ? [eu, "eu"] : [en, "en"];
+  const other: [string | null, "en" | "eu"] = european ? [en, "en"] : [eu, "eu"];
+  const primary = implausible(...conv) ? (implausible(...other) ? [] : [other[0] as string]) : [conv[0] as string];
+  // NF2-major is kept: in an English-convention document a comma token is
+  // never read as a decimal ("1,250" ⇏ 1.25), not even as an alternate. The
+  // period token's thousands reading ("1.100" → 1100) is the NF3 alternate.
+  const noAlt = !european && tok.includes(",");
+  const alternates =
+    !noAlt && !implausible(...other) && !primary.includes(other[0] as string) && primary.length ? [other[0] as string] : [];
+  return { value: preferred, values: primary, alternates };
 }
 
 /**
@@ -728,10 +740,12 @@ function scanNumberEntries(text: string, locale: NumberLocale, opts: NumberScanO
   const sep = side === "source" ? SPACE_GROUP_SEP : HARD_GROUP_SEP;
   const re = new RegExp(numberScanSrc(sep), "giu");
   const sepRe = new RegExp(sep, "g");
+  const hardRe = new RegExp(HARD_GROUP_SEP);
   const out: NumberEntry[] = [];
-  const scaled = (r: { value: string | null; values: string[] }, exp: number) =>
+  const scaleAll = (xs: string[], exp: number) => (exp > 0 ? xs.map((v) => applyScale(v, exp)) : xs);
+  const scaled = (r: Readings, exp: number): Readings =>
     exp > 0
-      ? { value: r.value === null ? null : applyScale(r.value, exp), values: r.values.map((v) => applyScale(v, exp)) }
+      ? { value: r.value === null ? null : applyScale(r.value, exp), values: scaleAll(r.values, exp), alternates: scaleAll(r.alternates, exp) }
       : r;
   let m: RegExpExecArray | null;
   while ((m = re.exec(folded)) !== null) {
@@ -745,22 +759,43 @@ function scanNumberEntries(text: string, locale: NumberLocale, opts: NumberScanO
     const raw = spaced ? written.replace(sepRe, " ") : written;
     const exp = scaleExponent(m[2]);
     const merged = scaled(tokenReadings(spaced ? written.replace(sepRe, "") : written, side, locale, european), exp);
-    const entry: NumberEntry = { raw, value: merged.value, values: [...merged.values], start: m.index, end: m.index + written.length };
-    out.push(entry);
-    if (spaced && side === "source") {
-      // Each group stays a number of its own (both interpretations).
-      let offset = m.index;
-      const parts = written.split(sepRe);
-      parts.forEach((part, k) => {
-        const pRaw = part.replace(/[.,]+$/, "");
-        const r = tokenReadings(pRaw, side, locale, european);
-        // The last group carries the scale word ("694 000 ألف" is not a thing,
-        // but "19 161" parts are plain numbers).
-        const pr = k === parts.length - 1 ? scaled(r, exp) : r;
-        out.push({ raw: pRaw, value: pr.value, values: pr.values, start: offset, end: offset + pRaw.length });
-        offset += part.length + 1;
-      });
+    if (!spaced || side === "draft") {
+      out.push({ raw, value: merged.value, values: [...merged.values], alternates: [...merged.alternates], start: m.index, end: m.index + written.length });
+      continue;
     }
+    // NF3: a SOURCE digit-group run. The merged reading is PRIMARY when the
+    // grouping is unambiguous — a typographic separator (NBSP/thin/narrow
+    // NBSP), or a plain space where a later group has a leading zero and so
+    // cannot be a standalone number ("694 000", "438 000"). Otherwise («19
+    // 161», «phase 3 100») every group is also a plausible number: the merged
+    // value is ALTERNATE and the separate groups stay PRIMARY (as written).
+    const parts = written.split(sepRe);
+    const unambiguous = hardRe.test(written) || parts.slice(1).some((g) => /^0/.test(g));
+    const mergedAll = [...merged.values, ...merged.alternates];
+    out.push({
+      raw,
+      value: merged.value,
+      values: unambiguous ? [...merged.values] : [],
+      alternates: unambiguous ? [...merged.alternates] : mergedAll,
+      start: m.index,
+      end: m.index + written.length,
+    });
+    let offset = m.index;
+    parts.forEach((part, k) => {
+      const pRaw = part.replace(/[.,]+$/, "");
+      const r = tokenReadings(pRaw, side, locale, european);
+      const pr = k === parts.length - 1 ? scaled(r, exp) : r;
+      out.push({
+        raw: pRaw,
+        value: pr.value,
+        // Separate groups of an unambiguous run are only ALTERNATE readings.
+        values: unambiguous ? [] : pr.values,
+        alternates: unambiguous ? [...pr.values, ...pr.alternates] : pr.alternates,
+        start: offset,
+        end: offset + pRaw.length,
+      });
+      offset += part.length + 1;
+    });
   }
   return out;
 }
@@ -842,10 +877,16 @@ export function lostFigures(
   const preSents = sentenceSpans(preText);
   const postSents = sentenceSpans(postText);
   const sentOf = (spans: typeof preSents, i: number) => spans.findIndex((x) => i >= x.start && i < x.end);
-  // Replacement candidates: new, source-supported figures, by repaired sentence.
+  // Replacement candidates: new, source-supported figures, by repaired
+  // sentence and relative position within it.
+  const rel = (spans: typeof preSents, k: number, i: number) =>
+    k < 0 ? 0 : (i - spans[k].start) / Math.max(1, spans[k].end - spans[k].start);
   const spare = post
     .filter((e) => !e.values.some((v) => preVals.has(v)) && e.values.some((v) => src.has(v)))
-    .map((e) => ({ sent: sentOf(postSents, e.start), used: false }));
+    .map((e) => {
+      const k = sentOf(postSents, e.start);
+      return { sent: k, rel: rel(postSents, k, e.start), used: false };
+    });
   const correspondingPostSentence = (preIdx: number): number => {
     if (preIdx < 0) return -1;
     const want = contentWordSet(preSents[preIdx].text);
@@ -863,18 +904,26 @@ export function lostFigures(
     });
     return best;
   };
-  const lost: string[] = [];
-  for (const e of pre) {
-    if (e.values.some((v) => postVals.has(v))) continue;
-    const target = correspondingPostSentence(sentOf(preSents, e.start));
-    const r = spare.find((x) => !x.used && target >= 0 && x.sent === target);
-    if (r) {
-      r.used = true;
-      continue;
-    }
-    lost.push(e.raw);
+  // Vanished tokens, each with its corresponding repaired sentence; then a
+  // greedy pairing with same-sentence replacements by nearest relative
+  // position (so two figures in one sentence pair with their own replacement).
+  const vanished = pre
+    .filter((e) => !e.values.some((v) => postVals.has(v)))
+    .map((e) => {
+      const k = sentOf(preSents, e.start);
+      return { raw: e.raw, target: correspondingPostSentence(k), rel: rel(preSents, k, e.start), excused: false };
+    });
+  const pairs: { i: number; j: number; d: number }[] = [];
+  vanished.forEach((v, i) => spare.forEach((sp, j) => {
+    if (v.target >= 0 && sp.sent === v.target) pairs.push({ i, j, d: Math.abs(v.rel - sp.rel) });
+  }));
+  pairs.sort((x, y) => x.d - y.d);
+  for (const p of pairs) {
+    if (vanished[p.i].excused || spare[p.j].used) continue;
+    vanished[p.i].excused = true;
+    spare[p.j].used = true;
   }
-  return [...new Set(lost)];
+  return [...new Set(vanished.filter((v) => !v.excused).map((v) => v.raw))];
 }
 
 /** Every candidate value in a text (NF-1), as a set. */
@@ -884,7 +933,31 @@ export function numberCandidateSet(
   locale: NumberLocale = "en",
   sourceLang?: string | null,
 ): Set<string> {
-  return new Set(scanNumberEntries(text, locale, { side, sourceLang }).flatMap((e) => e.values));
+  // All candidates (primary ∪ alternate) — used by the repair guard, whose
+  // rules are unchanged by NF3.
+  return new Set(scanNumberEntries(text, locale, { side, sourceLang }).flatMap((e) => [...e.values, ...e.alternates]));
+}
+
+/** NF3: the PRIMARY and ALTERNATE source candidate sets. */
+export function numberCandidateTiers(
+  text: string,
+  locale: NumberLocale = "en",
+  sourceLang?: string | null,
+): { primary: Set<string>; alternate: Set<string> } {
+  const entries = scanNumberEntries(text, locale, { side: "source", sourceLang });
+  return { primary: new Set(entries.flatMap((e) => e.values)), alternate: new Set(entries.flatMap((e) => e.alternates)) };
+}
+
+/** NF3: draft figures supported ONLY by an alternate (ambiguous) source reading
+ *  (raw tokens, deduped). Used by the editorial gate's review set. */
+export function ambiguousNumericFigures(draftText: string, sourceText: string, sourceLang?: string | null): string[] {
+  const t = numberCandidateTiers(sourceText, numberLocaleForLang(sourceLang), sourceLang);
+  const out: string[] = [];
+  for (const e of scanNumberEntries(draftText, "en", { side: "draft" })) {
+    if (e.values.some((v) => t.primary.has(v))) continue;
+    if (e.values.some((v) => t.alternate.has(v))) out.push(e.raw);
+  }
+  return [...new Set(out)];
 }
 
 // --- P2-A1: date grounding (unsupported_date, blocking) --------------------
@@ -2391,6 +2464,8 @@ export function checkFactGrounding(
   // picks the preferred reading for diagnostics; it gates nothing.
   const sourceLocale = numberLocaleForLang(source.sourceLang);
   const srcNumbers = numberCandidateSet(source.sourceText, "source", sourceLocale, source.sourceLang);
+  // NF3: PRIMARY readings accept; ALTERNATE-only support is a review flag.
+  const srcTiers = numberCandidateTiers(source.sourceText, sourceLocale, source.sourceLang);
   // P2-A1: dates are grounded as DATES. A number that is a component of a draft
   // date which FULLY matches a source date (month-name ↔ numeric, padding,
   // d/m order) is validated by that match and not re-checked as a bare number
@@ -2403,7 +2478,15 @@ export function checkFactGrounding(
   const unsupportedNumberSpans: [number, number][] = [];
   for (const entry of scanNumberEntries(generated, "en", { side: "draft" })) {
     if (inGroundedDate(entry.start, entry.end)) continue;
-    if (!entry.values.some((v) => srcNumbers.has(v))) {
+    if (entry.values.some((v) => srcTiers.primary.has(v))) continue;
+    if (entry.values.some((v) => srcTiers.alternate.has(v))) {
+      // NF3: supported only by an ambiguous reading of the source's typography
+      // («19 161» merged, "1.100" read against its document's convention):
+      // never silently accepted, never blocking — routed to human review.
+      warnings.push(`ambiguous_numeric_format:${entry.raw}`);
+      continue;
+    }
+    {
       errors.push(`unsupported_number:${entry.raw}`);
       unsupportedNumberSpans.push([entry.start, entry.end]);
       logNumberDiagnostic({

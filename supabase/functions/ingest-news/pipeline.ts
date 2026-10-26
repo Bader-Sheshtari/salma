@@ -18,6 +18,7 @@
 import { type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
   buildWritingInstructions,
+  ambiguousNumericFigures,
   causationAsserted,
   lostFigures,
   parseWriterOutput,
@@ -1068,7 +1069,15 @@ export async function writeArticle(input: {
     editorial,
     fidelity: fidelity.audit,
     // P4R2: a semantic review flag (flag-on only) also routes to human review.
-    needsHumanReview: fidelity.decision === "needs_human_review" || semanticReview,
+    // NF3: so does any figure supported only by an ambiguous source reading.
+    needsHumanReview:
+      fidelity.decision === "needs_human_review" ||
+      semanticReview ||
+      ambiguousNumericFigures(
+        [finalArticle.title, finalArticle.excerpt, finalArticle.summary ?? "", finalArticle.body].join("\n"),
+        verifiedFactText,
+        input.sourceLang ?? null,
+      ).length > 0,
     writerAttempts: r.writerAttempts,
     writerSecondAttempt: r.secondAttemptType,
   };

@@ -24,6 +24,7 @@
 // protected facts are preserved, and the editorial structure is valid.
 
 import {
+  ambiguousNumericFigures,
   arabicCountryEquivalents,
   arabicEntityPresent,
   arabicMatchTokens,
@@ -1228,6 +1229,15 @@ export function editorialGate(
   }
   // P2R-7a: every rendering + «(Latin)» gloss pair, not only packet entities.
   if (suspectGlossPairs(`${visible}\n${summary}`).length) review.add("name_transliteration_suspect");
+
+  // NF3: a figure supported ONLY by an ambiguous reading of the source's
+  // typography (a plain-space «19 161» merged, or "1.100" read against its
+  // document's convention) is held for human review — never blocking.
+  if (opts.sourceText) {
+    for (const raw of ambiguousNumericFigures(`${title}\n${excerpt}\n${summary}\n${body}`, opts.sourceText)) {
+      review.add(`ambiguous_numeric_format:${raw}`);
+    }
+  }
 
   // P4R-5: the body follows the source's order of fact anchors (Spearman ρ ≥
   // 0.8 over ≥5 matched numbers/Latin names/entities). Measurement only: it is

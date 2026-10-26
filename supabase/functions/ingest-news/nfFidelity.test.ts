@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  ambiguousNumericFigures,
   checkFactGrounding,
   extractNumberEntries,
   lostFigures,
@@ -18,6 +19,7 @@ import {
   WRITER_REPAIR_RESPONSE_FORMAT,
 } from "./salmaWriter.ts";
 import { finalizeWriterDraft, makeFidelityRepairCall, type FidelityArticle } from "./fidelityRepair.ts";
+import { editorialGate, repairableEditorialIssues } from "./salmaEditor.ts";
 
 /** unsupported_number codes, with the real-world default sourceLang = null. */
 function nums(draft: string, source: string, sourceLang: string | null = null): string[] {
@@ -80,18 +82,18 @@ test("NF-1 counter: implausible readings are not added (15,000 is never 15; 2024
   assert.deepEqual(nums("في المرحلة 3 100 مريض.", "a phase 3 trial with 90 patients"), ["unsupported_number:100"]);
 });
 
-test("NF-1 documented residual: an ambiguous SOURCE typography may mask a draft reading («phase 3 100» ⇒ 3100)", () => {
-  // Accepted trade-off (see the NF-1 comment in salmaWriter.ts): widening only
-  // where the source's own typography is ambiguous.
+test("NF-1 / NF3 ambiguous SOURCE typography («phase 3 100» ⇒ 3100) is no longer masked: it is a review flag, not an error", () => {
   assert.deepEqual(nums("شملت الدراسة 3100 مريض.", "The phase 3 100 patients cohort was followed."), []);
-  assert.deepEqual([...numberCandidateSet("phase 3 100 patients and 1.100 others", "source")].sort(), ["1.1", "100", "3", "3100"]);
+  // All candidates (primary ∪ NF3 alternate — the set the repair guard uses).
+  assert.deepEqual([...numberCandidateSet("phase 3 100 patients and 1.100 others", "source")].sort(), ["1.1", "100", "1100", "3", "3100"]);
   assert.deepEqual([...numberCandidateSet("phase 3 100 patients, 1.100 others, 82,2%", "source")].sort(), ["1.1", "100", "1100", "3", "3100", "82.2"]);
 });
 
 test("NF-1 candidate sets: source gets every plausible reading, draft the house reading", () => {
   const s = (t: string) => extractNumberEntries(t, "en", { side: "source", european: true })[0].values.sort();
   const d = (t: string) => extractNumberEntries(t, "en", { side: "draft" })[0].values;
-  assert.deepEqual(s("1,675"), ["1.675", "1675"]);
+  assert.deepEqual(s("1,675"), ["1.675"]); // European document: 1675 is the NF3 alternate
+  assert.deepEqual(extractNumberEntries("1,675", "en", { side: "source", european: true })[0].alternates, ["1675"]);
   assert.deepEqual(s("82,2"), ["82.2"]);
   assert.deepEqual(s("15,000"), ["15000"]);
   assert.deepEqual(d("1,675"), ["1675"]);
@@ -233,7 +235,8 @@ test("NF2-major European evidence is document-level: D18's Romanian source still
   const ro = "Datele din studiul de fază 3, care a inclus peste 1.100 de pacienți, au arătat că 82,2% erau încă fără cancer după doi ani.";
   assert.deepEqual(nums("شملت الدراسة أكثر من 1100 مريض، وبقي 82.2% بلا سرطان.", ro), []);
   assert.deepEqual(nums("بقي 1.1 بلا سرطان.", "inclus peste 1.100 de pacienți"), []); // English decimal reading (no evidence)
-  assert.deepEqual(nums("شملت الدراسة 1100 مريض.", "inclus peste 1.100 de pacienți"), ["unsupported_number:1100"]);
+  // NF3: without European evidence 1100 is only the ALTERNATE reading → review, not blocking.
+  assert.deepEqual(nums("شملت الدراسة 1100 مريض.", "inclus peste 1.100 de pacienți"), []);
   // P14 / P15 unaffected.
   assert.deepEqual(nums(P14_DRAFT, P14_SOURCE), []);
   assert.deepEqual(nums("نحو 694 ألف وفاة.", "approximately 694 000 deaths"), []);
@@ -254,4 +257,88 @@ test("NF2-minor-B a replacement excuses a loss only in the corresponding sentenc
   assert.deepEqual(lostFigures(a("أصيب 12 شخصاً في الحادث. وبدأ التفشي في مارس في الشمال."), a("أصيب أشخاص في الحادث. وبدأ التفشي في مارس 2026 في الشمال."), src), ["12"]);
   // The same-sentence correction is excused.
   assert.deepEqual(lostFigures(a("أصيب 12 شخصاً في الحادث. وبدأ التفشي في مارس في الشمال."), a("أصيب 13 شخصاً في الحادث. وبدأ التفشي في مارس في الشمال."), src), []);
+});
+
+// =========================================================================
+// NF3 — ambiguous readings go to REVIEW (never accepted, never blocking)
+// =========================================================================
+
+/** errors / ambiguity warnings of a draft against a source (null language). */
+function grade(draft: string, source: string, sourceLang: string | null = null) {
+  const r = checkFactGrounding({ title: "عنوان", excerpt: "", body: draft }, { sourceText: source, sourceLang }, "standard_news");
+  return {
+    errors: r.errors.filter((e) => e.startsWith("unsupported_number")),
+    ambiguous: r.warnings.filter((w) => w.startsWith("ambiguous_numeric_format:")),
+  };
+}
+
+test("NF3 P14: plain-space «19 161»/«12 318» + draft «19,161»/«12,318» → ambiguous_numeric_format review flags (not clean, not rejected)", () => {
+  const g = grade(P14_DRAFT, P14_SOURCE);
+  assert.deepEqual(g.errors, []);
+  assert.deepEqual(g.ambiguous.sort(), ["ambiguous_numeric_format:12,318", "ambiguous_numeric_format:19,161"]);
+  const v = validateArticle({ article: { title: "تفشٍّ واسع للحصبة في بنغلاديش", excerpt: "الضغط يتزايد.", body: P14_DRAFT, profile: "standard_news" }, source: { sourceText: P14_SOURCE } });
+  assert.ok(v.warnings.includes("ambiguous_numeric_format:19,161"));
+  assert.ok(!v.errors.some((e) => e.startsWith("ambiguous")));
+  // Editorial gate: review set, never blocking, never a repair trigger.
+  const gate = editorialGate({ title: "تفشٍّ واسع للحصبة", excerpt: "الضغط يتزايد.", summary: "", body: P14_DRAFT }, "standard_news", { sourceText: P14_SOURCE });
+  assert.ok(gate.needs_review.includes("ambiguous_numeric_format:19,161"), gate.needs_review.join(","));
+  assert.ok(!gate.blocking.some((c) => c.startsWith("ambiguous")));
+  assert.ok(!repairableEditorialIssues(gate).some((c) => c.startsWith("ambiguous")));
+  // An NBSP-grouped source is unambiguous → accepted with no flag.
+  assert.deepEqual(grade(P14_DRAFT, P14_SOURCE.replace("19 161", "19\u00A0161").replace("12 318", "12\u00A0318")), { errors: [], ambiguous: [] });
+});
+
+test("NF3 «phase 3 100 patients»: draft «3100» → review flag; «3101» → unsupported_number", () => {
+  const src = "The phase 3 100 patients cohort was followed for two years.";
+  assert.deepEqual(grade("شملت الدراسة 3100 مريض.", src), { errors: [], ambiguous: ["ambiguous_numeric_format:3100"] });
+  assert.deepEqual(grade("شملت الدراسة 3101 مريض.", src), { errors: ["unsupported_number:3101"], ambiguous: [] });
+  // The separate groups (as written) stay unambiguous.
+  assert.deepEqual(grade("في المرحلة 3 شملت الدراسة 100 مريض.", src), { errors: [], ambiguous: [] });
+});
+
+test("NF3 leading-zero groups are unambiguous: P15 «694 ألف» vs «694 000» and D17 «438 ألف» vs «438 000» are ACCEPTED", () => {
+  assert.deepEqual(grade("تسبب في نحو 694 ألف وفاة عالمياً.", "approximately 694 000 deaths globally"), { errors: [], ambiguous: [] });
+  assert.deepEqual(grade("تسبب في نحو 694,000 وفاة عالمياً.", "approximately 694 000 deaths globally"), { errors: [], ambiguous: [] });
+  assert.deepEqual(grade("أنقذ اللقاح نحو 438 ألف طفل.", "an estimated 438 000 children could be saved"), { errors: [], ambiguous: [] });
+  // …and a lone first group of such a run is only an alternate reading.
+  assert.deepEqual(grade("تسبب في نحو 694 وفاة.", "approximately 694 000 deaths globally"), { errors: [], ambiguous: ["ambiguous_numeric_format:694"] });
+});
+
+test("NF3 D18: under the source's European convention «82,2%»/«1.100» are ACCEPTED; «1.100» in an English document → 1100 review, 1.1 accepted", () => {
+  const ro = "Datele din studiul de fază 3, care a inclus peste 1.100 de pacienți, au arătat că 82,2% erau încă fără cancer după doi ani.";
+  assert.deepEqual(grade("شملت الدراسة أكثر من 1100 مريض، وبقي 82.2% بلا سرطان.", ro), { errors: [], ambiguous: [] });
+  const en = "The device weighed 1.100 kg in the final test.";
+  assert.deepEqual(grade("بلغ الوزن 1100.", en), { errors: [], ambiguous: ["ambiguous_numeric_format:1100"] });
+  assert.deepEqual(grade("بلغ الوزن 1.1 كغ.", en), { errors: [], ambiguous: [] });
+});
+
+test("NF3 F07 «1,675» stays unsupported_number (blocking)", () => {
+  const src = "During the 8-week period 1, 675 patients were randomized 1:1:1:1 to low-, medium-, or high-dose olanzapine LAI or placebo.";
+  assert.deepEqual(grade("وُزّع 1,675 مريضاً عشوائياً.", src), { errors: ["unsupported_number:1,675"], ambiguous: [] });
+});
+
+test("NF3 counters: 19,162, «695 ألف», 82,3 and 3101 still block; a PRIMARY match never gets the ambiguity flag", () => {
+  assert.deepEqual(grade("سُجلت 19,162 حالة.", P14_SOURCE).errors, ["unsupported_number:19,162"]);
+  assert.deepEqual(grade("نحو 695 ألف وفاة.", "approximately 694 000 deaths").errors, ["unsupported_number:695"]);
+  assert.deepEqual(grade("بقي 82,3% بلا سرطان.", "82,2% erau încă fără cancer").errors, ["unsupported_number:82,3"]);
+  assert.deepEqual(grade("شملت الدراسة 3101 مريض.", "phase 3 100 patients").errors, ["unsupported_number:3101"]);
+  assert.deepEqual(grade("و2,973 حالة مؤكدة و9,772 حالة خروج.", P14_SOURCE), { errors: [], ambiguous: [] });
+  assert.deepEqual(grade("ارتفاع بنسبة 1.5 نقطة.", "a rise of 1.5 points."), { errors: [], ambiguous: [] });
+  // NF2-major kept: an English comma token never gains a decimal reading, not even as an alternate.
+  assert.deepEqual(grade("سُجّل 1.25 في التجربة.", "The trial enrolled 1,250 patients."), { errors: ["unsupported_number:1.25"], ambiguous: [] });
+  assert.deepEqual(ambiguousNumericFigures("سُجلت 19,161 حالة.", P14_SOURCE), ["19,161"]);
+});
+
+test("NF3 a repair cannot clear an ambiguous figure by deleting it (the NF-2 guard rejects the deletion)", async () => {
+  // DRAFT has the ambiguous 19,161 plus two repairable errors (12,319 and 694).
+  const deleted = BODY.replace("نحو 19,161 حالة حصبة", "حالات حصبة").replace("12,319", "12,318").replace("نحو 694 وفاة", "نحو 694 ألف وفاة");
+  const fin = await finalizeWriterDraft({ runEditor: async () => ({ article: DRAFT, readMinutes: 1, audit: null }), validate, repair: stubRepair(deleted), figuresLost: guard });
+  assert.equal(fin.fidelity.decision, "reject");
+  assert.equal(fin.fidelity.audit.repair_failure_reason, "repair_deleted_figures");
+  assert.deepEqual(fin.fidelity.audit.repair_lost_figures, ["19,161"]);
+});
+
+test("NF3 wiring: the pipeline routes any ambiguous figure in the final article to needs_human_review", () => {
+  const src = readFileSync(fileURLToPath(new URL("./pipeline.ts", import.meta.url)), "utf8");
+  assert.ok(/needsHumanReview:\s*\n\s*fidelity\.decision === "needs_human_review" \|\|\s*\n\s*semanticReview \|\|\s*\n\s*ambiguousNumericFigures\(/.test(src));
 });
