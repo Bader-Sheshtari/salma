@@ -303,19 +303,17 @@ test("P4R-6 P14: NBSP/thin/narrow-NBSP source groups ground the comma-grouped dr
   }
 });
 
-test("P4R3-2 a PLAIN-space group folds only for a space-grouping source language (fr/ro…), with 3-digit groups", () => {
-  assert.deepEqual(numberErrors(P14_DRAFT, P14_SOURCE, "fr"), []);
-  assert.deepEqual(numberErrors(P14_DRAFT, P14_SOURCE, "ro-RO"), []);
-  // English / unset: a plain space is NOT a thousands separator (fail closed).
-  assert.deepEqual(numberErrors("سُجلت 19,161 حالة.", "a total of 19 161 suspected cases", "en"), ["unsupported_number:19,161"]);
-  assert.deepEqual(numberErrors("سُجلت 19,161 حالة.", "a total of 19 161 suspected cases", null), ["unsupported_number:19,161"]);
+test("P4R3-2 → NF-1 a PLAIN-space 3-digit group folds in ANY language (no source_lang gate)", () => {
+  for (const lang of ["fr", "ro-RO", "en", null]) {
+    assert.deepEqual(numberErrors(P14_DRAFT, P14_SOURCE, lang), [], String(lang));
+  }
+  assert.deepEqual(numberErrors("سُجلت 19,162 حالة.", "a total of 19 161 suspected cases", null), ["unsupported_number:19,162"]);
 });
 
-test("P4R3-2 «phase 3 100 patients» does not support 3100, and «المرحلة 3 100 مريض» yields no merged token", () => {
+test("P4R3-2 → NF-1 «phase 3 100 patients»: 3101 fails (3100 is the documented residual); the draft never merges a plain space", () => {
   const src = "The phase 3 100 patients cohort was followed for two years.";
-  assert.deepEqual(numberErrors("شملت الدراسة 3100 مريض.", src, "en"), ["unsupported_number:3100"]);
-  assert.deepEqual(numberErrors("شملت الدراسة 3100 مريض.", src, null), ["unsupported_number:3100"]);
-  // The Arabic draft never folds a plain space: «3» and «100» are checked separately.
+  assert.deepEqual(numberErrors("شملت الدراسة 3101 مريض.", src, null), ["unsupported_number:3101"]);
+  assert.deepEqual(numberErrors("شملت الدراسة 3100 مريض.", src, null), []); // accepted residual (NF-1 comment)
   assert.deepEqual(numberErrors("في المرحلة 3 100 مريض.", "a phase 3 trial with 100 patients", "en"), []);
   assert.deepEqual(numberErrors("في المرحلة 3 100 مريض.", "a phase 3 trial with 90 patients", "en"), ["unsupported_number:100"]);
 });
@@ -338,10 +336,10 @@ test("P4R-6 D18: decimal comma in a Romanian source (82,2 ↔ 82.2) under the th
   assert.deepEqual(numberErrors("بقي 82.2% بلا سرطان.", "82,2% bebas kanker", "id"), []);
 });
 
-test("P4R3-3 decimal-comma fallback is OFF for an unset language: English parse kept («1,2» is not 1.2)", () => {
-  assert.deepEqual(numberErrors("قيمة 1.2 وحدة.", "the value was 1,2 units.", null), ["unsupported_number:1.2"]);
-  assert.deepEqual(numberErrors("قيمة 1.2 وحدة.", "the value was 1,2 units.", "en"), ["unsupported_number:1.2"]);
-  assert.deepEqual(numberErrors("بقي 82.2% بلا سرطان.", "82,2% erau încă fără cancer", null), ["unsupported_number:82.2"]);
+test("P4R3-3 → NF-1 decimal comma is read in ANY language («1,2» = 1.2, «82,2» = 82.2), wrong values still fail", () => {
+  assert.deepEqual(numberErrors("قيمة 1.2 وحدة.", "the value was 1,2 units.", null), []);
+  assert.deepEqual(numberErrors("قيمة 1.3 وحدة.", "the value was 1,2 units.", null), ["unsupported_number:1.3"]);
+  assert.deepEqual(numberErrors("بقي 82.2% بلا سرطان.", "82,2% erau încă fără cancer", null), []);
   assert.deepEqual(numberErrors("بقي 82.2% بلا سرطان.", "82,2% erau încă fără cancer", "ro"), []);
 });
 
@@ -352,7 +350,8 @@ test("P4R-6 counter: 19,162 vs “19 161” still fails; «695 ألف» vs “69
   assert.deepEqual(numberErrors("نحو 695 ألف وفاة.", "approximately 694\u00A0000 deaths", "en"), ["unsupported_number:695"]);
   assert.deepEqual(numberErrors("بقي 82,3% بلا سرطان.", "82,2% erau încă fără cancer", "ro"), ["unsupported_number:82,3"]);
   assert.deepEqual(numberErrors("بقي 82.3% بلا سرطان.", "82,2% erau încă fără cancer", "ro"), ["unsupported_number:82.3"]);
-  assert.ok(numberErrors("قيمة 1,50 وحدة.", "the value was exactly 1.5 units.", "en").length > 0);
+  // NF-1: «1,50» is an unambiguous decimal comma (= 1.5); a different value fails.
+  assert.ok(numberErrors("قيمة 1,50 وحدة.", "the value was exactly 1.6 units.", "en").length > 0);
   assert.deepEqual(numberErrors("في 2024 سُجلت 158 حالة.", "In 2024 158 cases were recorded.", "en"), []);
   assert.deepEqual(numberErrors("سُجلت 2024158 حالة.", "In 2024 158 cases were recorded.", "fr"), ["unsupported_number:2024158"]);
 });

@@ -606,28 +606,56 @@ export function parseNumberToken(token: string, locale: NumberLocale): string | 
   return canonicalDecimal(intPart, fracPart);
 }
 
-/**
- * Scan `text` for numeric figures (each with an optional adjacent scale word)
- * and return, per figure, the raw numeric token as written and its canonical
- * value (null when unparseable/ambiguous). Arabic-Indic digits and the Arabic
- * thousands/decimal separators (٬ ٫) are folded first so both sides compare
- * equal. Used to require every generated figure's VALUE to exist in the source.
- */
-export function extractNumberEntries(
-  text: string,
-  locale: NumberLocale,
-  opts: NumberScanOptions = {},
-): { raw: string; value: string | null }[] {
-  return scanNumberEntries(text, locale, opts).map(({ raw, value }) => ({ raw, value }));
-}
+// --- NF-1: language-independent numeric candidates ---------------------------
+//
+// The source language is null for almost every real story, so number matching
+// can NOT be gated on it. Instead every numeric token yields a CANDIDATE VALUE
+// SET under all plausible format interpretations, on both sides, and a draft
+// figure is supported when ANY of its candidates is ANY source candidate:
+//   - NBSP / thin / narrow-NBSP digit groups ("19 161") are always merged;
+//   - SOURCE side: a PLAIN-space run with strict 3-digit trailing groups
+//     ("19 161", "694 000") contributes BOTH the merged value AND each group
+//     as its own number (adding source candidates only widens what a draft may
+//     cite — the separate numbers stay supported exactly as before);
+//   - DRAFT side: a plain space never merges (Arabic drafts group with commas;
+//     «المرحلة 3 100 مريض» stays «3» and «100»);
+//   - separators: SOURCE tokens get the house reading (comma thousands, period
+//     decimal; "82,2" → 82.2 when that is invalid) and — ONLY when the source
+//     shows European convention at document level (europeanNumberConvention:
+//     explicit non-English language, a decimal-comma token, or multi-group
+//     period-thousands) — also the European reading ("1.100" → {1.1, 1100},
+//     "1,675" → {1675, 1.675}); a decimal reading ending in "000" ("15,000" →
+//     15) is implausible and always dropped. An English "1,250" stays 1250;
+//     DRAFT tokens use the house convention (comma thousands, period decimal)
+//     and fall back to a decimal comma only when that is invalid ("82,2");
+//   - «ألف/آلاف/مليون/ملايين…» and thousand/million/billion scale words always;
+//   - Arabic-Indic digits and ٬ ٫ folded as before.
+// ACCEPTED RESIDUAL (documented trade-off): when the SOURCE's own typography is
+// ambiguous the draft may cite either reading. A wrong draft «3100» is masked
+// by a source "phase 3 100 patients" (3 and 100 merged to 3100), and in a
+// European-convention source a draft «1.1» by "1.100" (= 1100). A value
+// outside every reading — 3101,
+// 19,162, «695 ألف», 82,3 — still fails (NF counter-tests).
 
-// P4R-6 / P4R3-2: thousands groups written with a SPACE: "19 161", "694 000".
-// Only a typographic separator — NBSP (U+00A0), thin space (U+2009) or narrow
-// NBSP (U+202F) — folds by default (the extractor keeps an &nbsp; between
-// digits as U+00A0). A PLAIN space folds only when the caller says the text is
-// in a space-grouping language (SPACE_GROUP_LANGS), so "phase 3 100 patients"
-// never becomes 3100. Every group after the first must be EXACTLY three digits
-// and the run may not be followed by another digit ("2024 158" never merges).
+export type NumberSide = "source" | "draft";
+
+/** Options for the numeric scan. `side` selects the candidate rules above
+ *  (default "draft", the strict side). On the source side the second
+ *  (European) reading applies only when `european` is true — by default it is
+ *  detected for the whole text by europeanNumberConvention(text, sourceLang). */
+export type NumberScanOptions = { side?: NumberSide; sourceLang?: string | null; european?: boolean };
+
+export type NumberEntry = {
+  raw: string;
+  // Preferred reading (`locale` first, else the other convention); null when
+  // the token has no valid reading at all.
+  value: string | null;
+  // Every candidate value of this token (see NF-1).
+  values: string[];
+  start: number;
+  end: number;
+};
+
 const HARD_GROUP_SEP = "[\\u00A0\\u2009\\u202F]";
 const SPACE_GROUP_SEP = "[ \\u00A0\\u2009\\u202F]";
 const SCALE_WORD_SRC =
@@ -635,54 +663,76 @@ const SCALE_WORD_SRC =
 const numberScanSrc = (sep: string) =>
   `(\\d{1,3}(?:${sep}\\d{3})+(?:[.,]\\d+)?(?!\\d)|\\d[\\d.,]*)(?:\\s*(${SCALE_WORD_SRC})(?![\\p{L}]))?`;
 
-// Languages whose typography groups thousands with a (plain) space.
-const SPACE_GROUP_LANGS = new Set([
-  "fr", "fra", "fre", "ro", "ron", "rum", "de", "deu", "ger", "pl", "pol", "cs", "ces", "cze", "sk", "slk", "slo",
-  "sv", "swe", "no", "nb", "nor", "fi", "fin", "ru", "rus", "uk", "ukr", "bg", "bul", "hu", "hun", "et", "est",
-  "lv", "lav", "lt", "lit",
-]);
-
-/** P4R3-2: does `lang` group thousands with a plain space? */
-export function spaceGroupingLang(lang?: string | null): boolean {
-  return SPACE_GROUP_LANGS.has((lang ?? "").trim().toLowerCase().split(/[-_]/)[0]);
+/** Candidate readings of one separator-bearing token (no spaces). */
+// NF2-major: DOCUMENT-level evidence that a source uses the European convention
+// (comma decimal / period thousands). Only then do its tokens get the second
+// reading — an English "1,250 patients" never supports «1.25».
+//   - an explicitly non-English source language, or
+//   - a decimal-comma token anywhere in the text: \d,\d{1,2} not followed by a
+//     digit ("82,2", "1,50"), or a multi-group period-thousands token
+//     ("1.234.567") — a single "1.100" alone is not evidence (it is also a
+//     valid English decimal).
+export function europeanNumberConvention(text: string, sourceLang?: string | null): boolean {
+  const l = (sourceLang ?? "").trim().toLowerCase().split(/[-_]/)[0];
+  if (l && l !== "en" && l !== "eng") return true;
+  const t = foldDigits(text ?? "").replace(/٬/g, ",").replace(/٫/g, ".");
+  return /(?<![\d.,])\d+,\d{1,2}(?![\d])/.test(t) || /(?<![\d.,])\d{1,3}(?:\.\d{3}){2,}(?![\d.,])/.test(t);
 }
 
-/** Options for the numeric scan (P4R-6). */
-export type NumberScanOptions = {
-  // A token that is unparseable under `locale` (e.g. "82,2" under `en`, where a
-  // comma must be followed by exactly three digits) is re-read with the OTHER
-  // convention. Only an unparseable token is re-read, so an `en`-valid "1,500"
-  // is never reinterpreted as 1.5 (no ambiguous widening).
-  decimalCommaFallback?: boolean;
-  // Also emit each digit group of a space-grouped figure as its own value
-  // ("19 161" → 19, 161 and 19161). Used on the SOURCE side only so a source
-  // that genuinely lists two adjacent figures keeps supporting both, exactly as
-  // before the space fold existed.
-  keepGroupParts?: boolean;
-  // P4R3-2: also fold PLAIN-space groups (space-grouping source languages only).
-  plainSpaceGroups?: boolean;
-};
+function tokenReadings(
+  tok: string,
+  side: NumberSide,
+  locale: NumberLocale,
+  european = true,
+): { value: string | null; values: string[] } {
+  const en = parseNumberToken(tok, "en");
+  const eu = parseNumberToken(tok, "eu");
+  const preferred = (locale === "eu" ? eu ?? en : en ?? eu) ?? null;
+  if (side === "draft" || !european) {
+    // The house reading (comma thousands, period decimal); a decimal comma
+    // only when that reading is invalid ("82,2").
+    const v = en ?? eu;
+    return { value: side === "draft" ? v : preferred, values: v === null ? [] : [v] };
+  }
+  const values: string[] = [];
+  for (const [v, conv] of [[en, "en"], [eu, "eu"]] as const) {
+    if (v === null || values.includes(v)) continue;
+    // A decimal reading of "a[.,]000" is implausible (it is a thousands group).
+    const dec = conv === "en" ? "." : ",";
+    const m = tok.match(/^\d+([.,])(\d{3})$/);
+    if (m && m[1] === dec && m[2] === "000") continue;
+    values.push(v);
+  }
+  return { value: preferred, values };
+}
 
-/** Number entries WITH their character span in `text` (same scan as
- *  extractNumberEntries; foldDigits and the ٬/٫ folds are length-preserving, so
- *  the indices address the original text). Used to exempt the components of a
- *  FULLY grounded date from the per-number check (P2-A1). */
-function scanNumberEntries(
+/**
+ * Scan `text` for numeric figures (each with an optional adjacent scale word)
+ * and return, per figure, the raw token, its preferred value and its NF-1
+ * candidate set. Indices address the original text (the digit folds are
+ * length-preserving). Used to require every generated figure's VALUE to exist
+ * in the source, and to exempt the components of a fully grounded date.
+ */
+export function extractNumberEntries(
   text: string,
   locale: NumberLocale,
   opts: NumberScanOptions = {},
-): { raw: string; value: string | null; start: number; end: number }[] {
+): NumberEntry[] {
+  return scanNumberEntries(text, locale, opts);
+}
+
+function scanNumberEntries(text: string, locale: NumberLocale, opts: NumberScanOptions = {}): NumberEntry[] {
+  const side: NumberSide = opts.side ?? "draft";
+  const european = side === "source" ? (opts.european ?? europeanNumberConvention(text, opts.sourceLang)) : false;
   const folded = foldDigits(text ?? "").replace(/٬/g, ",").replace(/٫/g, ".");
-  const sep = opts.plainSpaceGroups ? SPACE_GROUP_SEP : HARD_GROUP_SEP;
+  const sep = side === "source" ? SPACE_GROUP_SEP : HARD_GROUP_SEP;
   const re = new RegExp(numberScanSrc(sep), "giu");
-  const spaceRe = new RegExp(sep, "g");
-  const other: NumberLocale = locale === "eu" ? "en" : "eu";
-  const parse = (tok: string): string | null => {
-    const v = parseNumberToken(tok, locale);
-    if (v !== null || !opts.decimalCommaFallback) return v;
-    return parseNumberToken(tok, other);
-  };
-  const out: { raw: string; value: string | null; start: number; end: number }[] = [];
+  const sepRe = new RegExp(sep, "g");
+  const out: NumberEntry[] = [];
+  const scaled = (r: { value: string | null; values: string[] }, exp: number) =>
+    exp > 0
+      ? { value: r.value === null ? null : applyScale(r.value, exp), values: r.values.map((v) => applyScale(v, exp)) }
+      : r;
   let m: RegExpExecArray | null;
   while ((m = re.exec(folded)) !== null) {
     if (!m[1]) {
@@ -690,31 +740,151 @@ function scanNumberEntries(
       continue;
     }
     const written = m[1].replace(/[.,]+$/, ""); // drop a trailing sentence separator
-    const spaced = spaceRe.test(written);
-    spaceRe.lastIndex = 0;
-    const raw = spaced ? written.replace(spaceRe, " ") : written;
-    let value = parse(spaced ? written.replace(spaceRe, "") : written);
+    const spaced = sepRe.test(written);
+    sepRe.lastIndex = 0;
+    const raw = spaced ? written.replace(sepRe, " ") : written;
     const exp = scaleExponent(m[2]);
-    if (value !== null && exp > 0) value = applyScale(value, exp);
-    out.push({ raw, value, start: m.index, end: m.index + written.length });
-    if (spaced && opts.keepGroupParts) {
+    const merged = scaled(tokenReadings(spaced ? written.replace(sepRe, "") : written, side, locale, european), exp);
+    const entry: NumberEntry = { raw, value: merged.value, values: [...merged.values], start: m.index, end: m.index + written.length };
+    out.push(entry);
+    if (spaced && side === "source") {
+      // Each group stays a number of its own (both interpretations).
       let offset = m.index;
-      for (const part of written.split(spaceRe)) {
-        const p = part.replace(/[.,]+$/, "");
-        out.push({ raw: p, value: parse(p), start: offset, end: offset + p.length });
+      const parts = written.split(sepRe);
+      parts.forEach((part, k) => {
+        const pRaw = part.replace(/[.,]+$/, "");
+        const r = tokenReadings(pRaw, side, locale, european);
+        // The last group carries the scale word ("694 000 ألف" is not a thing,
+        // but "19 161" parts are plain numbers).
+        const pr = k === parts.length - 1 ? scaled(r, exp) : r;
+        out.push({ raw: pRaw, value: pr.value, values: pr.values, start: offset, end: offset + pRaw.length });
         offset += part.length + 1;
-      }
+      });
     }
   }
   return out;
 }
 
-/** P4R-6 / P4R3-3: the decimal-comma fallback applies only when the source
- *  language is EXPLICITLY non-English. Unset (null) and English keep the strict
- *  comma-as-thousands reading. */
-export function sourceDecimalCommaFallback(lang?: string | null): boolean {
-  const l = (lang ?? "").trim().toLowerCase().split(/[-_]/)[0];
-  return l !== "" && l !== "en" && l !== "eng";
+// NF2-minor-A: Arabic number words 1–10 (normalized tokens, with or without a
+// leading و/ف/ب/ل and ال) — «3» rewritten as «ثلاثة» is the same figure.
+const AR_NUMBER_WORDS: Record<string, string[]> = {
+  "1": ["واحد", "واحده", "واحدا"],
+  "2": ["اثنان", "اثنين", "اثنتان", "اثنتين", "ثنتين", "ثنتان"],
+  "3": ["ثلاث", "ثلاثه"],
+  "4": ["اربع", "اربعه"],
+  "5": ["خمس", "خمسه"],
+  "6": ["ست", "سته"],
+  "7": ["سبع", "سبعه"],
+  "8": ["ثمان", "ثماني", "ثمانيه"],
+  "9": ["تسع", "تسعه"],
+  "10": ["عشر", "عشره"],
+};
+const AR_WORD_VALUE = new Map<string, string>();
+for (const [v, ws] of Object.entries(AR_NUMBER_WORDS)) for (const w of ws) AR_WORD_VALUE.set(w, v);
+
+function numberWordValues(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const raw of normalizeForCompare(text).split(" ")) {
+    const t = raw.replace(/^[وفبل]?(?:ال)?/, "");
+    const v = AR_WORD_VALUE.get(raw) ?? AR_WORD_VALUE.get(t);
+    if (v) out.add(v);
+  }
+  return out;
+}
+
+/** Sentences of a text with their [start, end) spans (terminal . ! ? ؟ or a
+ *  line break; "82.2%" never splits). */
+function sentenceSpans(text: string): { start: number; end: number; text: string }[] {
+  const out: { start: number; end: number; text: string }[] = [];
+  const push = (start: number, end: number) => {
+    const t = text.slice(start, end);
+    if (/[\p{L}\p{N}]/u.test(t)) out.push({ start, end, text: t });
+  };
+  let start = 0;
+  const re = /[.!?؟](?=\s)|\n/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    push(start, m.index + 1);
+    start = m.index + 1;
+  }
+  push(start, text.length);
+  return out;
+}
+
+/**
+ * NF-2: figures a fidelity REPAIR removed. Every numeric token of the
+ * pre-repair draft (all fields) must survive in the repaired draft:
+ *  - with the same value anywhere (any NF-1 reading — "19,161" → "19 161",
+ *    "2.50" → "2.5" are formatting changes, not losses), or as an Arabic number
+ *    word for 1–10 («3» → «ثلاثة»);
+ *  - OR be REPLACED (NF2-minor-B): a NEW figure whose value the SOURCE supports,
+ *    located in the repaired sentence that corresponds to the lost figure's own
+ *    sentence (best content-word overlap), excuses that one loss (694 → «694
+ *    ألف»). A new figure elsewhere («أصيب 12…» → «…في 2026» in another
+ *    sentence) excuses nothing.
+ * Returns the vanished tokens (raw, deduped).
+ * LIMITATION (documented): figures written only as WORDS in the pre-repair
+ * draft are invisible to the guard — a deleted «ثلاثة» is not detected.
+ */
+export function lostFigures(
+  before: { title: string; excerpt: string; body: string; summary?: string },
+  after: { title: string; excerpt: string; body: string; summary?: string },
+  sourceText: string,
+): string[] {
+  const all = (a: typeof before) => [a.title, a.excerpt, a.summary ?? "", a.body].join("\n");
+  const preText = all(before);
+  const postText = all(after);
+  const pre = scanNumberEntries(preText, "en", { side: "draft" }).filter((e) => e.values.length);
+  const post = scanNumberEntries(postText, "en", { side: "draft" }).filter((e) => e.values.length);
+  const preVals = new Set(pre.flatMap((e) => e.values));
+  const postVals = new Set([...post.flatMap((e) => e.values), ...numberWordValues(postText)]);
+  const src = numberCandidateSet(sourceText, "source");
+  const preSents = sentenceSpans(preText);
+  const postSents = sentenceSpans(postText);
+  const sentOf = (spans: typeof preSents, i: number) => spans.findIndex((x) => i >= x.start && i < x.end);
+  // Replacement candidates: new, source-supported figures, by repaired sentence.
+  const spare = post
+    .filter((e) => !e.values.some((v) => preVals.has(v)) && e.values.some((v) => src.has(v)))
+    .map((e) => ({ sent: sentOf(postSents, e.start), used: false }));
+  const correspondingPostSentence = (preIdx: number): number => {
+    if (preIdx < 0) return -1;
+    const want = contentWordSet(preSents[preIdx].text);
+    let best = -1;
+    let bestScore = 0;
+    postSents.forEach((ps, j) => {
+      const got = contentWordSet(ps.text);
+      let inter = 0;
+      for (const t of want) if (got.has(t)) inter++;
+      const score = inter / Math.max(1, want.size + got.size - inter);
+      if (score > bestScore) {
+        bestScore = score;
+        best = j;
+      }
+    });
+    return best;
+  };
+  const lost: string[] = [];
+  for (const e of pre) {
+    if (e.values.some((v) => postVals.has(v))) continue;
+    const target = correspondingPostSentence(sentOf(preSents, e.start));
+    const r = spare.find((x) => !x.used && target >= 0 && x.sent === target);
+    if (r) {
+      r.used = true;
+      continue;
+    }
+    lost.push(e.raw);
+  }
+  return [...new Set(lost)];
+}
+
+/** Every candidate value in a text (NF-1), as a set. */
+export function numberCandidateSet(
+  text: string,
+  side: NumberSide,
+  locale: NumberLocale = "en",
+  sourceLang?: string | null,
+): Set<string> {
+  return new Set(scanNumberEntries(text, locale, { side, sourceLang }).flatMap((e) => e.values));
 }
 
 // --- P2-A1: date grounding (unsupported_date, blocking) --------------------
@@ -2215,20 +2385,12 @@ export function checkFactGrounding(
   //    (`01`/`09` in `2026-09-01`) matches "1 سبتمبر 2026". A value genuinely
   //    absent in ANY convention, or a token that cannot be parsed unambiguously,
   //    still yields `unsupported_number` (fail closed) — the safeguard is intact.
-  // P4R-6: space-grouped source figures ("19 161", NBSP/thin/narrow-NBSP too)
-  // are folded (their groups stay individually supported as before), and a
-  // decimal-comma source figure ("82,2") is read as a decimal when the source
-  // language is unset or not English. The draft side folds the same way.
+  // NF-1: language-independent candidate value sets on both sides (see the
+  // NF-1 block above extractNumberEntries): a draft figure is supported when
+  // ANY of its readings is ANY reading of a source figure. sourceLang only
+  // picks the preferred reading for diagnostics; it gates nothing.
   const sourceLocale = numberLocaleForLang(source.sourceLang);
-  const srcNumbers = new Set(
-    extractNumberEntries(source.sourceText, sourceLocale, {
-      decimalCommaFallback: sourceDecimalCommaFallback(source.sourceLang),
-      keepGroupParts: true,
-      plainSpaceGroups: spaceGroupingLang(source.sourceLang),
-    })
-      .map((e) => e.value)
-      .filter((v): v is string => v !== null),
-  );
+  const srcNumbers = numberCandidateSet(source.sourceText, "source", sourceLocale, source.sourceLang);
   // P2-A1: dates are grounded as DATES. A number that is a component of a draft
   // date which FULLY matches a source date (month-name ↔ numeric, padding,
   // d/m order) is validated by that match and not re-checked as a bare number
@@ -2239,11 +2401,9 @@ export function checkFactGrounding(
   const inGroundedDate = (start: number, end: number) =>
     groundedDateSpans.some(([a, b]) => start >= a && end <= b);
   const unsupportedNumberSpans: [number, number][] = [];
-  for (const entry of scanNumberEntries(generated, "en", {
-    decimalCommaFallback: sourceDecimalCommaFallback(source.sourceLang),
-  })) {
+  for (const entry of scanNumberEntries(generated, "en", { side: "draft" })) {
     if (inGroundedDate(entry.start, entry.end)) continue;
-    if (entry.value === null || !srcNumbers.has(entry.value)) {
+    if (!entry.values.some((v) => srcNumbers.has(v))) {
       errors.push(`unsupported_number:${entry.raw}`);
       unsupportedNumberSpans.push([entry.start, entry.end]);
       logNumberDiagnostic({
@@ -2576,17 +2736,16 @@ const ORDER_LATIN_RE = /[A-Za-z][A-Za-z0-9\-]{2,}/g;
 function firstAnchorPositions(
   text: string,
   numLocale: NumberLocale,
-  decimalCommaFallback: boolean,
+  side: NumberSide,
   entities: string[],
 ): Map<string, number> {
   const pos = new Map<string, number>();
   const put = (k: string, i: number) => {
     if (!pos.has(k) || (pos.get(k) as number) > i) pos.set(k, i);
   };
-  for (const e of scanNumberEntries(text, numLocale, { decimalCommaFallback })) {
+  for (const e of scanNumberEntries(text, numLocale, { side })) {
     // Single-digit integers are too common to be anchors.
-    if (e.value === null || (/^\d$/.test(e.value))) continue;
-    put(`n:${e.value}`, e.start);
+    for (const v of e.values) if (!/^\d$/.test(v)) put(`n:${v}`, e.start);
   }
   for (const m of (text ?? "").matchAll(ORDER_LATIN_RE)) {
     const k = m[0].toLowerCase();
@@ -2640,13 +2799,8 @@ export function sourceOrderCorrelation(
   opts: { sourceLang?: string | null; entities?: string[] } = {},
 ): { matched: number; rho: number | null; fires: boolean } {
   const entities = opts.entities ?? [];
-  const d = firstAnchorPositions(draftBody, "en", true, entities);
-  const s = firstAnchorPositions(
-    sourceText,
-    numberLocaleForLang(opts.sourceLang),
-    sourceDecimalCommaFallback(opts.sourceLang),
-    entities,
-  );
+  const d = firstAnchorPositions(draftBody, "en", "draft", entities);
+  const s = firstAnchorPositions(sourceText, numberLocaleForLang(opts.sourceLang), "source", entities);
   const keys = [...d.keys()].filter((k) => s.has(k));
   if (keys.length < SOURCE_ORDER_MIN_ANCHORS) return { matched: keys.length, rho: null, fires: false };
   const rho = pearson(

@@ -238,8 +238,9 @@ test("P4R2 D18: with the Romanian source language «1.100» grounds the draft's 
   assert.deepEqual(d18Numbers("وشملت أكثر من 1,100 مريض.", "ro"), []);
 });
 
-test("P4R2 D18 counter: without a language «1.100» stays 1.1 (strict), and a wrong figure still fails under ro", () => {
-  assert.deepEqual(d18Numbers("وشملت أكثر من 1100 مريض.", null), ["unsupported_number:1100"]);
+test("P4R2 D18 counter (NF-1): «1.100» grounds 1100 even without a language; a wrong figure still fails", () => {
+  assert.deepEqual(d18Numbers("وشملت أكثر من 1100 مريض.", null), []);
+  assert.deepEqual(d18Numbers("وشملت أكثر من 1101 مريض.", null), ["unsupported_number:1101"]);
   assert.deepEqual(d18Numbers("وشملت أكثر من 1101 مريض.", "ro"), ["unsupported_number:1101"]);
   assert.deepEqual(d18Numbers("وبقي 82.3% بلا سرطان.", "ro"), ["unsupported_number:82.3"]);
 });

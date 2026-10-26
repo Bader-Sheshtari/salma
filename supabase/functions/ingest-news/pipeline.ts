@@ -19,6 +19,7 @@ import { type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
   buildWritingInstructions,
   causationAsserted,
+  lostFigures,
   parseWriterOutput,
   readingTimeMinutes,
   selectProfile,
@@ -585,10 +586,12 @@ const WRITER_JSON_RECOVERY_MESSAGE = {
 function fidelityIssueInstruction(code: string): string {
   const [kind, detail] = code.split(/:(.+)/);
   switch (kind) {
+    // NF-2: numeric codes are restore-or-escalate — replace, never delete (this
+    // instruction overrides the general deletion option above).
     case "unsupported_number":
-      return `الرقم أو التاريخ «${detail ?? ""}» غير وارد في نص المصدر. احذفه، أو استبدله بالقيمة الصحيحة كما وردت حرفيًا في المصدر، أو أعِد صياغة الجملة دون هذا الرقم بعربية صحفية بسيطة.`;
+      return `الرقم «${detail ?? ""}» لا يطابق قيمة في نص المصدر. استبدله بالقيمة الصحيحة المقابلة كما وردت في المصدر (ويجوز بصيغة مكافئة لها، مثل «694 ألف» مقابل 694 000). لا تحذف الرقم ولا الجملة التي تحمله؛ وإذا لم تجد في المصدر قيمة مقابلة فأبقِ الجملة كما هي. تتقدّم هذه التعليمة على خيار الحذف العام.`;
     case "unsupported_date":
-      return `التاريخ «${detail ?? ""}» لا يطابق أي تاريخ ورد في نص المصدر. استبدله بالتاريخ الصحيح كما ورد في المصدر، أو احذفه وأعِد صياغة الجملة دونه بعربية صحفية بسيطة.`;
+      return `التاريخ «${detail ?? ""}» لا يطابق أي تاريخ ورد في نص المصدر. استبدله بالتاريخ الصحيح المقابل كما ورد في المصدر. لا تحذف التاريخ ولا الجملة التي تحمله؛ وإذا لم تجد في المصدر تاريخاً مقابلاً فأبقِ الجملة كما هي. تتقدّم هذه التعليمة على خيار الحذف العام.`;
     case "unsupported_claim":
       return `الادّعاء المتعلق بـ«${detail ?? ""}» (فعالية أو موافقة أو نتيجة) غير مدعوم بنص المصدر. احذفه أو خفّف الصياغة لتطابق قوة ما ورد في المصدر فقط، بعربية صحفية بسيطة لا بأسلوب المصدر الرسمي، دون إضافة أي حكم جديد.`;
     case "invented_quotation":
@@ -1014,6 +1017,8 @@ export async function writeArticle(input: {
       responseFormat: WRITER_REPAIR_RESPONSE_FORMAT,
       parse: parseWriterOutput,
     }),
+    // NF-2: a repair that simply deletes a figure is rejected → human review.
+    figuresLost: (before, after) => lostFigures(before, after, verifiedFactText),
   });
 
   // P2-D10: persist the editor outcome + prompt version on the decision row.

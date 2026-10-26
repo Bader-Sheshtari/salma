@@ -288,9 +288,9 @@ function stemHit(tokens: string[], stem: string): boolean {
 function numberValues(text: string): Set<string> {
   // Numbers by VALUE; single digits are too common to anchor on.
   return new Set(
-    extractNumberEntries(text, "en", { decimalCommaFallback: true })
-      .map((e) => e.value)
-      .filter((v): v is string => v !== null && !/^\d$/.test(v)),
+    extractNumberEntries(text, "en", { side: "source" })
+      .flatMap((e) => e.values)
+      .filter((v) => !/^\d$/.test(v)),
   );
 }
 

@@ -393,9 +393,11 @@ test("num: source 15,000 but draft 15 مليون rejects (wrong scale)", () => {
 test("num: genuinely invented decimal rejects", () => {
   assert.ok(numErrors("ارتفاع بنسبة 7.3 نقطة.", "a modest rise was reported.", "eng").length > 0);
 });
-test("num: ambiguous token that cannot be safely interpreted fails closed", () => {
-  // EN convention: "1,50" is neither a valid thousands group nor an EN decimal → null → rejected.
-  const e = numErrors("قيمة 1,50 وحدة.", "the value was exactly 1.5 units.", "eng");
+test("num: a decimal-comma draft token reads as its decimal value; a different value still fails (NF-1)", () => {
+  // NF-1 (deliberate change): «1,50» has no comma-thousands reading, so it is
+  // read as the decimal 1.5 — it matches a source 1.5 and still fails a 1.6.
+  assert.deepEqual(numErrors("قيمة 1,50 وحدة.", "the value was exactly 1.5 units.", "eng"), []);
+  const e = numErrors("قيمة 1,50 وحدة.", "the value was exactly 1.6 units.", "eng");
   assert.ok(e.length > 0, e.join(","));
 });
 

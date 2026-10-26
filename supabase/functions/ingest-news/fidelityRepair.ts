@@ -177,6 +177,9 @@ export type FidelityRepairAudit = {
   decision: FidelityDecision;
   rejection_reason: string | null;
   draft_source: "original" | "repaired";
+  // NF-2: numeric tokens the single repair simply removed (present only when
+  // the repair was rejected for deleting figures).
+  repair_lost_figures?: string[];
 };
 
 export type FidelityRepairResult = {
@@ -204,6 +207,9 @@ export async function orchestrateFidelityRepair(args: {
   readMinutes: number;
   validate: (a: FidelityArticle) => FidelityValidation;
   repair: FidelityRepairCall;
+  // NF-2: injected numeric-preservation guard (pipeline: salmaWriter.lostFigures
+  // over the verified source). Returns the figures the repair removed.
+  figuresLost?: (before: FidelityArticle, after: FidelityArticle) => string[];
 }): Promise<FidelityRepairResult> {
   const { draft, validate, repair } = args;
 
@@ -270,7 +276,16 @@ export async function orchestrateFidelityRepair(args: {
 
   // Only repairable and/or omission errors → exactly ONE constrained repair.
   const issues = [...a0.repairable, ...a0.omission];
-  const rep = await repair(issues, draft);
+  const rep0 = await repair(issues, draft);
+  // NF-2 / NF2-blocker: a repair may correct a figure but never DELETE one. If
+  // any numeric token simply vanished, the repair is DISCARDED and treated
+  // exactly like a failed repair call (the a7c5314 path for the ORIGINAL
+  // errors: a repairable breach rejects, an omission alone goes to review) —
+  // never clean, never pending-with-errors. The audit adds the reason
+  // repair_deleted_figures and the lost tokens.
+  const lost = rep0.ok && args.figuresLost ? args.figuresLost(draft, rep0.article) : [];
+  const rep: Awaited<ReturnType<FidelityRepairCall>> = lost.length ? { ok: false, reason: "repair_deleted_figures" } : rep0;
+  const lostAudit = lost.length ? { repair_lost_figures: lost } : {};
 
   // The repair transport failed (call/parse). Decide from the ORIGINAL errors:
   // a repairable breach that could not be fixed rejects; an omission alone
@@ -297,6 +312,7 @@ export async function orchestrateFidelityRepair(args: {
           decision: "reject",
           rejection_reason: a0.repairable[0],
           draft_source: "original",
+          ...lostAudit,
         },
       };
     }
@@ -320,6 +336,7 @@ export async function orchestrateFidelityRepair(args: {
         decision: "needs_human_review",
         rejection_reason: null,
         draft_source: "original",
+        ...lostAudit,
       },
     };
   }
@@ -421,6 +438,7 @@ export async function finalizeWriterDraft<E>(args: {
   runEditor: () => Promise<{ article: FidelityArticle; readMinutes: number; audit: E }>;
   validate: (a: FidelityArticle) => FidelityValidation;
   repair: FidelityRepairCall;
+  figuresLost?: (before: FidelityArticle, after: FidelityArticle) => string[];
 }): Promise<{ editorial: E; fidelity: FidelityRepairResult }> {
   const editor = await args.runEditor();
   const fidelity = await orchestrateFidelityRepair({
@@ -428,6 +446,7 @@ export async function finalizeWriterDraft<E>(args: {
     readMinutes: editor.readMinutes,
     validate: args.validate,
     repair: args.repair,
+    figuresLost: args.figuresLost,
   });
   return { editorial: editor.audit, fidelity };
 }
