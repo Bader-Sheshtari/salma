@@ -37,6 +37,7 @@ import {
   resolvePilotGate,
   type WriterMode,
 } from "./writerRouter.ts";
+import { jamalModel, type JamalRunRecord, writeJamalArticle } from "./jamal.ts";
 import {
   EDITOR_PROMPT_VERSION,
   type EditorialAudit,
@@ -65,6 +66,7 @@ import {
 import {
   assertEditorConfig,
   chatEvidence,
+  chatJson,
   chatWeb,
   DEFAULT_MODEL,
   denoRawFetch,
@@ -156,7 +158,7 @@ type RunStats = { found: number; kept: number; filtered: number; duplicates: num
 // candidate. Returned to the manual caller only AFTER the mandatory audit has
 // persisted (runIngestion throws otherwise, so a reported pilot is always audited).
 type PilotReport = {
-  writer_mode: "pilot";
+  writer_mode: "pilot" | "jamal";
   pilot_limit: number;
   candidates_considered: number;
   source_fetches_attempted: number;
@@ -649,13 +651,16 @@ async function runIngestion(
   // E1.3E single-article cap. In pilot mode the run processes at most this many
   // candidates that REACH the source-fetch stage (the entrypoint only ever lets
   // pilotLimit=1 through). null in legacy mode → no cap, unchanged behavior.
-  const pilotLimit: number | null = writerMode === "pilot" ? (opts.pilotLimit ?? 1) : null;
+  const pilotLimit: number | null = writerMode !== "legacy" ? (opts.pilotLimit ?? 1) : null;
   // E1.3F: the targeted-pilot URL is honored ONLY in pilot mode; legacy/cron
   // runs ignore it so the scheduled path can never be steered to an arbitrary URL.
-  const targetedSourceUrl: string | null = writerMode === "pilot" ? (opts.targetedSourceUrl ?? null) : null;
+  const targetedSourceUrl: string | null = writerMode !== "legacy" ? (opts.targetedSourceUrl ?? null) : null;
   // Honored ONLY in pilot mode; the entrypoint additionally restricts it to an
   // authenticated manual trigger. Never consulted in legacy/cron runs.
   const radarAuthorizedUrl: string | null = writerMode === "pilot" ? (opts.radarAuthorizedUrl ?? null) : null;
+  // Jamal (Rev 2): verified-source single-article mode like "pilot", but the
+  // draft is written by Jamal instead of the Writer→Editor pipeline. Shares the
+  // pilot cap/targeting above; the legacy path and "pilot" stay byte-identical.
   // Radar exact-article ER fallback, built ONCE. Available ONLY when: pilot mode,
   // a URL-scoped Radar authorization exists, the provider is Event Registry, and
   // the ER key is configured. null in every other path → the direct fetch is the
@@ -675,9 +680,9 @@ async function runIngestion(
       : null;
   // Live pilot counters, mutated as the single candidate is processed; assembled
   // into the returned PilotReport after finalize. null in legacy mode.
-  const pilot: PilotReport | null = writerMode === "pilot"
+  const pilot: PilotReport | null = writerMode !== "legacy"
     ? {
-      writer_mode: "pilot",
+      writer_mode: writerMode,
       pilot_limit: pilotLimit ?? 1,
       candidates_considered: 0,
       source_fetches_attempted: 0,
@@ -701,6 +706,9 @@ async function runIngestion(
   // editorial-director model is asserted on the same rule (independent config).
   assertWriterConfig(WRITER_CONFIG);
   assertEditorConfig(EDITOR_MODEL);
+  // Jamal's model is asserted on the same rule (independent config; its env
+  // var never affects — and is never affected by — the writer/editor routes).
+  if (writerMode === "jamal") assertEditorConfig(jamalModel());
 
   const { data: policy } = await db
     .from("editorial_policy")
@@ -974,6 +982,19 @@ async function runIngestion(
     return contentId;
   };
 
+  // Jamal audit sidecar (Rev 2): best-effort insert into the additive
+  // jamal_runs table (migration 20261105090000, service-role-only RLS). A
+  // sidecar failure must NEVER fail the run — the mandatory decision audit
+  // (logDecision) is unaffected; the miss is logged for observability.
+  const insertJamalRun = async (run: JamalRunRecord, contentId: string | null) => {
+    try {
+      const { error } = await db.from("jamal_runs").insert({ run_id: runId, content_id: contentId, ...run });
+      if (error) console.error("jamal_runs insert failed:", (error as { message?: string }).message ?? error);
+    } catch (e) {
+      console.error("jamal_runs insert failed:", e);
+    }
+  };
+
   // Fetch + evaluate each region concurrently (network-bound), returning the
   // survivors. Clustering across the whole run happens after all regions gather.
   const gatherRegion = async (region: string): Promise<PendingItem[]> => {
@@ -1166,6 +1187,33 @@ async function runIngestion(
         if (opts.evidenceAnalyzer && chosen.url === radarAuthorizedUrl) {
           evidence = await opts.evidenceAnalyzer(verified);
         }
+        // Jamal mode (Rev 2): the dedicated editorial agent writes the draft;
+        // factual validation runs OUTSIDE Jamal inside writeJamalArticle via
+        // the same deterministic validator, and the outcome flows through the
+        // identical insert/audit path below. No evidence card: Jamal v1 takes
+        // none (ESL — the only evidence caller — never sends this mode).
+        if (writerMode === "jamal") {
+          return writeJamalArticle({
+            verified,
+            discovery: {
+              originalTitle: draft.original_title,
+              body: draft.body,
+              excerpt: draft.excerpt,
+            },
+            sourceName: chosen.source?.name ?? item.citation.title ?? null,
+            registeredDomain,
+            sourceUrl: chosen.url,
+            // The real OpenRouter transport, bound to Jamal's own model.
+            chat: (messages, responseFormat) =>
+              chatJson(messages, {
+                model: jamalModel(),
+                temperature: 0.4,
+                maxTokens: 3500,
+                responseFormat,
+                timeoutMs: 90000,
+              }),
+          });
+        }
         return writeArticle({
           verified,
           discovery: {
@@ -1215,18 +1263,22 @@ async function runIngestion(
       pilot.fidelity = written.fidelity;
       if (written.ok) pilot.needs_human_review = written.needsHumanReview;
     }
+    // Jamal sidecar record (present only on jamal-mode outcomes).
+    const jamalRun = (written as { jamalRun?: JamalRunRecord }).jamalRun ?? null;
     if (!written.ok) {
       logDecision(draft, chosen, false, written.rejection, {
         selected_final_domain: hostFromUrl(chosen.url),
       }, written.audit);
       stats.filtered++;
       if (pilot) pilot.rejection_reason = written.rejection;
+      if (jamalRun) await insertJamalRun(jamalRun, null);
       return { reachedFetchStage: true, result: null };
     }
 
     const insertedId = await insertRepresentative(item, supporting, written, {
       selected_final_domain: hostFromUrl(chosen.url),
     });
+    if (jamalRun) await insertJamalRun(jamalRun, insertedId);
     if (pilot && !insertedId) pilot.rejection_reason = "pending_insert_failed";
     return { reachedFetchStage: true, result: insertedId };
   };
@@ -1828,9 +1880,9 @@ Deno.serve(async (req: Request) => {
     // No ingestion runs: a malformed pilot request must not fall through to a run.
     return Response.json({ ok: false, error: gate.reason }, { status: 400 });
   }
-  const writerMode: WriterMode = gate.mode === "pilot" ? "pilot" : "legacy";
-  const pilotLimit = gate.mode === "pilot" ? gate.limit : null;
-  const targetedSourceUrl = gate.mode === "pilot" ? (gate.sourceUrl ?? null) : null;
+  const writerMode: WriterMode = gate.mode === "pilot" || gate.mode === "jamal" ? gate.mode : "legacy";
+  const pilotLimit = gate.mode === "pilot" || gate.mode === "jamal" ? gate.limit : null;
+  const targetedSourceUrl = gate.mode === "pilot" || gate.mode === "jamal" ? (gate.sourceUrl ?? null) : null;
 
   // ESL scheduled promotion: the Editorial Selection Layer runs server-side under
   // the ingest secret (trigger "cron") and, like the admin one-click path, hands
