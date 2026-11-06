@@ -939,13 +939,47 @@ export function numberCandidateSet(
 }
 
 /** NF3: the PRIMARY and ALTERNATE source candidate sets. */
+// J1-FPB: English cardinal number WORDS stated by the source ("five of 53
+// patients", "twenty-five percent") support the same figure written as a
+// digit in the Arabic draft. Source-side only — a draft digit must still
+// match SOME source statement of the value; a digit the source states
+// neither as digit nor word stays unsupported. Bare scale words (hundred/
+// thousand/million/billion) are NOT folded: they are too weak to license a
+// precise digit on their own.
+const EN_WORD_UNITS: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+  eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
+  fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+};
+const EN_WORD_TENS: Record<string, number> = {
+  twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+};
+export function englishWordNumberValues(text: string): string[] {
+  const out = new Set<string>();
+  const src = (text ?? "").toLowerCase();
+  const tensRe = new RegExp(
+    `\\b(${Object.keys(EN_WORD_TENS).join("|")})(?:[-\\s](${Object.keys(EN_WORD_UNITS).filter((u) => EN_WORD_UNITS[u] >= 1 && EN_WORD_UNITS[u] <= 9).join("|")}))?\\b`,
+    "g",
+  );
+  let m: RegExpExecArray | null;
+  while ((m = tensRe.exec(src)) !== null) {
+    out.add(String(EN_WORD_TENS[m[1]] + (m[2] ? EN_WORD_UNITS[m[2]] : 0)));
+    if (m[2]) out.add(String(EN_WORD_TENS[m[1]]));
+  }
+  const unitRe = new RegExp(`\\b(${Object.keys(EN_WORD_UNITS).join("|")})\\b`, "g");
+  while ((m = unitRe.exec(src)) !== null) out.add(String(EN_WORD_UNITS[m[1]]));
+  return [...out];
+}
+
 export function numberCandidateTiers(
   text: string,
   locale: NumberLocale = "en",
   sourceLang?: string | null,
 ): { primary: Set<string>; alternate: Set<string> } {
   const entries = scanNumberEntries(text, locale, { side: "source", sourceLang });
-  return { primary: new Set(entries.flatMap((e) => e.values)), alternate: new Set(entries.flatMap((e) => e.alternates)) };
+  const primary = new Set(entries.flatMap((e) => e.values));
+  for (const v of englishWordNumberValues(text)) primary.add(v);
+  return { primary, alternate: new Set(entries.flatMap((e) => e.alternates)) };
 }
 
 /** NF3: draft figures supported ONLY by an alternate (ambiguous) source reading
@@ -1360,19 +1394,71 @@ export function isTransliteratedSourceName(q: string, sourceText: string, draftT
   const qn = normalizeForCompare(q);
   if (QUOTE_CLAIM_LEXICON.some((w) => qn.includes(w))) return false;
   const ar = arabicVariants(q.replace(/[-–]/g, " "));
-  if (Math.min(...ar.map((a) => a.length)) < 3) return false;
+  const minSkel = Math.min(...ar.map((a) => a.length));
+  // P2R2-A kept a ≥3-consonant floor so «سام»↔"Some"-class leaks never read as
+  // names. J1-FPA: a 2-consonant skeleton can still be a genuine brand
+  // rendering whose other letters are vowels («ويغوفي» ↔ Wegovy), so it is
+  // admitted ONLY under the strictest form of the match: the Arabic span has
+  // ≥5 letters AND a window (already name-shaped and never a common English
+  // word — see latinWindows) matches the skeleton EXACTLY, same length,
+  // ratio 1.0. Anything shorter or looser stays a quotation.
+  const shortName = minSkel < 3;
+  if (shortName && (minSkel < 2 || normalizeForCompare(q).replace(/\s/g, "").length < 5)) return false;
   const arLen = Math.max(...ar.map((a) => a.length));
   const windows = [...latinWindows(draftGlossLatin(draftText), false), ...latinWindows(sourceText, true)];
   for (const w of windows) {
     if (w.len > arLen * 2 || arLen > w.len * 2) continue;
+    if (shortName) {
+      if (w.len === minSkel && bestSkeletonRatio(ar, w.variants) === 1) return true;
+      continue;
+    }
     if (bestSkeletonRatio(ar, w.variants) >= QUOTE_NAME_MATCH_THRESHOLD) return true;
   }
   return false;
 }
 
+// J1-FPA: speech context for a quoted span — a quote in a sentence that
+// carries ANY speech verb before it (قال/أضاف/صرح/أكد/أوضح/ذكر/وصف…), or that
+// directly follows a colon, is REPORTED SPEECH and must always match the
+// source verbatim, however short it is. Checking the whole sentence prefix
+// (not just the adjacent word) is what keeps fabricated one-word "quotes"
+// inside attribution sentences — «قال التقرير إن «سام» أعلن…» — blocked.
+const SPEECH_VERB_RE = /(?:^|[\s،؛])[وف]?(?:قال|قالت|يقول|تقول|أضاف|أضافت|يضيف|تضيف|صرح|صرّح|تصرح|أكد|أكدت|يؤكد|تؤكد|أوضح|أوضحت|يوضح|توضح|ذكر|ذكرت|يذكر|تذكر|وصف|وصفت|يصف|تصف)(?:[\s:：]|$)/;
+function speechContextBefore(before: string): boolean {
+  if (/[:：]\s*$/.test(before.slice(-6))) return true;
+  // An attribution preposition DIRECTLY before the quote mark («بحسب «المصدر»»,
+  // «وفق «التقرير»») marks reported wording, exactly like a speech verb. Only
+  // the immediately-adjacent form counts: a بحسب earlier in the sentence does
+  // not turn a later coined term into a quotation.
+  if (/(?:^|[\s،؛])[وف]?(?:بحسب|حسب|وفق|وفقا|وفقاً)\s*$/.test(before.slice(-12))) return true;
+  let sentence = before;
+  let cut = -1;
+  for (const c of [".", "!", "؟", "?", "\n"]) cut = Math.max(cut, sentence.lastIndexOf(c));
+  if (cut >= 0) sentence = sentence.slice(cut + 1);
+  return SPEECH_VERB_RE.test(sentence);
+}
+
+/** J1-FPA: a 1–2-word ARABIC span in quote marks with no digits and no
+ *  claim/safety word, not introduced as speech, is a coined-term/style usage
+ *  («التطعيم الحلقي» for "ring vaccination"), not a quotation. Stripped of its
+ *  marks it would face exactly the same factual checks as any prose, so this
+ *  exemption never weakens grounding — it only stops the verbatim-speech rule
+ *  from firing on translated terminology. Latin spans keep the verbatim rule
+ *  (a made-up Latin name in «» must still match the source). */
+function isShortTermQuote(q: string, before: string): boolean {
+  if (!/[؀-ۿ]/.test(q)) return false;
+  if (/[0-9٠-٩]/.test(q)) return false;
+  if (q.split(/\s+/).filter(Boolean).length > 2) return false;
+  const qn = normalizeForCompare(q);
+  if (QUOTE_CLAIM_LEXICON.some((w) => qn.includes(w))) return false;
+  if (speechContextBefore(before)) return false;
+  return true;
+}
+
 /** Extract quotation spans (Arabic «…», ASCII "…", curly “…”). With the
- *  verified `sourceText`, a span that is a transliterated source name is not a
- *  quotation (isTransliteratedSourceName); without it, every span is returned. */
+ *  verified `sourceText`, a span that is a transliterated source name or a
+ *  short coined-term usage is not a quotation (isTransliteratedSourceName /
+ *  isShortTermQuote); without it, every span is returned. */
 export function extractQuotes(text: string, sourceText?: string): string[] {
   const out: string[] = [];
   const src = text ?? "";
@@ -1383,6 +1469,7 @@ export function extractQuotes(text: string, sourceText?: string): string[] {
       const q = m[1].trim();
       if (!q) continue;
       if (sourceText !== undefined && isTransliteratedSourceName(q, sourceText, src)) continue;
+      if (sourceText !== undefined && isShortTermQuote(q, src.slice(0, m.index))) continue;
       out.push(q);
     }
   }
@@ -1403,6 +1490,25 @@ const ASSOCIATION_MARKERS = ["ارتبط", "مرتبط", "علاقة", "تراف
 // as whole words only, so they never fire inside unrelated tokens such as
 // "علاج"/"العلاج" (which contain the letters ل+ا but are not the particle "لا").
 const NEGATION_MARKERS = ["لا", "لم", "لن", "ليس", "ليست", "دون", "بدون", "بلا", "غير"];
+
+/** J1-FPC: is the claim keyword at `idx` explicitly negated within its own
+ *  clause? Looks back at most 60 chars, never across a clause boundary, and
+ *  matches negation particles as whole words (a leading و/ف conjunction is
+ *  stripped, so «ولا»/«فلا» negate like «لا»). */
+function claimOccurrenceNegated(text: string, idx: number): boolean {
+  const start = Math.max(0, idx - 60);
+  let w = text.slice(start, idx);
+  let cut = -1;
+  for (const c of [".", "!", "؟", "?", "؛", ";", ":", "：", "\n", "،", ","]) {
+    cut = Math.max(cut, w.lastIndexOf(c));
+  }
+  if (cut >= 0) w = w.slice(cut + 1);
+  return w
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => t.replace(/^[وف]/, ""))
+    .some((t) => NEGATION_MARKERS.includes(t));
+}
 
 /** Does the clause contain an Arabic negation particle as a standalone word?
  *  Matched at a word boundary, allowing only the proclitics و/ف ("ولا"، "فلا")
@@ -2525,11 +2631,22 @@ export function checkFactGrounding(
     errors.push(`invented_foreign_gloss:${span}`);
   }
 
-  // 3) No unsupported strong efficacy/approval claim.
+  // 3) No unsupported strong efficacy/approval claim. J1-FPC: an occurrence
+  //    that is explicitly NEGATED inside its own clause («لا تعني بعد تفوقاً
+  //    مثبتاً», «غير مثبت», «ولا يُعد مثبتاً») is a caveat, not a claim, and
+  //    must pass — exactly the pattern the causation check already applies.
+  //    The window never crosses a clause boundary (، ؛ . ! ؟ :), so a negation
+  //    in one clause cannot launder an affirmative claim in the next; ANY
+  //    non-negated occurrence still blocks.
   for (const kw of CLAIM_KEYWORDS) {
-    if (generated.includes(kw) && !source.sourceText.includes(kw)) {
-      errors.push(`unsupported_claim:${kw}`);
+    if (!generated.includes(kw) || source.sourceText.includes(kw)) continue;
+    let idx = generated.indexOf(kw);
+    let blocked = false;
+    while (idx !== -1 && !blocked) {
+      if (!claimOccurrenceNegated(generated, idx)) blocked = true;
+      idx = generated.indexOf(kw, idx + kw.length);
     }
+    if (blocked) errors.push(`unsupported_claim:${kw}`);
   }
 
   // 4) Research stories must not upgrade association into causation. Explicitly
