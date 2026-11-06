@@ -37,7 +37,7 @@ import {
   resolvePilotGate,
   type WriterMode,
 } from "./writerRouter.ts";
-import { jamalModel, type JamalRunRecord, writeJamalArticle } from "./jamal.ts";
+import { JAMAL_ACTIVE_CONFIG, jamalModel, type JamalRunRecord, writeJamalArticle } from "./jamal.ts";
 import {
   EDITOR_PROMPT_VERSION,
   type EditorialAudit,
@@ -1203,6 +1203,9 @@ async function runIngestion(
             sourceName: chosen.source?.name ?? item.citation.title ?? null,
             registeredDomain,
             sourceUrl: chosen.url,
+            // The owner-approved candidate identity (j1.0). Reaching this line
+            // already required an authorized, explicit writer_mode:"jamal".
+            config: JAMAL_ACTIVE_CONFIG,
             // The real OpenRouter transport, bound to Jamal's own model.
             chat: (messages, responseFormat) =>
               chatJson(messages, {

@@ -102,6 +102,27 @@ test("config: select_then_write requires selection instructions; stub is clearly
   assert.equal(J0_STUB.referenceExamples.length, 0);
 });
 
+test("j1.0: the owner-approved identity resolves, cites exactly the two approved references, and is clearly versioned", async () => {
+  const { J1_0, JAMAL_ACTIVE_CONFIG } = await import("./jamal.ts");
+  assert.equal(J1_0.version, "j1.0");
+  assert.equal(J1_0.technique, "single_pass");
+  assert.deepEqual(
+    [...J1_0.referenceExamples].sort(),
+    ["benchmark-1-alzheimers", "benchmark-2-blues-inflammation"],
+  );
+  assert.equal(resolveJamalConfig(J1_0), J1_0);
+  assert.equal(JAMAL_ACTIVE_CONFIG, J1_0);
+  // Identity landmarks carried verbatim; envelope clearly marked as transport-only.
+  const w = J1_0.instructions.write;
+  assert.ok(w.includes("JAMAL — Editorial Identity j1.0"));
+  assert.ok(w.includes("You are a writer, not a publisher."));
+  assert.ok(w.includes("Clinical-completeness protection."));
+  assert.ok(w.includes("Pre-submission checklist"));
+  assert.ok(w.includes("Integration transport envelope"));
+  // The identity text itself embeds no reference bodies (registry supplies them).
+  assert.ok(!w.includes("تشير مراجعة علمية جديدة"));
+});
+
 // ---- Input sanitizer ---------------------------------------------------------
 
 test("sanitizer: strips the related-links footer (جاسكايد class) and records it", () => {

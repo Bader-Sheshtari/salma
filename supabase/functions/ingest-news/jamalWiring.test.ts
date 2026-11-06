@@ -60,6 +60,7 @@ test("index wiring: jamal mode dispatches to writeJamalArticle with the injected
   assert.ok(indexSrc.includes('if (writerMode === "jamal") {'));
   assert.ok(indexSrc.includes("writeJamalArticle({"));
   assert.ok(indexSrc.includes("model: jamalModel(),"));
+  assert.ok(indexSrc.includes("config: JAMAL_ACTIVE_CONFIG,"));
   // Entry mapping accepts the jamal gate outcome.
   assert.ok(indexSrc.includes('gate.mode === "pilot" || gate.mode === "jamal"'));
   // Sidecar inserts on BOTH outcomes (success with content id, rejection with null).
