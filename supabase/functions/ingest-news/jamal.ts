@@ -47,6 +47,7 @@ import {
   type WritingProfile,
 } from "./salmaWriter.ts";
 import { orchestrateFidelityRepair, type FidelityValidation } from "./fidelityRepair.ts";
+import { JAMAL_ATLAS_NAME, JAMAL_ATLAS_V1_2 } from "./jamalAtlas.ts";
 import type { SourceText } from "./fetchSourceText.ts";
 import type { EditorialAudit } from "./salmaEditor.ts";
 import type { LlmUsage, WriterAudit, WriterOutcome } from "./pipeline.ts";
@@ -89,6 +90,17 @@ export const APPROVED_REFERENCES: Readonly<Record<string, string>> = Object.free
 وأظهرت التجارب المختبرية أن الجزيئات نجحت في تقليل بعض الإشارات المرتبطة بالاستجابة المناعية، لكن فعاليتها في علاج الأمراض لدى البشر لم تُختبر بعد.`,
 });
 
+// ---- Approved style-atlas registry ------------------------------------------
+
+// Style atlases approved by the owner as editorial references (2026-11-07).
+// Same policy as APPROVED_REFERENCES: a config may only name a key in this
+// registry; anything else is refused by resolveJamalConfig. An atlas is a
+// style/judgment reference ONLY — its cases 01–25 are synthetic and case 26 is
+// historical; no fact from an atlas may appear in an article.
+export const APPROVED_ATLASES: Readonly<Record<string, string>> = Object.freeze({
+  [JAMAL_ATLAS_NAME]: JAMAL_ATLAS_V1_2,
+});
+
 // ---- Editorial program (swappable configuration) ----------------------------
 
 export type JamalTechnique = "single_pass" | "select_then_write";
@@ -103,6 +115,9 @@ export type JamalConfig = {
   instructions: { write: string; selection?: string };
   // Keys into APPROVED_REFERENCES. Nothing else is accepted.
   referenceExamples: string[];
+  // Optional key into APPROVED_ATLASES (style atlas appended after the
+  // reference examples in the write prompt). Nothing else is accepted.
+  styleAtlas?: string;
 };
 
 /** Validate a config against the approved-reference registry and technique
@@ -113,6 +128,9 @@ export function resolveJamalConfig(config: JamalConfig): JamalConfig {
     if (!(key in APPROVED_REFERENCES)) {
       throw new Error(`jamal_reference_not_approved:${key}`);
     }
+  }
+  if (config.styleAtlas !== undefined && !(config.styleAtlas in APPROVED_ATLASES)) {
+    throw new Error(`jamal_atlas_not_approved:${config.styleAtlas}`);
   }
   if (config.technique === "select_then_write" && !config.instructions.selection) {
     throw new Error("jamal_selection_instructions_required");
@@ -330,6 +348,10 @@ export const J1_0: JamalConfig = Object.freeze({
   technique: "single_pass" as JamalTechnique,
   instructions: { write: J1_0_IDENTITY + J1_0_ENVELOPE },
   referenceExamples: ["benchmark-1-alzheimers", "benchmark-2-blues-inflammation"],
+  // Editorial Atlas v1.2 (26 cases) attached as a style reference per the
+  // owner's instruction of 2026-11-07. The identity text above is UNCHANGED;
+  // the atlas is appended after the reference examples at prompt-assembly time.
+  styleAtlas: JAMAL_ATLAS_NAME,
 });
 
 // The config an authorized writer_mode:"jamal" request runs TODAY. j1.0 is the
@@ -438,6 +460,16 @@ function referencesBlock(config: JamalConfig): string {
   return `\n\n### أمثلة معتمدة على الأسلوب المطلوب (مرجع للأسلوب والبنية فقط — ليست مصدراً لأي حقيقة):\n\n${texts}`;
 }
 
+function atlasBlock(config: JamalConfig): string {
+  if (!config.styleAtlas) return "";
+  const content = APPROVED_ATLASES[config.styleAtlas];
+  return `\n\n### أطلس الأسلوب التحريري المعتمد (مرجع للأسلوب والقرار التحريري فقط — الحالات 01–25 افتراضية بالكامل والحالة 26 واقعية تاريخية؛ لا تُنقل أي حقيقة أو رقم أو اسم أو تاريخ منه إلى أي خبر):\n\n${content}`;
+}
+
+function writeSystemPrompt(config: JamalConfig): string {
+  return config.instructions.write + referencesBlock(config) + atlasBlock(config);
+}
+
 function parseJamalArticle(content: string): JamalRunResult {
   let parsed: unknown;
   try {
@@ -480,7 +512,7 @@ export async function runJamal(
   if (resolved.technique === "single_pass") {
     const res = await deps.chat(
       [
-        { role: "system", content: resolved.instructions.write + referencesBlock(resolved) },
+        { role: "system", content: writeSystemPrompt(resolved) },
         { role: "user", content: `نص الخبر المصدر:\n\n${sourceBlock}` },
       ],
       JAMAL_ARTICLE_SCHEMA,
@@ -508,7 +540,7 @@ export async function runJamal(
   }
   const wr = await deps.chat(
     [
-      { role: "system", content: resolved.instructions.write + referencesBlock(resolved) },
+      { role: "system", content: writeSystemPrompt(resolved) },
       {
         role: "user",
         content: `الخلاصة التحريرية المنتقاة (مصدرك الوحيد للحقائق):\n\n${JSON.stringify(selection, null, 1)}\n\nالمصدر: ${input.sourceName ?? ""}`,

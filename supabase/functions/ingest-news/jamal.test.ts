@@ -5,6 +5,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   APPROVED_REFERENCES,
   J0_STUB,
@@ -93,6 +95,30 @@ test("config: a non-approved reference key is refused (rejected experiment outpu
   assert.throws(() => resolveJamalConfig(bad), /jamal_reference_not_approved/);
 });
 
+test("atlas registry: exactly the owner-approved v1.2 atlas, byte-identical to the docs file", async () => {
+  const { APPROVED_ATLASES } = await import("./jamal.ts");
+  const { JAMAL_ATLAS_NAME, JAMAL_ATLAS_V1_2 } = await import("./jamalAtlas.ts");
+  assert.deepEqual(Object.keys(APPROVED_ATLASES), ["salma_editorial_atlas_26_v1_2"]);
+  assert.equal(JAMAL_ATLAS_NAME, "salma_editorial_atlas_26_v1_2");
+  assert.equal(APPROVED_ATLASES[JAMAL_ATLAS_NAME], JAMAL_ATLAS_V1_2);
+  // The TS constant is carried VERBATIM from the canonical docs file.
+  const docsCopy = readFileSync(
+    fileURLToPath(new URL("../../../docs/editorial/salma_editorial_atlas_26_v1_2.md", import.meta.url)),
+    "utf8",
+  );
+  assert.equal(JAMAL_ATLAS_V1_2, docsCopy);
+  // Load-bearing safety framing is present in the atlas itself.
+  assert.ok(JAMAL_ATLAS_V1_2.includes("الحالات 01–25 افتراضية بالكامل"));
+  assert.ok(JAMAL_ATLAS_V1_2.includes("الحقائق الموثقة وقواعد السلامة"));
+});
+
+test("config: a non-approved atlas key is refused", () => {
+  const bad: JamalConfig = { ...J0_STUB, styleAtlas: "some-other-atlas" };
+  assert.throws(() => resolveJamalConfig(bad), /jamal_atlas_not_approved:some-other-atlas/);
+  // Absent atlas stays valid (stub and legacy configs are untouched).
+  assert.equal(resolveJamalConfig(J0_STUB), J0_STUB);
+});
+
 test("config: select_then_write requires selection instructions; stub is clearly a stub", () => {
   assert.throws(
     () => resolveJamalConfig({ ...J0_STUB, technique: "select_then_write" }),
@@ -112,6 +138,10 @@ test("j1.0: the owner-approved identity resolves, cites exactly the two approved
   );
   assert.equal(resolveJamalConfig(J1_0), J1_0);
   assert.equal(JAMAL_ACTIVE_CONFIG, J1_0);
+  // Atlas v1.2 is attached as a style reference (owner, 2026-11-07); the
+  // identity text itself does NOT embed the atlas (registry supplies it).
+  assert.equal(J1_0.styleAtlas, "salma_editorial_atlas_26_v1_2");
+  assert.ok(!J1_0.instructions.write.includes("أطلس الأسلوب التحريري"));
   // Identity landmarks carried verbatim; envelope clearly marked as transport-only.
   const w = J1_0.instructions.write;
   assert.ok(w.includes("JAMAL — Editorial Identity j1.0"));
@@ -158,6 +188,25 @@ test("runJamal single_pass: valid reply parses; references appear only when conf
   const chat2 = mockChat(GROUNDED_ARTICLE);
   await runJamal(withRefs, { sourceText: "نص", sourceName: "س", sourceUrl: "https://x.test/a" }, { chat: chat2 });
   assert.ok(chat2.calls[0].messages[0].content.includes("ألزهايمر"));
+  // Stub (no styleAtlas) never carries the atlas.
+  assert.ok(!chat2.calls[0].messages[0].content.includes("أطلس الأسلوب التحريري المعتمد"));
+});
+
+test("runJamal: a configured style atlas is appended AFTER the reference examples, with its warning framing", async () => {
+  const { J1_0 } = await import("./jamal.ts");
+  const { JAMAL_ATLAS_V1_2 } = await import("./jamalAtlas.ts");
+  const chat = mockChat(GROUNDED_ARTICLE);
+  const out = await runJamal(J1_0, { sourceText: "نص", sourceName: "س", sourceUrl: "https://x.test/a" }, { chat });
+  assert.ok(out.ok);
+  const system = chat.calls[0].messages[0].content;
+  // Order: identity → approved references → atlas (each present exactly once).
+  const refsAt = system.indexOf("أمثلة معتمدة على الأسلوب المطلوب");
+  const atlasHeaderAt = system.indexOf("أطلس الأسلوب التحريري المعتمد");
+  assert.ok(refsAt > 0 && atlasHeaderAt > refsAt);
+  assert.ok(system.includes("لا تُنقل أي حقيقة أو رقم أو اسم أو تاريخ منه إلى أي خبر"));
+  assert.ok(system.includes(JAMAL_ATLAS_V1_2));
+  // The user message carries only the source; the atlas rides in the system prompt.
+  assert.ok(!chat.calls[0].messages[1].content.includes("أطلس الأسلوب"));
 });
 
 test("runJamal: malformed JSON and missing fields are discrete failures", async () => {
