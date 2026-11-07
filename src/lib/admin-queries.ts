@@ -185,7 +185,44 @@ export async function searchContent(
     return { rows: [], hasMore: false, error: error.message };
   }
   const rows = (data ?? []) as ContentSearchRow[];
-  return { rows: rows.slice(0, limit), hasMore: rows.length > limit, error: null };
+  const page = rows.slice(0, limit);
+  // Jamal provenance flags for the «تحرير جمال» badge. Single central point:
+  // the initial table page, «تحميل المزيد» and search mode all flow through
+  // here, so every rendered row carries the flag.
+  const jamalIds = await jamalContentIdSet(page.map((r) => r.id));
+  if (jamalIds.size > 0) for (const r of page) if (jamalIds.has(r.id)) r.is_jamal = true;
+  return { rows: page, hasMore: rows.length > limit, error: null };
+}
+
+// ---- Jamal provenance («تحرير جمال» badge) --------------------------------
+
+/**
+ * Which of the given content ids were written by Jamal — i.e. have a
+ * jamal_runs provenance row (written by the ingest pipeline with the service
+ * role; readable by staff via jamal_runs_staff_select). jamal_runs rows are
+ * never touched by editing, approval or publication, so the flag persists for
+ * the article's whole life. Fails soft: if the table or policy is not there
+ * yet (pre-cutover environments), the list simply renders without badges.
+ */
+export async function jamalContentIdSet(ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const supabase = await createClient();
+  // jamal_runs is not in the generated Database types yet (same situation as
+  // the search_content RPC above), so the query goes through an untyped client.
+  const client = supabase as unknown as SupabaseClient;
+  const { data, error } = await client
+    .from("jamal_runs")
+    .select("content_id")
+    .in("content_id", ids);
+  if (error) return new Set();
+  const rows = (data ?? []) as { content_id: string | null }[];
+  return new Set(rows.map((r) => r.content_id).filter((v): v is string => v != null));
+}
+
+/** Whether ONE content item has Jamal provenance (article editing view). */
+export async function isJamalContent(id: string): Promise<boolean> {
+  const set = await jamalContentIdSet([id]);
+  return set.has(id);
 }
 
 /** Tab totals + per-category counts for the content screen. */

@@ -11,6 +11,7 @@ import {
   getDevelopedParent,
   getEvidenceForContent,
   getProfileNames,
+  isJamalContent,
 } from "@/lib/admin-queries";
 import { formatDateTimeAr } from "@/lib/format";
 import {
@@ -26,6 +27,7 @@ import Breadcrumbs, { truncateCrumb, type Crumb } from "../../Breadcrumbs";
 import ActivityTimeline from "../ActivityTimeline";
 import { ContentForm } from "../ContentForm";
 import RejectButton from "../RejectButton";
+import JamalBadge from "../JamalBadge";
 import { EvidencePanel } from "../EvidencePanel";
 import { ArticleStatsPanel } from "../ArticleStatsPanel";
 import VersionView from "../VersionView";
@@ -129,11 +131,12 @@ export default async function EditContent({ params, searchParams }: Props) {
   const view: View = rawView === "activity" || rawView === "versions" ? rawView : "content";
   const versionNo = view === "versions" ? posInt(first(sp.v)) : null;
 
-  const [categories, data, evidence, developedChildren] = await Promise.all([
+  const [categories, data, evidence, developedChildren, isJamal] = await Promise.all([
     getCategories(),
     getContentForEdit(id),
     view === "content" ? getEvidenceForContent(id) : Promise.resolve(null),
     view === "content" ? getDevelopedChildren(id) : Promise.resolve([]),
+    view === "content" ? isJamalContent(id) : Promise.resolve(false),
   ]);
   if (!data) notFound();
 
@@ -320,6 +323,7 @@ export default async function EditContent({ params, searchParams }: Props) {
               مولّد بالذكاء الاصطناعي
             </span>
           ) : null}
+          {isJamal ? <JamalBadge /> : null}
           <span
             className="rounded-md px-2 py-0.5 text-[11px] font-bold text-white"
             style={{ background: statusColor(content.status) }}

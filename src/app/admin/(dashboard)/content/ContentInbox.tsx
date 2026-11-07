@@ -15,6 +15,7 @@ import {
 } from "../../actions";
 import RowMenu from "./RowMenu";
 import RejectButton from "./RejectButton";
+import JamalBadge from "./JamalBadge";
 
 const STATUS_LABEL: Record<string, string> = {
   published: "منشور",
@@ -46,7 +47,8 @@ function dayInfo(iso: string): { key: number; label: string } {
   return { key: that, label };
 }
 
-type Group = { key: string; label: string; accent?: string; items: Content[] };
+type InboxItem = Content & { is_jamal?: boolean };
+type Group = { key: string; label: string; accent?: string; items: InboxItem[] };
 
 const confirmTrash = (title: string) =>
   `نقل «${title}» إلى المحذوفات؟ يمكن استعادتها لاحقًا من تبويب المحذوفات.`;
@@ -55,7 +57,7 @@ export default function ContentInbox({
   items,
   categories,
 }: {
-  items: Content[];
+  items: InboxItem[];
   categories: Category[];
 }) {
   const router = useRouter();
@@ -85,7 +87,7 @@ export default function ContentInbox({
 
   const groups: Group[] = useMemo(() => {
     if (groupBy === "category") {
-      const byCat = new Map<string, Content[]>();
+      const byCat = new Map<string, InboxItem[]>();
       for (const c of filtered) {
         const k = c.category_slug ?? "__none__";
         (byCat.get(k) ?? byCat.set(k, []).get(k)!).push(c);
@@ -377,6 +379,7 @@ export default function ContentInbox({
                               </span>
                             )}
                             <span className="truncate text-[14px] font-semibold">{c.title}</span>
+                            {c.is_jamal ? <JamalBadge /> : null}
                           </div>
                           <div className="mt-1 flex flex-wrap items-center gap-2 font-sans text-[11px] text-gray">
                             <span>

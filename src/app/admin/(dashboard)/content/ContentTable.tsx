@@ -16,6 +16,7 @@ import {
 import { restoreContent, setStatus, softDeleteContent } from "../../actions";
 import { loadMoreContent } from "./content-actions";
 import RowMenu, { type Action } from "./RowMenu";
+import JamalBadge from "./JamalBadge";
 
 const NEEDS_REVIEW = "بحاجة مراجعة";
 const btn =
@@ -358,6 +359,7 @@ export default function ContentTable({
                         >
                           {row.title}
                         </Link>
+                        {row.is_jamal ? <JamalBadge className="mt-0.5" /> : null}
                       </div>
                       {/* Second line: below lg carries القسم/آخر تعديل; below md also date/author/chip. */}
                       <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-sans text-[11px] text-gray lg:hidden">
