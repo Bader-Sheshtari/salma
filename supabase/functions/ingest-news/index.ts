@@ -33,6 +33,7 @@ import { clusterStories, pickBestIndex, type StoryText, storyDuplicate } from ".
 import { finalizeRun, selectRollbackTargets } from "./runFinalize.ts";
 import {
   assertWriterConfig,
+  editorRequestAllowed,
   processRepresentativesWithLimit,
   resolvePilotGate,
   type WriterMode,
@@ -43,10 +44,12 @@ import {
   type EditorialAudit,
 } from "./salmaEditor.ts";
 import {
+  extractEssentialEntities,
   fetchSourceText,
   groundedWrite,
   isBlockedHostname,
   NEUTRAL_USER_AGENT,
+  type ExtractionMethod,
   type SourceFetchResult,
   type SourceText,
   validateResolvedAddresses,
@@ -1542,7 +1545,7 @@ const INGEST_SECRET = Deno.env.get("INGEST_SECRET");
 async function authorize(
   req: Request,
   admin: SupabaseClient,
-): Promise<"cron" | "manual" | null> {
+): Promise<"cron" | "manual" | "manual_editor" | null> {
   // Cron path: shared secret header set by run_news_ingestion().
   const provided = req.headers.get("x-ingest-secret");
   if (INGEST_SECRET && provided && provided === INGEST_SECRET) return "cron";
@@ -1571,6 +1574,11 @@ async function authorize(
     !profile.disabled
   )
     return "manual";
+  // Universal Jamal action (owner decision 2, 2026-11-07): EDITORS are
+  // authorized for a narrow slice only — Jamal prepare/rewrite requests, never
+  // publishing or admin ops. The entrypoint enforces the slice via
+  // editorRequestAllowed() and rejects everything else with 403.
+  if (profile && profile.role === "editor" && !profile.disabled) return "manual_editor";
   return null;
 }
 
@@ -1769,8 +1777,21 @@ Deno.serve(async (req: Request) => {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  const trigger = await authorize(req, admin);
-  if (!trigger) return Response.json({ error: "unauthorized" }, { status: 401 });
+  const rawTrigger = await authorize(req, admin);
+  if (!rawTrigger) return Response.json({ error: "unauthorized" }, { status: 401 });
+
+  // Editor-tier slice (universal Jamal action, owner decision 2): an editor's
+  // JWT authorizes ONLY a Jamal rewrite proposal or a Jamal single-article
+  // PREPARE. Anything else — direct publish, legacy/pilot writers, admin ops —
+  // is rejected before any body-dependent branch runs. Admin-tier ("manual")
+  // and the cron secret are unchanged. The body is parsed once, here.
+  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  if (rawTrigger === "manual_editor" && !editorRequestAllowed(body as Record<string, unknown>)) {
+    return Response.json({ ok: false, error: "editor_scope_jamal_only" }, { status: 403 });
+  }
+  // Downstream, an allowed editor request behaves exactly like an admin manual
+  // request (same gates, same prepare-only outcome for its allowed slice).
+  const trigger: "cron" | "manual" = rawTrigger === "cron" ? "cron" : "manual";
 
   // Controlled-pilot gate (E1.3E). Only an AUTHORIZED caller (verified above via
   // the ingest secret or an admin JWT) that EXPLICITLY sends writer_mode:"pilot"
@@ -1781,7 +1802,7 @@ Deno.serve(async (req: Request) => {
   // silently clamping. Resolving with authorized=true is sound because an
   // unauthorized request already returned 401 above and can never reach here.
   // This does NOT read or change OPENROUTER_MODEL or any writer-model secret.
-  const body = await req.json().catch(() => ({} as Record<string, unknown>));
+  // (The request body was parsed once above, before the editor-tier gate.)
 
   // Bounded official-asset retrieval op (Content editor «صورة من المصدر الرسمي»).
   // Admin-only (never cron), read-only, and scoped to URLs the caller already has
@@ -1802,6 +1823,142 @@ Deno.serve(async (req: Request) => {
       .slice(0, 8);
     const assets = await extractOfficialAssets(items, denoResolveDns).catch(() => []);
     return Response.json({ ok: true, assets });
+  }
+
+  // Universal Jamal action — REWRITE PROPOSAL (op:"jamal_rewrite").
+  // Staff-authorized (admin tier or the editor slice). Produces a proposed
+  // rewrite of ONE existing content item with the active Jamal config and the
+  // full validation stack, and returns it WITHOUT touching the content row:
+  // the editor explicitly accepts in the admin UI (which also links the
+  // jamal_runs row → badge appears only on acceptance). Grounding (owner
+  // decision 3): the article's original source is re-fetched and verified when
+  // available; otherwise the stored body itself is the grounding text and the
+  // limitation is recorded in the internal review notes. Never publishes,
+  // never writes content, never touches radar rows.
+  if ((body as { op?: unknown })?.op === "jamal_rewrite") {
+    if (rawTrigger !== "manual" && rawTrigger !== "manual_editor") {
+      return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
+    const contentId = asTrimmedTop((body as { content_id?: unknown }).content_id);
+    if (!contentId) return Response.json({ ok: false, error: "content_id_required" }, { status: 400 });
+    const { data: row } = await admin
+      .from("content")
+      .select("id,title,excerpt,body,source_url,source_name,version,deleted_at")
+      .eq("id", contentId)
+      .maybeSingle();
+    const content = row as {
+      id: string; title: string; excerpt: string | null; body: string | null;
+      source_url: string | null; source_name: string | null; version: number; deleted_at: string | null;
+    } | null;
+    if (!content || content.deleted_at) {
+      return Response.json({ ok: false, error: "content_not_found" }, { status: 404 });
+    }
+    if (!(content.body ?? "").trim()) {
+      return Response.json({ ok: false, error: "content_body_empty" }, { status: 400 });
+    }
+
+    // Grounding: original source re-fetch first (full safeguards vs the live
+    // source); stored body as the documented fallback.
+    let verified: SourceText | null = null;
+    let grounding: "source_refetch" | "stored_body" = "stored_body";
+    const groundingNotes: string[] = [];
+    const srcUrl = (content.source_url ?? "").trim();
+    if (/^https?:\/\//i.test(srcUrl)) {
+      try {
+        const fetched = await fetchSourceText({
+          url: srcUrl,
+          registeredDomain: new URL(srcUrl).hostname.replace(/^www\./, ""),
+          sourceName: content.source_name,
+          rawFetch: denoRawFetch,
+          resolveDns: denoResolveDns,
+        });
+        if (fetched.ok) {
+          verified = fetched;
+          grounding = "source_refetch";
+        } else {
+          groundingNotes.push("تعذّر إعادة جلب المصدر الأصلي آلياً؛ أُعيدت الصياغة استناداً إلى نص المقال الحالي فقط.");
+        }
+      } catch {
+        groundingNotes.push("تعذّر إعادة جلب المصدر الأصلي آلياً؛ أُعيدت الصياغة استناداً إلى نص المقال الحالي فقط.");
+      }
+    } else {
+      groundingNotes.push("لا يتوفر رابط مصدر لهذا المقال؛ أُعيدت الصياغة استناداً إلى نص المقال الحالي فقط، دون تحقق من مصدر خارجي — لا تُضاف وقائع غير واردة في النص.");
+    }
+    if (!verified) {
+      const storedText = String(content.body ?? "");
+      verified = {
+        ok: true,
+        title: content.title,
+        text: storedText,
+        // Transport label for the audit; the grounding limitation itself is
+        // carried explicitly in the review notes above.
+        method: "stored-body" as ExtractionMethod,
+        publishedDate: null,
+        charCount: storedText.length,
+        wordCount: storedText.split(/\s+/).filter(Boolean).length,
+        finalUrl: srcUrl || `salma://content/${content.id}`,
+        mustPreserve: extractEssentialEntities(storedText, { sourceName: content.source_name }),
+      };
+    }
+
+    const outcome = await writeJamalArticle({
+      verified,
+      discovery: { originalTitle: content.title, body: content.body ?? "", excerpt: content.excerpt ?? "" },
+      sourceName: content.source_name,
+      registeredDomain: grounding === "source_refetch" ? new URL(srcUrl).hostname.replace(/^www\./, "") : null,
+      sourceUrl: srcUrl || `salma://content/${content.id}`,
+      config: JAMAL_ACTIVE_CONFIG,
+      chat: (messages, responseFormat) =>
+        chatJson(messages, {
+          model: jamalModel(),
+          temperature: 0.4,
+          maxTokens: 3500,
+          responseFormat,
+          timeoutMs: 90000,
+        }),
+    });
+
+    // Audit sidecar: proposal rows carry content_id NULL — acceptance in the
+    // admin UI links them (and only then does the badge appear).
+    const runRecord = {
+      run_id: null,
+      content_id: null,
+      ...outcome.jamalRun,
+      review_notes: [...outcome.jamalRun.review_notes, ...groundingNotes],
+    };
+    let jamalRunId: string | null = null;
+    try {
+      const { data: inserted, error } = await admin.from("jamal_runs").insert(runRecord).select("id").single();
+      if (error) console.error("jamal_runs insert failed:", error.message);
+      jamalRunId = (inserted as { id?: string } | null)?.id ?? null;
+    } catch (e) {
+      console.error("jamal_runs insert failed:", e);
+    }
+
+    if (!outcome.ok) {
+      return Response.json({
+        ok: false,
+        error: "rewrite_rejected",
+        rejection: outcome.rejection,
+        review_notes: runRecord.review_notes,
+        grounding,
+        jamal_run_id: jamalRunId,
+      });
+    }
+    return Response.json({
+      ok: true,
+      proposal: {
+        title: outcome.article.title,
+        excerpt: outcome.article.excerpt,
+        body: outcome.article.body,
+        read_minutes: outcome.readMinutes,
+        review_notes: runRecord.review_notes,
+      },
+      needs_human_review: (outcome as { needsHumanReview?: boolean }).needsHumanReview === true,
+      grounding,
+      jamal_run_id: jamalRunId,
+      base_version: content.version,
+    });
   }
 
   // Primary Source Escalation — DRY RUN (op:"escalate_source"). Runs the bounded

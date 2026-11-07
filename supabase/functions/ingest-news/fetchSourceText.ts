@@ -45,6 +45,9 @@ export type ExtractionMethod =
   | "json-ld"
   | "article"
   | "main"
+  // Universal Jamal action: rewrite grounded on the stored article body
+  // (no fetch happened; the audit label for that documented fallback).
+  | "stored-body"
   | "paragraphs"
   | "eventregistry_stored"
   | "eventregistry_extract";

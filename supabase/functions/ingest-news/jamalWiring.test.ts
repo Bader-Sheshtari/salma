@@ -73,6 +73,48 @@ test("index wiring: the legacy branch gate is untouched and jamal-mode runs asse
   assert.ok(indexSrc.includes('if (writerMode === "jamal") assertEditorConfig(jamalModel());'));
 });
 
+// ---- Universal Jamal action (2026-11-07) ---------------------------------
+
+test("editor tier: editorRequestAllowed permits ONLY the Jamal slice", async () => {
+  const { editorRequestAllowed } = await import("./writerRouter.ts");
+  // Allowed: rewrite proposal; Jamal prepare.
+  assert.equal(editorRequestAllowed({ op: "jamal_rewrite" }), true);
+  assert.equal(editorRequestAllowed({ writer_mode: "jamal", radar_publish_mode: "prepare" }), true);
+  // Blocked: publishing, legacy/pilot writers, admin ops, empty bodies.
+  assert.equal(editorRequestAllowed({ writer_mode: "jamal", radar_publish_mode: "publish" }), false);
+  assert.equal(editorRequestAllowed({ writer_mode: "jamal" }), false); // publish is the default mode → must be explicit prepare
+  assert.equal(editorRequestAllowed({ writer_mode: "pilot", radar_publish_mode: "prepare" }), false);
+  assert.equal(editorRequestAllowed({ writer_mode: "legacy", radar_publish_mode: "prepare" }), false);
+  assert.equal(editorRequestAllowed({ op: "source_assets" }), false);
+  assert.equal(editorRequestAllowed({ op: "escalate_source" }), false);
+  assert.equal(editorRequestAllowed({}), false);
+});
+
+test("index wiring: editor JWTs are gated through editorRequestAllowed before any op runs", () => {
+  assert.ok(indexSrc.includes('rawTrigger === "manual_editor" && !editorRequestAllowed('));
+  // The editor tier exists in authorize() and never widens the admin list.
+  assert.ok(indexSrc.includes('profile.role === "editor"'));
+  assert.ok(indexSrc.includes('["admin", "super_admin", "owner"].includes(profile.role)'));
+});
+
+test("index wiring: jamal_rewrite is a PROPOSAL op — no content write, provenance only on acceptance", () => {
+  const at = indexSrc.indexOf('?.op === "jamal_rewrite"');
+  assert.ok(at > 0);
+  const block = indexSrc.slice(at, indexSrc.indexOf("// Primary Source Escalation — DRY RUN", at));
+  // Reads content; NEVER updates/inserts content or touches radar rows.
+  assert.ok(block.includes('.from("content")'));
+  assert.ok(!block.includes('.from("content")\n      .update'));
+  assert.ok(!/from\("content"\)[\s\S]{0,200}?\.(update|insert|upsert|delete)\(/.test(block));
+  assert.ok(!block.includes("radar_shadow_articles"));
+  // Proposal sidecar row carries content_id NULL (badge only on acceptance).
+  assert.ok(block.includes("content_id: null"));
+  // Grounding fallback is documented in the internal notes, never silent.
+  assert.ok(block.includes("أُعيدت الصياغة استناداً إلى نص المقال الحالي فقط"));
+  // Same active config + model binding as the automated path.
+  assert.ok(block.includes("config: JAMAL_ACTIVE_CONFIG"));
+  assert.ok(block.includes("model: jamalModel()"));
+});
+
 test("index wiring: the prepare branch applies the validated radar category (Foundayo 'gulf'→'world' regression, 2026-11-07)", () => {
   // finalizeRadarPublish's prepare branch must resolve and apply the
   // ESL/operator category exactly like the direct-publish branch — previously

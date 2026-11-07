@@ -794,24 +794,22 @@ export default function RadarInbox({
                       </>
                     ) : (
                       <>
-                        {/* PRIMARY: prepare a draft in the Content editor. */}
+                        {/* PRIMARY: Jamal prepares a PENDING draft in the Content
+                            editor (universal Jamal action — writer_mode jamal). */}
                         <button
                           type="button"
                           disabled={isBusy}
                           onClick={() => doPrepare(a)}
                           className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-50"
                         >
-                          تحرير في سلمى
+                          تحرير بواسطة جمال
                         </button>
-                        {/* SECONDARY: direct publish (validated one-click pipeline). */}
-                        <button
-                          type="button"
-                          disabled={isBusy}
-                          onClick={() => doPublish(a)}
-                          className="rounded-lg border border-line bg-white px-3 py-1.5 text-[12px] font-semibold text-gray hover:bg-cream disabled:opacity-50"
-                        >
-                          نشر مباشر
-                        </button>
+                        {/* Direct publish (نشر مباشر) is HIDDEN from the UI
+                            (owner, 2026-11-07): the standard workflow is
+                            select → «تحرير بواسطة جمال» → PENDING → human
+                            approval. The underlying server action and pipeline
+                            remain intact (doPublish and the confirmation flow
+                            below are kept for a deliberate future decision). */}
                         {/* Develop Story V2: research the whole story (cluster
                             reports = leads only) into an evidence-first brief. */}
                         <Link
