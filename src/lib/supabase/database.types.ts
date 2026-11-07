@@ -1226,6 +1226,8 @@ export type Database = {
           created_at: string
           dedupe_method: string | null
           duplicate_of_content_id: string | null
+          editor_outcome: string | null
+          editor_prompt_version: string | null
           editorial_value_score: number | null
           id: string
           institutional_pr_score: number | null
@@ -1256,6 +1258,8 @@ export type Database = {
           created_at?: string
           dedupe_method?: string | null
           duplicate_of_content_id?: string | null
+          editor_outcome?: string | null
+          editor_prompt_version?: string | null
           editorial_value_score?: number | null
           id?: string
           institutional_pr_score?: number | null
@@ -1286,6 +1290,8 @@ export type Database = {
           created_at?: string
           dedupe_method?: string | null
           duplicate_of_content_id?: string | null
+          editor_outcome?: string | null
+          editor_prompt_version?: string | null
           editorial_value_score?: number | null
           id?: string
           institutional_pr_score?: number | null

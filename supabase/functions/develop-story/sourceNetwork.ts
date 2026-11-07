@@ -235,3 +235,22 @@ export function rankEvidence<T extends {
     return (b.published_date ?? "").localeCompare(a.published_date ?? "");
   });
 }
+
+// ---- P4R2: source language for numeric grounding ------------------------------
+
+/**
+ * The source language the draft stage hands to writeArticle / validateArticle
+ * for locale-aware numeric grounding (e.g. Romanian «1.100» = 1100). The value
+ * frozen into draft_inputs at brief time wins; otherwise the origin article's
+ * stored source_lang; otherwise null (English convention, as before).
+ */
+export function resolveDraftSourceLang(
+  inputs: { source_lang?: string | null } | null | undefined,
+  original: { source_lang?: string | null } | null | undefined,
+): string | null {
+  const pick = (v: string | null | undefined) => {
+    const t = (v ?? "").trim();
+    return t ? t : null;
+  };
+  return pick(inputs?.source_lang) ?? pick(original?.source_lang) ?? null;
+}

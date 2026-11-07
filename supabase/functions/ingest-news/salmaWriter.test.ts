@@ -42,7 +42,7 @@ import {
 // --- profile selection -----------------------------------------------------
 
 test("prompt version is the dedicated writer version", () => {
-  assert.equal(WRITER_PROMPT_VERSION, "e1.4-salma-writer");
+  assert.equal(WRITER_PROMPT_VERSION, "e2.3-salma-writer");
 });
 
 test("a medicine safety alert selects the safety_alert profile", () => {
@@ -66,9 +66,17 @@ test("a peer-reviewed study selects the research_study profile", () => {
   assert.equal(p, "research_study");
 });
 
-test("a short generic announcement falls back to quick_news by length", () => {
+test("e2.0: quick_news is retired — a short generic announcement selects standard_news", () => {
+  // Length no longer picks a profile; targetWords is accepted but ignored.
   const p = selectProfile({ sourceText: "إعلان صحي عام قصير.", targetWords: 130 });
-  assert.equal(p, "quick_news");
+  assert.equal(p, "standard_news");
+});
+
+test("e2.0: a stored quick_news profile writes and is monitored like standard_news", () => {
+  assert.deepEqual(PROFILE_WORD_BANDS.quick_news, PROFILE_WORD_BANDS.standard_news);
+  const quick = buildWritingInstructions("quick_news");
+  const standard = buildWritingInstructions("standard_news");
+  assert.equal(quick, standard);
 });
 
 test("an explicit profile always wins over keyword inference", () => {
@@ -385,9 +393,11 @@ test("num: source 15,000 but draft 15 مليون rejects (wrong scale)", () => {
 test("num: genuinely invented decimal rejects", () => {
   assert.ok(numErrors("ارتفاع بنسبة 7.3 نقطة.", "a modest rise was reported.", "eng").length > 0);
 });
-test("num: ambiguous token that cannot be safely interpreted fails closed", () => {
-  // EN convention: "1,50" is neither a valid thousands group nor an EN decimal → null → rejected.
-  const e = numErrors("قيمة 1,50 وحدة.", "the value was exactly 1.5 units.", "eng");
+test("num: a decimal-comma draft token reads as its decimal value; a different value still fails (NF-1)", () => {
+  // NF-1 (deliberate change): «1,50» has no comma-thousands reading, so it is
+  // read as the decimal 1.5 — it matches a source 1.5 and still fails a 1.6.
+  assert.deepEqual(numErrors("قيمة 1,50 وحدة.", "the value was exactly 1.5 units.", "eng"), []);
+  const e = numErrors("قيمة 1,50 وحدة.", "the value was exactly 1.6 units.", "eng");
   assert.ok(e.length > 0, e.join(","));
 });
 
@@ -1248,6 +1258,85 @@ test("an oversized summary is a schema violation", () => {
   assert.equal(!r.ok && r.error, "writer_output_schema_invalid");
 });
 
+test("e2.0 writing instructions: lead-first, no numeric word targets, conditional closing", () => {
+  for (const profile of ["standard_news", "regulation_or_service", "safety_alert", "research_study"] as const) {
+    const instr = buildWritingInstructions(profile);
+    // Lead with the news; every sentence earns its place.
+    assert.ok(instr.includes("ابدأ بالخبر"), profile);
+    assert.ok(instr.includes("كل جملة يجب أن تستحقّ مكانها"), profile);
+    // Length follows significance — no article word targets of any kind.
+    assert.ok(instr.includes("لا يوجد عدد كلمات مستهدف"), profile);
+    assert.ok(!/\d+\s*[–-]\s*\d+\s*كلمة إجمالاً/.test(instr), profile);
+    assert.ok(!instr.includes("90–150"), profile);
+    assert.ok(!instr.includes("~"), profile);
+    // The fixed two-paragraph formula is gone; the closing is conditional.
+    assert.ok(!instr.includes("الفقرة الأولى ماذا حدث، والثانية"), profile);
+    assert.ok(instr.includes("فقط إذا ذكر المصدر أمراً محدّداً منتظراً فعلاً"), profile);
+    // Evidence distinctions and no generalization.
+    assert.ok(instr.includes("المخبرية والتجارب على الحيوانات والدراسات على البشر"), profile);
+    assert.ok(instr.includes("لا تعمّم نتيجة محدّدة إلى ادّعاء طبي أوسع"), profile);
+    // Style exemplars are framed as style only, never as verified facts.
+    assert.ok(instr.includes("أمثلة أسلوبية"), profile);
+    assert.ok(instr.includes("ليست حقائق مُتحقَّقاً منها"), profile);
+  }
+});
+
+test("e2.0 writing instructions keep fidelity, no-invention and Arabic-first naming mandates", () => {
+  const instr = buildWritingInstructions("safety_alert");
+  assert.ok(instr.includes("أمينة تماماً للمادة المصدرية"));
+  assert.ok(instr.includes("لا تختلق رقماً أو تاريخاً أو اقتباساً أو ادّعاءً"));
+  assert.ok(instr.includes("فرّق بين المؤشر والنتيجة"));
+  assert.ok(instr.includes("لا تدمج موافقات جهات مختلفة"));
+  // Exact original foreign name once in parentheses; chemical descriptors are
+  // NOT dropped (the unchanged guards treat them as identity).
+  assert.ok(instr.includes("الاسم الأصلي الدقيق كما ورد في المصدر بين قوسين مرّة واحدة"));
+  assert.ok(instr.includes("بما في ذلك الواصفات الكيميائية مثل Hydrochloride"));
+  assert.ok(instr.includes("العنوان عربي بالكامل"));
+  // Profile checklists are "include when material", while the official action
+  // and the main confirmed risk can never be dropped from a safety alert.
+  assert.ok(instr.includes("اذكر متى توفّرت"));
+  assert.ok(instr.includes("لا تُسقط أبداً الإجراء الذي طلبته الجهة الرسمية"));
+  // Product identity is unconditional; the unaffected-batch reassurance is kept.
+  assert.ok(instr.includes("واذكر دائماً هوية المنتج المتأثّر"));
+  assert.ok(instr.includes("غير متأثّرة فأبقِ هذا التوضيح"));
+  // No numeric title target, and the prompt never models a blocked claim word.
+  assert.ok(!instr.includes("8–12"));
+  assert.ok(!instr.includes("أثبت"));
+});
+
+test("e2.1 writing instructions: must-keep list, intelligent compression, event-first lead", () => {
+  for (const profile of ["standard_news", "regulation_or_service", "safety_alert", "research_study"] as const) {
+    const instr = buildWritingInstructions(profile);
+    // Goal framing — not a word target; never cut a fact needed for safe reading.
+    assert.ok(instr.includes("أكبر قدر من المعلومة المفيدة بأقلّ جهد قراءة"), profile);
+    assert.ok(instr.includes("هذا ليس هدفاً لعدد الكلمات"), profile);
+    // Must-keep list, including the at-risk / not-at-risk groups.
+    assert.ok(instr.includes("ما لا يُحذف عند التبسيط أو الاختصار"), profile);
+    assert.ok(instr.includes("- الفئات الأكثر عرضة للخطر."), profile);
+    assert.ok(instr.includes("من لا يشمله الخطر، أو مستوى الخطر على عامة الناس، حين يذكره المصدر"), profile);
+    assert.ok(instr.includes("سطر واحد يوضّح استخدام المنتج حتى يعرف القارئ هل يعنيه"), profile);
+    assert.ok(instr.includes("لا في القائمة أعلاه"), profile);
+    // Intelligent compression.
+    assert.ok(instr.includes("القائمة التي تزيد على ثلاثة عناصر اختصرها بصيغة غير رقمية"), profile);
+    assert.ok(instr.includes("لا تذكر عدداً غير وارد نصاً في المصدر"), profile);
+    assert.ok(!/\d+\s*دولة/.test(instr), profile);
+    assert.ok(instr.includes("مخصّصتان حصراً للكلام المنقول حرفياً من المصدر"), profile);
+    assert.ok(instr.includes("الاسم المعرّب يُكتب مجرّداً بلا «»"), profile);
+    assert.ok(instr.includes("إلا إذا كان كل عنصر فيها يحتاجه القارئ بحدّ ذاته"), profile);
+    assert.ok(instr.includes("نتيجتان أو ثلاث نتائج ثانوية على الأكثر"), profile);
+    assert.ok(instr.includes("بدل تسميتها حين لا يضيف الاسم العلمي للقارئ شيئاً"), profile);
+    assert.ok(instr.includes("التوقّعات والتقديرات تبقى منسوبة إلى أصحابها"), profile);
+    // Lead opens with the event, not the monitoring/announcing body.
+    assert.ok(instr.includes("ولا افتتاح بالجهة التي ترصد الحدث أو تتابعه أو تعلنه"), profile);
+    // The one-time exact product-name gloss contract is unchanged.
+    assert.ok(instr.includes("الاسم الأصلي الدقيق كما ورد في المصدر بين قوسين مرّة واحدة"), profile);
+    assert.ok(!instr.includes("أثبت"), profile);
+  }
+  // Safety alerts carry the product-use line and risk groups in the profile guidance.
+  const safety = buildWritingInstructions("safety_alert");
+  assert.ok(safety.includes("استخدام المنتج كما يذكره المصدر"));
+});
+
 test("writing instructions carry the compression rules and optional summary field", () => {
   const instr = buildWritingInstructions("safety_alert");
   assert.ok(instr.includes("مبدأ التركيز التحريري"));
@@ -1606,4 +1695,498 @@ test("readability: clean simple article yields no readability warnings", () => {
     body: "أطلقت وزارة الصحة حملة التطعيم. تشمل الحملة كبار السن والحوامل.\n\nتبدأ الحملة الأسبوع المقبل في المراكز الصحية.",
   });
   assert.deepEqual(w.filter((x) => x.startsWith("readability")), []);
+});
+
+// --- Phase 2 validator fixes (P2-FIX1..3): narrow false positives, keep true positives ---
+
+test("P2-FIX1 imperative/plural source actions are recognised (normalized, shadda-safe)", () => {
+  assert.deepEqual(extractOfficialActions("اتصل بالشركة لمعرفة التفاصيل"), ["contact"]);
+  assert.deepEqual(extractOfficialActions("اتصلوا بالمورد فوراً"), ["contact"]);
+  assert.deepEqual(extractOfficialActions("تواصل مع الشركة المصنّعة"), ["contact"]);
+  assert.deepEqual(extractOfficialActions("راجعوا الصيدلية التي صرفت الدواء"), ["contact"]);
+  assert.deepEqual(extractOfficialActions("توقفوا عن استخدام الدواء"), ["stop_use"]);
+  assert.deepEqual(extractOfficialActions("أوقفوا استخدام المنتج"), ["stop_use"]);
+  assert.deepEqual(extractOfficialActions("أعد المنتج إلى الصيدلية"), ["return"]);
+  assert.deepEqual(extractOfficialActions("أعيدوا العبوات"), ["return"]);
+  assert.deepEqual(extractOfficialActions("تخلّصوا من الأقراص"), ["discard"]);
+  assert.deepEqual(extractOfficialActions("تخلّص منه بأمان"), ["discard"]);
+  // A call to the doctor stays seek_help only — never a generic "contact".
+  assert.deepEqual(extractOfficialActions("اتصل بالطبيب عند ظهور أعراض"), ["seek_help"]);
+  assert.deepEqual(extractOfficialActions("راجعوا أقرب طوارئ"), ["seek_help"]);
+  // Whole-word only: "أعدت"/"أعداد" are not the imperative "أعد".
+  assert.deepEqual(extractOfficialActions("أعدت الشركة تقريراً عن أعداد المنتج"), []);
+});
+
+test("P2-FIX1 regression: source «اتصل بالشركة» + draft «التواصل مع الشركة» → no invented action", () => {
+  const { errors } = checkFactGrounding(
+    { title: "سحب دفعة من دواء", excerpt: "", body: "سحبت الشركة دفعة من الدواء، ويُنصح بالتواصل مع الشركة لمعرفة التفاصيل." },
+    { sourceText: "سحبت الشركة دفعة من الدواء. اتصل بالشركة لمعرفة التفاصيل." },
+    "safety_alert",
+  );
+  assert.ok(!errors.some((e) => e.startsWith("invented_official_action")), errors.join(","));
+  assert.ok(!errors.includes("missing_official_action"));
+});
+
+test("P2-FIX1 counter: a draft action with no source basis still errors", () => {
+  const noBasis = checkFactGrounding(
+    { title: "سحب دفعة من دواء", excerpt: "", body: "توقفوا عن استخدام الدواء، ويُنصح بالتواصل مع الشركة." },
+    { sourceText: "سحبت الشركة دفعة من الدواء. توقفوا عن استخدام الدواء فوراً." },
+    "safety_alert",
+  );
+  assert.ok(noBasis.errors.includes("invented_official_action:contact"));
+  // A source that only says "call your doctor" does not license "contact the company".
+  const doctorOnly = checkFactGrounding(
+    { title: "سحب دفعة من دواء", excerpt: "", body: "اتصل بالطبيب عند ظهور أعراض، ويُنصح بالتواصل مع الشركة." },
+    { sourceText: "سحبت الشركة دفعة من الدواء. اتصل بالطبيب عند ظهور أعراض." },
+    "safety_alert",
+  );
+  assert.ok(doctorOnly.errors.includes("invented_official_action:contact"));
+});
+
+test("P2-FIX2 discard object whitelist covers product forms and unused/remaining stock", () => {
+  assert.ok(extractOfficialActions("يرجى التخلّص من غير المستخدم أو إعادته").includes("discard"));
+  assert.ok(extractOfficialActions("التخلص من الأقراص المتبقية").includes("discard"));
+  assert.ok(extractOfficialActions("تخلصوا من الحقن المتأثرة").includes("discard"));
+  assert.ok(extractOfficialActions("إتلاف البخاخ").includes("discard"));
+  assert.ok(extractOfficialActions("التخلص من المستحضرات المسحوبة").includes("discard"));
+  assert.ok(extractOfficialActions("التخلص من المتبقي").includes("discard"));
+  assert.ok(extractOfficialActions("رمي غير المستخدم").includes("discard"));
+  // An unrelated object is still not a discard.
+  assert.ok(!extractOfficialActions("التخلص من العادات السيئة").includes("discard"));
+});
+
+test("P2-FIX2 regression: «التخلّص من غير المستخدم أو إعادته» preserves the source discard", () => {
+  const { errors } = checkFactGrounding(
+    { title: "سحب أقراص من الأسواق", excerpt: "", body: "سحبت الشركة الأقراص من الأسواق، ويُطلب من المرضى التخلّص من غير المستخدم أو إعادته." },
+    { sourceText: "The company recalled the tablets. Patients should discard any unused tablets." },
+    "safety_alert",
+  );
+  assert.ok(!errors.includes("missing_official_action"), errors.join(","));
+  assert.ok(!errors.some((e) => e.startsWith("invented_official_action")), errors.join(","));
+});
+
+test("P2-FIX2 counter: a draft that drops the only source action still errors", () => {
+  const { errors } = checkFactGrounding(
+    { title: "سحب أقراص من الأسواق", excerpt: "", body: "سحبت الشركة الأقراص غير المستخدمة من الأسواق بعد رصد خلل." },
+    { sourceText: "The company recalled the tablets. Patients should discard any unused tablets." },
+    "safety_alert",
+  );
+  assert.ok(errors.includes("missing_official_action"));
+});
+
+test("P2-FIX3 regression: «كار-تي» ×6 and «نيتشر» name markers are not quotations", () => {
+  const body =
+    "يعتمد علاج «كار-تي» على خلايا المريض. وتُعدّ «كار-تي» خياراً حديثاً، ونُشرت النتائج في مجلة «نيتشر». " +
+    "وأظهرت «كار-تي» استجابة جيدة، ويحتاج «كار-تي» إلى مراكز متخصصة، وتبقى «كار-تي» مكلفة، وتتطور «كار-تي» سريعاً. " +
+    "ونشرت “نيتشر” الدراسة كاملة.";
+  const sourceText = "A CAR-T cell therapy study published in Nature showed a good response.";
+  const { errors } = checkFactGrounding({ title: "علاج خلوي جديد", excerpt: "", body }, { sourceText }, "standard_news");
+  assert.ok(!errors.includes("invented_quotation"), errors.join(","));
+  // P2R-1: exemption now needs the source (a transliterated source name).
+  assert.deepEqual(extractQuotes(body, sourceText), []);
+});
+
+test("P2-FIX3 counter: fabricated 3+ word quotes and short quotes after a speech verb still error", () => {
+  const src = { sourceText: "A CAR-T cell therapy study published in Nature showed a good response." };
+  const long = checkFactGrounding(
+    { title: "علاج خلوي", excerpt: "", body: "وُصفت النتائج بأنها «اختراق علمي غير مسبوق» في علاج السرطان." },
+    src,
+    "standard_news",
+  );
+  assert.ok(long.errors.includes("invented_quotation"));
+  const shortAfterQaal = checkFactGrounding(
+    { title: "علاج خلوي", excerpt: "", body: "قال الباحث «مذهل» عن نتائج الدراسة." },
+    src,
+    "standard_news",
+  );
+  assert.ok(shortAfterQaal.errors.includes("invented_quotation"));
+  // Same rule for ASCII and curly quotes, and for a shadda-bearing verb.
+  assert.deepEqual(extractQuotes('حذّر الطبيب "خطير" من ذلك'), ["خطير"]);
+  assert.deepEqual(extractQuotes("وأضافت “مقلق”"), ["مقلق"]);
+  assert.deepEqual(extractQuotes("بحسب «المصدر»"), ["المصدر"]);
+});
+
+// =========================================================================
+// Phase 2 (second pass) — P2-A1 dates, P2-A4 transliteration, P2-B8 Arabic-
+// aware entity matching, P2-E11 names-policy prompt.
+// =========================================================================
+import {
+  arabicEntityPresent,
+  checkFactGrounding as p2CheckFactGrounding,
+  extractDateTokens,
+  foldArabicToken,
+  normalizeForCompare as p2Normalize,
+  transliterationScore,
+  TRANSLITERATION_SUSPECT_THRESHOLD,
+  validateArticle as p2ValidateArticle,
+  buildWritingInstructions as p2BuildWritingInstructions,
+} from "./salmaWriter.ts";
+import { classifyFidelityError } from "./fidelityRepair.ts";
+
+const P2_FILLER =
+  " وأوضحت الجهة أن المتابعة مستمرة، وأن على من يستخدم المنتج متابعة التحديثات الرسمية الصادرة عنها بشكل منتظم خلال الأيام المقبلة.";
+
+function p2Ground(body: string, sourceText: string, mustPreserve: string[] = [], profile: Parameters<typeof p2CheckFactGrounding>[2] = "standard_news") {
+  return p2CheckFactGrounding({ title: "عنوان الخبر الصحي", excerpt: "", body }, { sourceText, mustPreserve }, profile);
+}
+
+// --- P2-A1 unsupported_date ------------------------------------------------
+const AS_OF_SOURCE = "As of October 7, 2026, the company has received 10 reports of injuries linked to the device.";
+
+test("P2-A1 a wrong 'as of' date is a blocking unsupported_date", () => {
+  const r = p2Ground("وحتى 10 أكتوبر 2026 تلقّت الشركة 10 بلاغات عن إصابات مرتبطة بالجهاز." + P2_FILLER, AS_OF_SOURCE);
+  assert.ok(r.errors.includes("unsupported_date:10 أكتوبر 2026"), r.errors.join(","));
+  // 10 and 2026 both exist in the source, so the breach is the DATE, not a number.
+  assert.ok(!r.errors.some((e) => e.startsWith("unsupported_number")));
+});
+
+test("P2-A1 the same date in a different format passes", () => {
+  for (const body of [
+    "وحتى 7 أكتوبر 2026 تلقّت الشركة 10 بلاغات عن إصابات.",
+    "وحتى ٧ أكتوبر ٢٠٢٦ تلقّت الشركة ١٠ بلاغات عن إصابات.",
+    "وحتى 2026-10-07 تلقّت الشركة 10 بلاغات عن إصابات.",
+  ]) {
+    const r = p2Ground(body + P2_FILLER, AS_OF_SOURCE);
+    assert.ok(!r.errors.some((e) => e.startsWith("unsupported_date") || e.startsWith("unsupported_number")), `${body} → ${r.errors.join(",")}`);
+  }
+});
+
+test("P2-A1 an Arabic month name matches a numeric 10/07/2026 source date (both d/m orders)", () => {
+  const src = "The recall notice was issued on 10/07/2026 for the affected lots.";
+  for (const body of ["صدر إشعار السحب في 10 يوليو 2026 للدفعات المتأثرة.", "صدر إشعار السحب في 7 أكتوبر 2026 للدفعات المتأثرة."]) {
+    const r = p2Ground(body + P2_FILLER, src);
+    assert.ok(!r.errors.some((e) => e.startsWith("unsupported_")), `${body} → ${r.errors.join(",")}`);
+  }
+  // Counter: a day/month pair that is neither reading of 10/07 still errors.
+  const bad = p2Ground("صدر إشعار السحب في 10 أغسطس 2026 للدفعات المتأثرة." + P2_FILLER, src);
+  assert.ok(bad.errors.includes("unsupported_date:10 أغسطس 2026"), bad.errors.join(","));
+});
+
+test("P2-A1 a year alone is not a date token (no double report)", () => {
+  assert.deepEqual(extractDateTokens("في عام 2026 فقط"), []);
+  const ok = p2Ground("وفي عام 2026 تلقّت الشركة 10 بلاغات." + P2_FILLER, AS_OF_SOURCE);
+  assert.ok(!ok.errors.some((e) => e.startsWith("unsupported_")), ok.errors.join(","));
+  const bad = p2Ground("وفي عام 2025 تلقّت الشركة 10 بلاغات." + P2_FILLER, AS_OF_SOURCE);
+  assert.deepEqual(bad.errors.filter((e) => e.startsWith("unsupported_")), ["unsupported_number:2025"]);
+});
+
+test("P2-A1 a date whose day is itself unsupported is reported once (as unsupported_number)", () => {
+  const r = p2Ground("وحتى 15 أكتوبر 2026 تلقّت الشركة 10 بلاغات." + P2_FILLER, AS_OF_SOURCE);
+  assert.deepEqual(r.errors.filter((e) => e.startsWith("unsupported_")), ["unsupported_number:15"]);
+});
+
+test("P2-A1 extractDateTokens covers ISO timestamps, month-day ranges and dual month naming", () => {
+  assert.deepEqual(extractDateTokens("2026-10-07T12:00:00Z")[0].readings, [{ d: 7, m: 10, y: 2026 }]);
+  assert.deepEqual(extractDateTokens("Oct. 1-7, 2026")[0].readings, [{ d: 1, m: 10, y: 2026 }, { d: 7, m: 10, y: 2026 }]);
+  assert.deepEqual(extractDateTokens("7 أكتوبر/تشرين الأول 2026")[0].readings, [{ d: 7, m: 10, y: 2026 }]);
+  assert.deepEqual(extractDateTokens("يمارس 2026 نشاطه"), []); // "مارس" inside a verb is not a month
+});
+
+test("P2-A1 unsupported_date blocks validateArticle and is in the repairable fidelity class", () => {
+  const v = p2ValidateArticle({
+    article: { title: "بلاغات إصابات مرتبطة بجهاز طبي", excerpt: "تحديث بشأن البلاغات.", body: "وحتى 10 أكتوبر 2026 تلقّت الشركة 10 بلاغات عن إصابات مرتبطة بالجهاز." + P2_FILLER, profile: "standard_news" },
+    source: { sourceText: AS_OF_SOURCE },
+  });
+  assert.equal(v.ok, false);
+  assert.ok(v.errors.includes("unsupported_date:10 أكتوبر 2026"));
+  assert.equal(classifyFidelityError("unsupported_date:10 أكتوبر 2026"), "repairable");
+});
+
+// --- P2-A4 name_transliteration_suspect ------------------------------------
+const P2_BAD_PAIRS: [string, string][] = [["سكيترا", "Spectra"], ["إنليكيسايد", "enlicitide"]];
+const P2_GOOD_PAIRS: [string, string][] = [
+  ["سيكلوفوسفاميد", "Cyclophosphamide"], ["بابافيرين", "Papaverine"], ["أمريكان ريجنت", "American Regent"],
+  ["فاوندايو", "Foundayo"], ["ويغوفي", "Wegovy"], ["أورفورغليبرون", "orforglipron"], ["سبكترا", "Spectra"],
+  ["أوزمبيك", "Ozempic"], ["مونجارو", "Mounjaro"], ["فايزر", "Pfizer"], ["موديرنا", "Moderna"],
+  ["نوفو نورديسك", "Novo Nordisk"], ["أسترازينيكا", "AstraZeneca"], ["باراسيتامول", "Paracetamol"],
+  ["ميتفورمين", "Metformin"], ["إيبوبروفين", "Ibuprofen"], ["أموكسيسيلين", "Amoxicillin"], ["سانوفي", "Sanofi"],
+  ["نوفارتيس", "Novartis"], ["تيرزيباتيد", "tirzepatide"],
+];
+
+test("P2-A4 threshold is pinned at the tuned value 0.85", () => {
+  assert.equal(TRANSLITERATION_SUSPECT_THRESHOLD, 0.85);
+});
+
+test("P2-A4 known-bad renderings flag (سكيترا/Spectra, إنليكيسايد/enlicitide)", () => {
+  for (const [ar, la] of P2_BAD_PAIRS) {
+    const s = transliterationScore(ar, la);
+    assert.ok(s && s.score < TRANSLITERATION_SUSPECT_THRESHOLD, `${ar}/${la} → ${s?.score}`);
+  }
+});
+
+test("P2-A4 twenty correct renderings do not flag", () => {
+  assert.equal(P2_GOOD_PAIRS.length, 20);
+  for (const [ar, la] of P2_GOOD_PAIRS) {
+    const s = transliterationScore(ar, la);
+    assert.ok(s && s.score >= TRANSLITERATION_SUSPECT_THRESHOLD, `${ar}/${la} → ${s?.score}`);
+  }
+});
+
+test("P2-A4 a suspect rendering is a review warning on the gloss, never an error", () => {
+  const src = "Spectra recalled one lot of its device after reports of overheating.";
+  const bad = p2Ground("سحبت شركة سكيترا (Spectra) دفعة من جهازها بعد بلاغات عن ارتفاع حرارته." + P2_FILLER, src, ["Spectra"]);
+  assert.ok(bad.warnings.includes("name_transliteration_suspect:Spectra"), bad.warnings.join(","));
+  assert.ok(!bad.errors.some((e) => e.includes("Spectra")));
+  const good = p2Ground("سحبت شركة سبكترا (Spectra) دفعة من جهازها بعد بلاغات عن ارتفاع حرارته." + P2_FILLER, src, ["Spectra"]);
+  assert.ok(!good.warnings.some((w) => w.startsWith("name_transliteration_suspect")), good.warnings.join(","));
+});
+
+test("P2-A4 descriptors, translated words and acronyms are not scored as transliterations", () => {
+  assert.equal(transliterationScore("شركة سبكترا ميديكال", "Spectra Medical")?.score, 1);
+  assert.equal(transliterationScore("جامعة هارفارد", "Harvard University")?.score, 1);
+  assert.equal(transliterationScore("إدارة الغذاء والدواء", "FDA"), null);
+});
+
+// --- P2-B8 Arabic-aware matching -------------------------------------------
+test("P2-B8 normalizeForCompare folds alef/hamza/taa-marbuta/alef-maqsura orthography", () => {
+  assert.equal(p2Normalize("إدارة الهيئة مستشفى مؤسسة"), p2Normalize("ادارة الهييه مستشفي موسسه"));
+  assert.equal(foldArabicToken(p2Normalize("السعودية")), foldArabicToken(p2Normalize("سعودي")));
+});
+
+test("P2-B8 سعودي vs السعودية preserves the country entity", () => {
+  const src = "أعلنت السعودية عن حالات جديدة في مستشفى سعودي كبير.";
+  const r = p2Ground("سجّل مستشفى سعودي حالات جديدة وفق ما أعلنته الجهات الصحية." + P2_FILLER, src, ["السعودية"], "safety_alert");
+  assert.ok(!r.errors.some((e) => e.startsWith("missing_essential_entity")), r.errors.join(","));
+  const en = p2Ground("سجّل مستشفى سعودي حالات جديدة وفق ما أعلنته الجهات الصحية." + P2_FILLER, "Saudi health authorities reported new cases.", ["Saudi"], "safety_alert");
+  assert.ok(!en.errors.some((e) => e.startsWith("missing_essential_entity")), en.errors.join(","));
+});
+
+test("P2-B8 a regulator is preserved by its Arabic name, never by another regulator", () => {
+  const src = "The U.S. Food and Drug Administration announced the recall.";
+  const ent = ["U.S. Food and Drug Administration"];
+  const ok = p2Ground("أعلنت إدارة الغذاء والدواء الأمريكية سحب المنتج." + P2_FILLER, src, ent, "safety_alert");
+  assert.ok(!ok.errors.some((e) => e.startsWith("missing_essential_entity")), ok.errors.join(","));
+  const wrongRegulator = p2Ground("أعلنت هيئة الغذاء والدواء السعودية سحب المنتج." + P2_FILLER, src, ent, "safety_alert");
+  assert.ok(wrongRegulator.errors.includes("missing_essential_entity:U.S. Food and Drug Administration"));
+  const absent = p2Ground("أعلنت الجهات الصحية سحب المنتج." + P2_FILLER, src, ent, "safety_alert");
+  assert.ok(absent.errors.includes("missing_essential_entity:U.S. Food and Drug Administration"));
+});
+
+test("P2-B8 a genuinely dropped drug name still errors (safety alert)", () => {
+  const src = "سحبت شركة دفعات من دواء سيكلوفوسفاميد بعد رصد جسيمات.";
+  const r = p2Ground("سحبت شركة دفعات من دواء للحقن بعد رصد جسيمات." + P2_FILLER, src, ["سيكلوفوسفاميد"], "safety_alert");
+  assert.ok(r.errors.includes("missing_essential_entity:سيكلوفوسفاميد"));
+});
+
+test("P2-B8 folding never makes two different drug names equal (near-miss pairs)", () => {
+  assert.equal(arabicEntityPresent("هيدروكسيزين", "وصف الطبيب دواء الهيدرالازين للمريض"), false);
+  assert.equal(arabicEntityPresent("سيكلوسبورين", "سحبت الشركة دواء السيكلوفوسفاميد"), false);
+  assert.equal(arabicEntityPresent("ديكلوفيناك", "ويحتوي المنتج على الديكلوفيناك"), true); // ال-prefixed same name
+  const r = p2Ground("سحبت شركة دفعات من دواء سيليبريكس (Celebrex) بعد رصد جسيمات." + P2_FILLER, "Recall of Celexa tablets.", ["Celexa"], "safety_alert");
+  assert.ok(r.errors.includes("missing_essential_entity:Celexa"));
+});
+
+// --- P2-E11 names policy (prompt) ------------------------------------------
+test("P2-E11 writer prompt carries the e2.2 names policy", () => {
+  const p = p2BuildWritingInstructions("safety_alert");
+  assert.ok(p.includes("e2.3-salma-writer"));
+  assert.ok(p.includes("شركة Spectra Medical"));
+  assert.ok(p.includes("لا تخترع تهجئة عربية"));
+  assert.ok(p.includes("doing business as"));
+  assert.ok(p.includes("ولا تُترجم أبداً إلى «عبوة»"));
+  assert.ok(p.includes("«لم يذكر المصدر…»"));
+  assert.ok(p.includes("وصفاً عربياً عاماً"));
+  assert.ok(p.includes("Class I"));
+});
+
+test("P2-A1 European-language and 'Nth of Month' source dates are recognised (no false unsupported_date)", () => {
+  for (const src of [
+    "Hasta el 7 de octubre de 2026 se registraron 10 casos.",
+    "Au 7 octobre 2026, 10 cas ont été signalés.",
+    "Bis zum 7. Oktober 2026 wurden 10 Fälle gemeldet.",
+    "As of the 7th of October 2026, 10 cases were reported.",
+  ]) {
+    const r = p2Ground("وحتى 7 أكتوبر 2026 سُجّلت 10 حالات." + P2_FILLER, src);
+    assert.ok(!r.errors.some((e) => e.startsWith("unsupported_date")), `${src} → ${r.errors.join(",")}`);
+  }
+});
+
+// =========================================================================
+// Phase 2 review round (P2R) — writer-side regression + counter tests.
+// =========================================================================
+import {
+  extractOfficialActions as p2rActions,
+  extractQuotes as p2rQuotes,
+  isTransliteratedSourceName,
+  REGULATOR_EQUIVALENTS,
+  regulatorGroup as p2rRegulatorGroup,
+  regulatorPresent,
+  suspectGlossPairs,
+  unsupportedDates as p2rUnsupportedDates,
+} from "./salmaWriter.ts";
+
+const P2R_NAME_SOURCE =
+  "A CAR-T cell therapy study using TriNetX records on CD19 targets, published in Nature, showed a good response. Officials said the outbreak is under control.";
+
+test("P2R-1 transliterated source names in «» are exempt (CAR-T, TriNetX, CD19, Nature)", () => {
+  for (const q of ["كار-تي", "تراي نت إكس", "سي دي 19", "نيتشر"]) {
+    assert.equal(isTransliteratedSourceName(q, P2R_NAME_SOURCE), true, q);
+  }
+  const body = "يعتمد علاج «كار-تي» على بيانات «تراي نت إكس» ويستهدف «سي دي 19»، ونُشرت النتائج في «نيتشر».";
+  const r = p2Ground(body + P2_FILLER, P2R_NAME_SOURCE);
+  assert.ok(!r.errors.includes("invented_quotation"), r.errors.join(","));
+});
+
+test("P2R-1 counter: claim spans, said-'completely safe' and unmatched spans stay invented_quotation", () => {
+  for (const body of [
+    "ووصفت الشركة الدواء بأنه «آمن تماماً» بعد السحب.",
+    'وقال المسؤول إن الدواء "completely safe" بعد السحب.',
+    "وأكدت الجهات أن الوضع «تحت السيطرة» حالياً.",
+    "ووصف الباحث النتائج بأنها «مذهل» للغاية.",
+    "واعتبر الباحثون علاج «كار تي آمن» للأطفال.",
+  ]) {
+    const r = p2Ground(body + P2_FILLER, P2R_NAME_SOURCE);
+    assert.ok(r.errors.includes("invented_quotation"), body);
+  }
+  // No speech-verb window any more: «بحسب» neither exempts nor is needed.
+  assert.deepEqual(p2rQuotes("بحسب «المصدر» الرسمي", P2R_NAME_SOURCE), ["المصدر"]);
+});
+
+test("P2R-2 regulator cross-matrix: no group is satisfied by another group's members", () => {
+  for (const g of REGULATOR_EQUIVALENTS) {
+    for (const own of g) assert.equal(regulatorPresent(g, `أعلنت ${own} اليوم`), true, `own ${own}`);
+    for (const h of REGULATOR_EQUIVALENTS) {
+      if (h === g) continue;
+      for (const m of h) assert.equal(regulatorPresent(g, `أعلنت ${m} اليوم`), false, `${g[0]} ⟵ ${m}`);
+    }
+  }
+});
+
+test("P2R-2 counter: bare «هيئة الغذاء والدواء» is not SFDA; 'who' is not WHO; Saudi-qualified FDA is not FDA", () => {
+  assert.equal(p2rRegulatorGroup("هيئة الغذاء والدواء"), null);
+  const who = p2rRegulatorGroup("WHO")!;
+  assert.equal(regulatorPresent(who, "doctors who treat patients"), false);
+  assert.equal(regulatorPresent(who, "the WHO said"), true);
+  const fda = p2rRegulatorGroup("FDA")!;
+  assert.equal(regulatorPresent(fda, "the Saudi FDA announced"), false);
+  assert.equal(regulatorPresent(fda, "أعلنت إدارة الغذاء والدواء السعودية"), false);
+  assert.equal(regulatorPresent(fda, "أعلن مسؤول سعودي وإدارة الغذاء والدواء الأمريكية"), true);
+});
+
+test("P2R-3 «أعد…» counts as return only with an explicit object; «تواصل مع» needs one too", () => {
+  assert.deepEqual(p2rActions("نشرت النتائج في تقرير أعدّه فريق من الباحثين"), []);
+  assert.deepEqual(p2rActions("وتوصلت دراسة أعدها باحثون إلى نتائج جديدة"), []);
+  assert.deepEqual(p2rActions("وتواصل مع زملائه في المختبر"), []);
+  assert.deepEqual(p2rActions("أعد المنتج إلى الصيدلية"), ["return"]);
+  assert.deepEqual(p2rActions("أعدها إلى مكان الشراء"), ["return"]);
+  assert.deepEqual(p2rActions("وأعده إلى المورد"), ["return"]);
+  assert.deepEqual(p2rActions("تواصل مع الشركة"), ["contact"]);
+});
+
+const p2rDates = (draft: string, src: string, nums: string[]) =>
+  p2rUnsupportedDates(draft, src, new Set(nums)).unsupported.map((t) => t.raw);
+
+test("P2R-4 day pairs/ranges: every endpoint must be supported, a source range supports both", () => {
+  assert.deepEqual(p2rDates("في 7 و8 أكتوبر 2026", "Cases on October 7 and 8, 2026", ["7", "8", "2026"]), []);
+  assert.deepEqual(p2rDates("في 1 أكتوبر 2026", "between October 1 and 7, 2026", ["1", "7", "2026"]), []);
+  assert.deepEqual(p2rDates("في 7 أكتوبر 2026", "between October 1 and 7, 2026", ["1", "7", "2026"]), []);
+  assert.deepEqual(p2rDates("في 1-7 أكتوبر 2026", "between October 1 and 7, 2026", ["1", "7", "2026"]), []);
+  // Counter: a pair where only one endpoint is a source date.
+  assert.deepEqual(p2rDates("في 7 و8 أكتوبر 2026", "As of October 7, 2026, 8 patients", ["7", "8", "2026"]), ["7 و8 أكتوبر 2026"]);
+});
+
+test("P2R-4 07-Oct-2026 and month+year (month in source, year anywhere)", () => {
+  assert.deepEqual(p2rDates("في 7 أكتوبر 2026", "Label date 07-Oct-2026", ["07", "2026"]), []);
+  assert.deepEqual(p2rDates("في أكتوبر 2026", "In October, the agency said. Report 2026.", ["2026"]), []);
+  // Counter: the month is not in the source.
+  assert.deepEqual(p2rDates("في أكتوبر 2026", "In September, the agency said. Report 2026.", ["2026"]), ["أكتوبر 2026"]);
+  // Counter: the year is not in the source.
+  assert.deepEqual(p2rDates("في أكتوبر 2025", "In October, the agency said. Report 2026.", ["2026"]), ["أكتوبر 2025"]);
+});
+
+test("P2R-4 «مارس» is a month only as «12 مارس» or «مارس 2026»", () => {
+  assert.equal(extractDateTokens("مارس 12 نشاطاً").length, 0);
+  assert.equal(extractDateTokens("يمارس 12 نشاطاً").length, 0);
+  assert.deepEqual(extractDateTokens("في 12 مارس")[0].readings, [{ d: 12, m: 3, y: null }]);
+  assert.deepEqual(extractDateTokens("في مارس 2026")[0].readings, [{ d: null, m: 3, y: 2026 }]);
+  // English "March 12" keeps working.
+  assert.deepEqual(extractDateTokens("on March 12, 2026")[0].readings, [{ d: 12, m: 3, y: 2026 }]);
+});
+
+test("P2R-7 new fixtures do not flag; the known-bad pairs still do (threshold 0.85)", () => {
+  for (const [ar, la] of [["زاريلتو", "Xarelto"], ["زاناكس", "Xanax"], ["نستله", "Nestle"], ["بوهرنجر إنجلهايم", "Boehringer Ingelheim"]] as [string, string][]) {
+    const s = transliterationScore(ar, la);
+    assert.ok(s && s.score >= TRANSLITERATION_SUSPECT_THRESHOLD, `${ar}/${la} → ${s?.score}`);
+  }
+  for (const [ar, la] of P2_BAD_PAIRS) {
+    const s = transliterationScore(ar, la);
+    assert.ok(s && s.score < TRANSLITERATION_SUSPECT_THRESHOLD, `${ar}/${la} → ${s?.score}`);
+  }
+});
+
+test("P2R-7a every rendering+(Latin) pair is checked, even with no extracted entity", () => {
+  const body = "سحبت شركة سكيترا (Spectra Medical) دفعة من جهازها، ويحتوي على إنليكيسايد (enlicitide).";
+  assert.deepEqual(suspectGlossPairs(body).map((g) => g.latin), ["Spectra Medical", "enlicitide"]);
+  const r = p2Ground(body + P2_FILLER, "Spectra Medical recalled a device containing enlicitide.", []);
+  assert.ok(r.warnings.includes("name_transliteration_suspect:Spectra Medical"), r.warnings.join(","));
+  assert.ok(!r.errors.some((e) => e.startsWith("name_transliteration")));
+});
+
+test("P2R-7a counter: translated nouns, acronyms and correct renderings are not flagged", () => {
+  assert.deepEqual(
+    suspectGlossPairs(
+      "التهاب الكبد (hepatitis) ومثبطات (SGLT2 inhibitors) ومنظمة الصحة العالمية (World Health Organization) وبروتين (PCSK9) ودواء زاريلتو (Xarelto) ودواء أورفورغليبرون (orforglipron).",
+    ),
+    [],
+  );
+});
+
+test("P2R-11 normalizeForCompare drops a bare hamza (documented limitation)", () => {
+  assert.equal(p2Normalize("جزء"), p2Normalize("جز"));
+});
+
+// =========================================================================
+// Phase 2 final round (P2R2).
+// =========================================================================
+import { dbaAliases, isAcronymGloss } from "./salmaWriter.ts";
+
+const P2R2_FDA_SOURCE =
+  "Some patients may experience rare but serious reactions. There is an urgent need for immediate action. " +
+  "Toxic exposure is rare. Good manufacturing practice was not followed. Natural ingredients were listed.";
+
+test("P2R2-A short or common-word skeletons are never exempt (reviewer probes)", () => {
+  for (const q of ["سام", "سامة", "نادرة", "طارئة", "فورية", "ثورة", "جيدة"]) {
+    assert.equal(isTransliteratedSourceName(q, P2R2_FDA_SOURCE), false, q);
+    const r = p2Ground(`ووصفت الجهة المادة بأنها «${q}» في بيانها.` + P2_FILLER, P2R2_FDA_SOURCE);
+    assert.ok(r.errors.includes("invented_quotation"), q);
+  }
+});
+
+test("P2R2-A real names still exempt: CAR-T, TriNetX, CD19, Nature (mid-sentence), or a draft gloss", () => {
+  for (const q of ["كار-تي", "تراي نت إكس", "سي دي 19", "نيتشر"]) assert.equal(isTransliteratedSourceName(q, P2R_NAME_SOURCE), true, q);
+  // "Nature" only sentence-initial is NOT a plausible name → checked.
+  assert.equal(isTransliteratedSourceName("نيتشر", "Nature is complex. The study was small."), false);
+  // (a) the draft's own gloss parentheses identify the name.
+  const draft = "ونشرت مجلة نيتشر (Nature) الدراسة، وقالت «نيتشر» إن النتائج أولية.";
+  assert.equal(isTransliteratedSourceName("نيتشر", "Nature is complex.", draft), true);
+});
+
+test("P2R2-E an acronym gloss (HeFH, GLP-1) is not scored; real-name pairs still flag", () => {
+  assert.equal(isAcronymGloss("HeFH"), true);
+  assert.equal(isAcronymGloss("GLP-1"), true);
+  assert.equal(isAcronymGloss("Spectra"), false);
+  assert.deepEqual(suspectGlossPairs("لدى مرضى فرط كوليسترول الدم العائلي متغاير الزيجوت (HeFH) ومستقبلات (GLP-1)."), []);
+  assert.deepEqual(suspectGlossPairs("سحبت شركة سكيترا (Spectra Medical) دفعة.").map((g) => g.latin), ["Spectra Medical"]);
+});
+
+test("P2R2-F either name of a 'X dba Y' pair satisfies presence; neither still errors", () => {
+  assert.deepEqual(dbaAliases("Elevaris Medical dba Spectra"), ["Elevaris Medical", "Spectra"]);
+  const src = "Elevaris Medical, doing business as Spectra, is recalling one lot of infusion pumps.";
+  const ent = ["Elevaris Medical dba Spectra"];
+  const ok = p2Ground("سحبت شركة سبكترا (Spectra) دفعة من مضخات التسريب." + P2_FILLER, src, ent, "safety_alert");
+  assert.ok(!ok.errors.some((e) => e.startsWith("missing_essential_entity")), ok.errors.join(","));
+  const none = p2Ground("سحبت شركة أمريكية دفعة من مضخات التسريب." + P2_FILLER, src, ent, "safety_alert");
+  assert.ok(none.errors.includes("missing_essential_entity:Elevaris Medical dba Spectra"));
+});
+
+test("P2R2-H SFDA official Arabic name aliases; «… في السعودية» is not the US FDA", () => {
+  const sfda = p2rRegulatorGroup("SFDA")!;
+  assert.equal(regulatorPresent(sfda, "أعلنت الهيئة العامة للغذاء والدواء سحب المنتج"), true);
+  assert.equal(regulatorPresent(sfda, "أعلنت الهيئة العامة للغذاء والدواء السعودية سحب المنتج"), true);
+  const fda = p2rRegulatorGroup("FDA")!;
+  assert.equal(regulatorPresent(fda, "أعلنت إدارة الغذاء والدواء في السعودية سحب المنتج"), false);
+  assert.equal(regulatorPresent(fda, "the Food and Drug Administration in Saudi Arabia"), false);
+  assert.equal(regulatorPresent(fda, "أعلنت إدارة الغذاء والدواء الأمريكية سحب المنتج"), true);
+  // Cross-matrix re-run with the new alias (also covered by P2R-2).
+  for (const m of sfda) assert.equal(regulatorPresent(fda, `أعلنت ${m} اليوم`), false, m);
 });

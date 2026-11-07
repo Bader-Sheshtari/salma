@@ -11,6 +11,7 @@ import {
   extractArticle,
   extractEssentialEntities,
   looksLikeBatchIdentifier,
+  looksLikeNavList,
   fetchSourceText,
   groundedWrite,
   hostnameMatchesDomain,
@@ -550,4 +551,137 @@ test("groundedWrite performs NO write when source extraction fails", async () =>
   });
   assert.deepEqual(out, { ok: false, reason: "source_text_unavailable" });
   assert.equal(writes, 0); // the writer (a paid call) never runs on a fetch failure
+});
+
+// --- Phase 2 validator fix (P2-FIX6): product prefixes + country boilerplate ---
+
+test("P2-FIX6 regression: 'Recall of a single lot of …' extracts the product", () => {
+  const ents = extractEssentialEntities(
+    "Recall of a single lot of Papaverine Hydrochloride Injection, USP due to the presence of particulate matter.",
+  );
+  assert.ok(ents.includes("Papaverine Hydrochloride"), ents.join("|"));
+  assert.ok(extractEssentialEntities("Recall of a single batch of Norepirin Injection due to particles.").includes("Norepirin"));
+  // P2R-11: the boundary now stops before " for Injection" (was "Cyclophosphamide for").
+  const cyc = extractEssentialEntities("Announcing the RECALL OF ONE BATCH OF Cyclophosphamide for Injection.");
+  assert.ok(cyc.includes("Cyclophosphamide"), cyc.join("|"));
+  assert.ok(!cyc.includes("Cyclophosphamide for"));
+});
+
+test("P2-FIX6 counter: 'one lot of X' and the plain prefix still extract; no free-form guess", () => {
+  assert.ok(extractEssentialEntities("FDA announces a recall of one lot of Metformin Tablets due to impurity.").includes("Metformin"));
+  assert.ok(extractEssentialEntities("FDA announces a recall of Metformin USP due to a possible impurity.").includes("Metformin"));
+  // Lowercase product start is still never captured.
+  assert.deepEqual(extractEssentialEntities("a recall of a single lot of the product due to particles."), []);
+});
+
+test("P2-FIX6 regression: a navigation line containing 'UAE' does not produce an entity", () => {
+  const ents = extractEssentialEntities(
+    "Home | News | Health | UAE | Contact us\nThe company recalled the product after testing found particles.",
+  );
+  assert.ok(!ents.includes("UAE"), ents.join("|"));
+  // Latin country terms match as whole words only.
+  assert.ok(!extractEssentialEntities("The DUAE assay and Omani-style trials were reviewed.").includes("UAE"));
+  // A menu of single-link <li> items is dropped from the extracted article text.
+  const html =
+    "<html><body><article><ul><li><a href='/'>Home</a></li><li><a href='/n'>News</a></li>" +
+    "<li><a href='/uae'>UAE</a></li><li><a href='/c'>Contact</a></li></ul>" +
+    `<p>${"The company recalled one lot of the product after testing found particles in some vials. ".repeat(5)}</p>` +
+    "</article></body></html>";
+  const r = extractArticle(html);
+  assert.ok(r.ok);
+  if (r.ok) {
+    assert.ok(!r.text.includes("UAE"));
+    assert.ok(!extractEssentialEntities(r.text).includes("UAE"));
+  }
+});
+
+test("P2-FIX6 counter: a country named in a real article sentence still extracts", () => {
+  const ents = extractEssentialEntities("The product was distributed in the UAE and Kuwait before the recall.");
+  assert.ok(ents.includes("UAE"));
+  assert.ok(ents.includes("Kuwait"));
+  // A comma-joined Arabic sentence without a final period is not navigation.
+  assert.ok(extractEssentialEntities("سحبت الشركة الدواء، ويشمل السحب الكويت، والسعودية، والإمارات").includes("الكويت"));
+  // Lot-number lists and labelled lists are never navigation.
+  assert.equal(looksLikeNavList("Lots 25202 | 25203 | 25204 | 25205"), false);
+  assert.equal(looksLikeNavList("Countries: Kuwait, Qatar, Oman, Bahrain, UAE"), false);
+  assert.equal(looksLikeNavList("Home | News | Health | UAE | Contact us"), true);
+  // Plain (non-link) factual bullets are kept in the article text.
+  const html =
+    "<html><body><article><ul><li>Kuwait</li><li>Qatar</li><li>Oman</li><li>UAE</li></ul>" +
+    `<p>${"The company recalled one lot of the product after testing found particles in some vials. ".repeat(5)}</p>` +
+    "</article></body></html>";
+  const r = extractArticle(html);
+  assert.ok(r.ok);
+  if (r.ok) assert.ok(extractEssentialEntities(r.text).includes("UAE"));
+});
+
+// --- Phase 2 review round (P2R) -----------------------------------------------
+import { withoutDatelines } from "./fetchSourceText.ts";
+
+const P2R_FILLER = " The company said the issue was found during routine testing. ".repeat(8);
+
+test("P2R-6 a country from a dateline is never essential", () => {
+  assert.ok(!extractEssentialEntities("القاهرة، مصر، 7 أكتوبر 2026 — سحبت شركة أدوية دفعات من دواء للحقن." + P2R_FILLER).includes("مصر"));
+  assert.ok(!extractEssentialEntities("DUBAI, UAE — A drug maker recalled lots of an injection." + P2R_FILLER).includes("UAE"));
+  assert.ok(!withoutDatelines("DUBAI, UAE — A drug maker recalled").includes("UAE"));
+});
+
+test("P2R2-B any mention of a country in the article text is essential again (P2R-6 rule reverted)", () => {
+  assert.ok(extractEssentialEntities(P2R_FILLER + " The product was also distributed to Kuwait.").includes("Kuwait"));
+  assert.ok(extractEssentialEntities(P2R_FILLER + " Shipped to the UAE. More units went to the UAE.").includes("UAE"));
+  assert.ok(extractEssentialEntities("The product was distributed in the UAE and Kuwait before the recall.").includes("Kuwait"));
+  // Counter: still never from a leading dateline or a pipe/bullet nav line.
+  assert.ok(!extractEssentialEntities("DUBAI, UAE — A drug maker recalled lots." + P2R_FILLER).includes("UAE"));
+  assert.ok(!extractEssentialEntities("Home | News | Health | UAE | Contact us\n" + P2R_FILLER).includes("UAE"));
+});
+
+test("P2R-6 a plain-text comma list inside a <p> stays in the source text (nav drop is <li>-only)", () => {
+  const html =
+    "<html><body><article>" +
+    `<p>${"The company recalled one lot of the product after testing found particles in some vials. ".repeat(4)}</p>` +
+    "<p>Kuwait, Qatar, Oman, Bahrain, Egypt</p></article></body></html>";
+  const r = extractArticle(html);
+  assert.ok(r.ok);
+  if (r.ok) assert.ok(r.text.includes("Kuwait, Qatar, Oman, Bahrain, Egypt"));
+});
+
+test("P2R-7b recall/approval name shapes are captured (dba, recall by, approval of, approved)", () => {
+  // P2R2-F: the dba pair is now stored as ONE entity (either name satisfies it).
+  const dba = extractEssentialEntities("Spectra Medical Devices, LLC, doing business as Spectra Medical, is recalling one lot.");
+  assert.deepEqual(dba, ["Spectra Medical Devices dba Spectra Medical"]);
+  assert.ok(extractEssentialEntities("Recall by Acme Health Products of all lots.").includes("Acme Health Products"));
+  const appr = extractEssentialEntities("The FDA announced the approval of Foundayo (orforglipron) for adults.");
+  assert.ok(appr.includes("Foundayo") && appr.includes("orforglipron"), appr.join("|"));
+  assert.ok(extractEssentialEntities("Today the agency approved Wegovy for a new use.").includes("Wegovy"));
+  // Counter: no lowercase / pronoun captures.
+  assert.deepEqual(extractEssentialEntities("The panel approved the plan and the recall by the company."), []);
+});
+
+test("P2R-11 the product boundary stops before ' for Injection'", () => {
+  const ents = extractEssentialEntities("FDA announces a recall of Cyclophosphamide for Injection due to particles.");
+  assert.ok(ents.includes("Cyclophosphamide") && !ents.some((e) => e.endsWith(" for")), ents.join("|"));
+  // Regression: "… Injection, USP" still stops at Injection.
+  assert.ok(extractEssentialEntities("Recall of Papaverine Hydrochloride Injection, USP due to particles.").includes("Papaverine Hydrochloride"));
+});
+
+// --- Phase 2 final round (P2R2) ------------------------------------------------
+
+test("P2R2-C a dateline is stripped only at the very start of the text", () => {
+  assert.equal(withoutDatelines("القاهرة، مصر، 22 أكتوبر 2026 — سحبت شركة أدوية دفعات.").includes("مصر"), false);
+  assert.equal(withoutDatelines("CAIRO, Egypt — A drug maker recalled lots.").includes("Egypt"), false);
+  // The reviewer's two mid-text shapes survive (not at text start, or not a city).
+  const s1 = "The company recalled the lot.\nRiyadh, Saudi Arabia — distributors received the affected lots, and Kuwait too.";
+  assert.equal(withoutDatelines(s1), s1);
+  const s2 = "وقال المتحدث، في الكويت، إن الشحنات وصلت إلى المستشفيات.";
+  assert.equal(withoutDatelines(s2), s2);
+  assert.ok(extractEssentialEntities("Shipped to Riyadh, Saudi Arabia — and Kuwait." + P2R_FILLER).includes("Kuwait"));
+  assert.ok(extractEssentialEntities(s2 + P2R_FILLER).includes("الكويت"));
+});
+
+test("P2R2-D possessives are split from name captures (Eli Lilly's, Novo Nordisk's Wegovy)", () => {
+  const a3 = extractEssentialEntities("The FDA approved Eli Lilly's Foundayo (orforglipron) for adults with obesity.");
+  assert.ok(a3.includes("Eli Lilly") && a3.includes("Foundayo") && a3.includes("orforglipron"), a3.join("|"));
+  assert.ok(!a3.some((e) => /['’]s?$/.test(e) || e.includes("'s")));
+  const nn = extractEssentialEntities("The agency announced the approval of Novo Nordisk’s Wegovy for adults.");
+  assert.ok(nn.includes("Novo Nordisk") && nn.includes("Wegovy"), nn.join("|"));
 });

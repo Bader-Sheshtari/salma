@@ -32,3 +32,18 @@ jobs:
         run: npm run lint
       - name: Production build
         run: npm run build
+
+  # Mandatory editorial-pipeline unit tests (owner condition 2). The Edge
+  # Function suites are pure TypeScript run by Node's native test runner with
+  # built-in type stripping (Node 24) — no install, no network, no secrets, no
+  # live model calls (every LLM/transport is a stub).
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Edge Function unit tests (ingest-news + develop-story)
+        run: node --test supabase/functions/ingest-news/*.test.ts supabase/functions/develop-story/*.test.ts

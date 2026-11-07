@@ -74,6 +74,7 @@ import {
   DOMAIN_SEARCH_HINTS,
   PRIMARY_CLASSES,
   rankEvidence,
+  resolveDraftSourceLang,
   roleToClass,
   shouldSearchLiterature,
   shouldSearchOpenFda,
@@ -731,6 +732,9 @@ async function runResearch(
         corpus, must_preserve: mustPreserve,
         source_name: bestSource?.publisher ?? (origin.kind === "article" ? origin.row.source_name : null),
         source_url: bestSource?.url ?? discoveryUrl,
+        // P4R2: the origin's source language, for locale-aware numeric
+        // grounding at draft time (Romanian «1.100» = 1100).
+        source_lang: origin.kind === "article" ? origin.row.source_lang : null,
         profile,
         evidence_ids: rows.map((r) => r.id),
         // Threads join only STRONG priors (≥ 0.35); weaker archive matches
@@ -774,7 +778,7 @@ async function runDraft(
       .select("research_brief,draft_inputs,research_prompt_version")
       .eq("id", jobId).maybeSingle();
     const inputs = (job?.draft_inputs ?? null) as
-      | { corpus: string; must_preserve: string[]; source_name: string | null; source_url: string | null; profile: WritingProfile; evidence_ids?: number[]; prior_content_ids?: string[] }
+      | { corpus: string; must_preserve: string[]; source_name: string | null; source_url: string | null; source_lang?: string | null; profile: WritingProfile; evidence_ids?: number[]; prior_content_ids?: string[] }
       | null;
     if (!job?.research_brief || !inputs?.corpus) {
       await fail("missing_brief", "research brief unavailable");
@@ -786,6 +790,9 @@ async function runDraft(
       : renderBriefOrientation(job.research_brief as ResearchBrief);
 
     await patchJob(admin, jobId, { phase: "writing" }, ["drafting"]);
+    // P4R2: thread the source language (was hard-coded null) so numeric
+    // grounding reads the source's own separators.
+    const sourceLang = resolveDraftSourceLang(inputs, origin.original);
     const originTitle = origin.original?.title ?? origin.clusterTitle ?? "قصة سلمى";
     const verified: SourceText = {
       ok: true,
@@ -815,7 +822,7 @@ async function runDraft(
       sourceName: inputs.source_name,
       registeredDomain: inputs.source_url ? domainOf(inputs.source_url) : null,
       citationTitles: [],
-      sourceLang: null,
+      sourceLang,
       evidence: evCard,
       profile: inputs.profile,
       extraInstructions: buildDevelopmentInstructions({ direction, editorNote }),
@@ -848,7 +855,7 @@ async function runDraft(
 
     const finalValidation = validateArticle({
       article: { ...outcome.article, profile: inputs.profile },
-      source: { sourceText: inputs.corpus, mustPreserve: inputs.must_preserve, sourceLang: null },
+      source: { sourceText: inputs.corpus, mustPreserve: inputs.must_preserve, sourceLang },
     });
 
     await patchJob(admin, jobId, { phase: "saving" }, ["drafting"]);

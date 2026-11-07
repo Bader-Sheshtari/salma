@@ -44,6 +44,45 @@ export type FidelityRepairCall = (
   draft: FidelityArticle,
 ) => Promise<{ ok: true; article: FidelityArticle } | { ok: false; reason: string }>;
 
+/** P4R-7: build the single constrained-repair transport from injected parts so
+ *  its wiring is unit-testable. The repair returns the WRITER object, so the
+ *  caller passes the writer-shaped provider schema (WRITER_REPAIR_RESPONSE_FORMAT)
+ *  — never the editor's schema — and the strict writer parser. A transport or
+ *  parse failure is a plain reason; an empty summary keeps the draft's own
+ *  unless an issue is located in the summary (then it is cleared). */
+export function makeFidelityRepairCall<M>(deps: {
+  send: (messages: M, responseFormat: unknown) => Promise<{ ok: true; content: string } | { ok: false; reason: string }>;
+  buildMessages: (issues: string[], draft: FidelityArticle) => M;
+  responseFormat: unknown;
+  parse: (content: string) =>
+    | { ok: true; article: { title: string; excerpt: string; body: string; summary?: string } }
+    | { ok: false; error: string };
+}): FidelityRepairCall {
+  return async (issues, draft) => {
+    const res = await deps.send(deps.buildMessages(issues, draft), deps.responseFormat);
+    if (!res.ok) return { ok: false, reason: res.reason };
+    const parsed = deps.parse(res.content);
+    if (!parsed.ok) return { ok: false, reason: parsed.error };
+    // P4R3-5: an empty repaired summary normally keeps the draft's own — but
+    // when an issue is LOCATED in the summary (its detail appears there), the
+    // empty summary is the fix, so it is cleared instead of restoring the
+    // offending text.
+    const summaryTargeted = issues.some((code) => {
+      const detail = code.split(/:(.+)/)[1];
+      return !!detail && (draft.summary ?? "").includes(detail);
+    });
+    return {
+      ok: true,
+      article: {
+        title: parsed.article.title,
+        excerpt: parsed.article.excerpt,
+        summary: parsed.article.summary ?? (summaryTargeted ? "" : draft.summary),
+        body: parsed.article.body,
+      },
+    };
+  };
+}
+
 export type FidelityClass = "repairable" | "omission" | "blocking";
 
 // Repairable fidelity breaches: an ungrounded number/date, an unsupported
@@ -52,8 +91,14 @@ export type FidelityClass = "repairable" | "omission" | "blocking";
 // source. If the code still appears at final validation, the article is rejected.
 export const REPAIRABLE_FIDELITY_PREFIXES = [
   "unsupported_number",
+  // P2-A1: a draft date that matches no source date (same class as a number).
+  "unsupported_date",
   "unsupported_claim",
   "invented_quotation",
+  // P4R-8: a parenthetical Latin form the source never states — the single
+  // repair may delete it (the Arabic name then stands alone); still present at
+  // final validation → reject.
+  "invented_foreign_gloss",
 ] as const;
 
 // Omission-completeness breaches: the source stated an official action / an
@@ -132,6 +177,9 @@ export type FidelityRepairAudit = {
   decision: FidelityDecision;
   rejection_reason: string | null;
   draft_source: "original" | "repaired";
+  // NF-2: numeric tokens the single repair simply removed (present only when
+  // the repair was rejected for deleting figures).
+  repair_lost_figures?: string[];
 };
 
 export type FidelityRepairResult = {
@@ -159,6 +207,9 @@ export async function orchestrateFidelityRepair(args: {
   readMinutes: number;
   validate: (a: FidelityArticle) => FidelityValidation;
   repair: FidelityRepairCall;
+  // NF-2: injected numeric-preservation guard (pipeline: salmaWriter.lostFigures
+  // over the verified source). Returns the figures the repair removed.
+  figuresLost?: (before: FidelityArticle, after: FidelityArticle) => string[];
 }): Promise<FidelityRepairResult> {
   const { draft, validate, repair } = args;
 
@@ -225,7 +276,16 @@ export async function orchestrateFidelityRepair(args: {
 
   // Only repairable and/or omission errors → exactly ONE constrained repair.
   const issues = [...a0.repairable, ...a0.omission];
-  const rep = await repair(issues, draft);
+  const rep0 = await repair(issues, draft);
+  // NF-2 / NF2-blocker: a repair may correct a figure but never DELETE one. If
+  // any numeric token simply vanished, the repair is DISCARDED and treated
+  // exactly like a failed repair call (the a7c5314 path for the ORIGINAL
+  // errors: a repairable breach rejects, an omission alone goes to review) —
+  // never clean, never pending-with-errors. The audit adds the reason
+  // repair_deleted_figures and the lost tokens.
+  const lost = rep0.ok && args.figuresLost ? args.figuresLost(draft, rep0.article) : [];
+  const rep: Awaited<ReturnType<FidelityRepairCall>> = lost.length ? { ok: false, reason: "repair_deleted_figures" } : rep0;
+  const lostAudit = lost.length ? { repair_lost_figures: lost } : {};
 
   // The repair transport failed (call/parse). Decide from the ORIGINAL errors:
   // a repairable breach that could not be fixed rejects; an omission alone
@@ -252,6 +312,7 @@ export async function orchestrateFidelityRepair(args: {
           decision: "reject",
           rejection_reason: a0.repairable[0],
           draft_source: "original",
+          ...lostAudit,
         },
       };
     }
@@ -275,6 +336,7 @@ export async function orchestrateFidelityRepair(args: {
         decision: "needs_human_review",
         rejection_reason: null,
         draft_source: "original",
+        ...lostAudit,
       },
     };
   }
@@ -376,6 +438,7 @@ export async function finalizeWriterDraft<E>(args: {
   runEditor: () => Promise<{ article: FidelityArticle; readMinutes: number; audit: E }>;
   validate: (a: FidelityArticle) => FidelityValidation;
   repair: FidelityRepairCall;
+  figuresLost?: (before: FidelityArticle, after: FidelityArticle) => string[];
 }): Promise<{ editorial: E; fidelity: FidelityRepairResult }> {
   const editor = await args.runEditor();
   const fidelity = await orchestrateFidelityRepair({
@@ -383,6 +446,7 @@ export async function finalizeWriterDraft<E>(args: {
     readMinutes: editor.readMinutes,
     validate: args.validate,
     repair: args.repair,
+    figuresLost: args.figuresLost,
   });
   return { editorial: editor.audit, fidelity };
 }

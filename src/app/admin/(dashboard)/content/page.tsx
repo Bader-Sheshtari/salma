@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   getContentCounts,
+  jamalContentIdSet,
   listAdminProfiles,
   listCategories,
   listContent,
@@ -66,6 +67,13 @@ export default async function ContentList({ searchParams }: Props) {
     isPending ? listContent("pending") : Promise.resolve(null),
     isPending ? Promise.resolve(null) : searchContent(toSearchParams(query)),
   ]);
+
+  // Jamal provenance flags for the pending inbox («تحرير جمال» badge); the
+  // table path gets its flags inside searchContent.
+  const pendingJamalIds =
+    pendingItems && pendingItems.length > 0
+      ? await jamalContentIdSet(pendingItems.map((c) => c.id))
+      : new Set<string>();
 
   const params = queryToParams(query); // current URL state (no cursor)
   const searchMode = tab === "all" && !!query.q && !query.cat;
@@ -145,7 +153,12 @@ export default async function ContentList({ searchParams }: Props) {
       </nav>
 
       {isPending ? (
-        <ContentInbox items={pendingItems ?? []} categories={categories} />
+        <ContentInbox
+          items={(pendingItems ?? []).map((c) =>
+            pendingJamalIds.has(c.id) ? { ...c, is_jamal: true } : c,
+          )}
+          categories={categories}
+        />
       ) : (
         <>
           {searchMode ? (

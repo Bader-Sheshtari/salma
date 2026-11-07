@@ -67,6 +67,10 @@ export type ContentSearchRow = {
   author_name: string | null;
   deleted_by_name: string | null;
   version: number | null;
+  /** True when a jamal_runs provenance row links to this content (set
+   *  app-side by searchContent, not returned by the RPC). Drives the
+   *  admin-only «تحرير جمال» badge. */
+  is_jamal?: boolean;
 };
 
 /** One row of `public.content_counts()`. */

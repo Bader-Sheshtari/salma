@@ -310,7 +310,11 @@ async function collectCappedText(
 
 function decodeEntities(s: string): string {
   return (s ?? "")
-    .replace(/&nbsp;/gi, " ")
+    // P4R3-2: keep a non-breaking space as U+00A0 so a digit group written
+    // "19&nbsp;161" survives as a thousands separator (cleanText keeps it only
+    // between digits; everywhere else it collapses to a plain space).
+    .replace(/&nbsp;/gi, "\u00A0")
+    .replace(/&thinsp;/gi, "\u2009")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
@@ -333,7 +337,13 @@ function stripTags(html: string): string {
 }
 
 function cleanText(s: string): string {
-  return decodeEntities(stripTags(s)).replace(/\s+/g, " ").trim();
+  return decodeEntities(stripTags(s))
+    // P4R3-2: protect NBSP / thin / narrow-NBSP digit-group separators
+    // ("19 161") from the whitespace collapse, then restore them as U+00A0.
+    .replace(/(\d)[\u00A0\u2009\u202F](?=\d{3}(?!\d))/g, "$1\uE000")
+    .replace(/\s+/g, " ")
+    .replace(/\uE000/g, "\u00A0")
+    .trim();
 }
 
 /** Remove non-editorial blocks (scripts, styles, chrome, ads) wholesale. */
@@ -354,21 +364,101 @@ const BOILERPLATE_MARKERS = [
   "ملفات تعريف الارتباط", "الكوكيز",
 ];
 
-function isBoilerplateParagraph(text: string): boolean {
+/**
+ * P2-FIX6: a navigation/menu line — short labels separated by pipes/bullets/
+ * slashes (≥4 segments, ≥80% of them ≤2 words, none >4 words) or by commas
+ * only (≥5 segments, ALL ≤2 words), with NO sentence punctuation, NO label
+ * colon and NO digit — so a list of lot numbers/strengths, "Affected lots: …",
+ * or a real comma-joined sentence missing its final period is never treated as
+ * navigation.
+ */
+export function looksLikeNavList(text: string, opts: { commas?: boolean } = {}): boolean {
+  const t = (text ?? "").trim();
+  if (!t || t.length > 300) return false;
+  if (/[.!?؟:؛]/.test(t)) return false;
+  if (/[\d٠-٩]/.test(t)) return false;
+  const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
+  const strong = t.split(/\s*(?:[|•·»›\/]|\s-\s)\s*/).map((s) => s.trim()).filter(Boolean);
+  if (strong.length >= 4) {
+    const short = strong.filter((s) => words(s) <= 2).length;
+    return short / strong.length >= 0.8 && strong.every((s) => words(s) <= 4);
+  }
+  if (opts.commas === false) return false;
+  const commas = t.split(/\s*[,،]\s*/).map((s) => s.trim()).filter(Boolean);
+  return commas.length >= 5 && commas.every((s) => words(s) <= 2);
+}
+
+/** P2R2-C: blank out a DATELINE — only at the very start of the text (its first
+ *  non-empty line), and only in the city–country–date / city–country–dash
+ *  shape with a known country term: «القاهرة، مصر، 22 أكتوبر —», "CAIRO, Egypt —",
+ *  "KUWAIT CITY, Kuwait (KUNA) –". Mid-text sentences are never touched. */
+export function withoutDatelines(text: string): string {
+  const t = text ?? "";
+  const lead = t.match(/^\s*/)?.[0] ?? "";
+  const nl = t.indexOf("\n", lead.length);
+  const first = nl === -1 ? t.slice(lead.length) : t.slice(lead.length, nl);
+  const rest = nl === -1 ? "" : t.slice(nl);
+  const countries = [...COUNTRY_TERMS, "Egypt", "Jordan", "Lebanon", "Iraq", "Yemen", "Syria", "Saudi Arabia"]
+    .sort((a, b) => b.length - a.length)
+    .map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const re = new RegExp(
+    // City: 1–3 Capitalised Latin words or 1–3 Arabic words — never a sentence.
+    `^(?:[A-Z][A-Za-z.'\\-]*(?:\\s+[A-Z][A-Za-z.'\\-]*){0,2}|[\\u0600-\\u06FF]+(?:\\s+[\\u0600-\\u06FF]+){0,2})` +
+      `\\s*[,،]\\s*(?:${countries})(?![\\p{L}])\\s*` +
+      `(?:[,،]\\s*(?=[^\\n]{0,30}\\d)[^\\n—–]{0,30}?\\d{1,4}\\s*[,،:]?\\s*(?:[—–-]\\s*)?|(?:\\([^)\\n]{1,20}\\)\\s*)?[—–-]\\s*)`,
+    "u",
+  );
+  return lead + first.replace(re, " ") + rest;
+}
+
+// P2R-6: the nav-list drop applies to <li>-derived items only — a plain-text
+// comma list inside a real <p> paragraph stays in the source text.
+function isBoilerplateParagraph(text: string, tag = "p"): boolean {
   const t = text.toLowerCase();
-  return text.length < 160 && BOILERPLATE_MARKERS.some((m) => t.includes(m.toLowerCase()));
+  if (text.length < 160 && BOILERPLATE_MARKERS.some((m) => t.includes(m.toLowerCase()))) return true;
+  return tag.toLowerCase() === "li" && looksLikeNavList(text);
+}
+
+// P2-FIX6 (link density): a run of ≥4 consecutive <li> items, each a short
+// (≤3 words) digit-free, punctuation-free label whose content is essentially a
+// single link, is a menu — not article content. Factual bullet lists (lot
+// numbers, plain-text items, sentences) are never matched.
+const NAV_LI_RUN_MIN = 4;
+function isNavLinkItem(innerHtml: string, text: string): boolean {
+  if (!text || /[.!?؟:؛\d٠-٩]/.test(text) || text.split(/\s+/).length > 3) return false;
+  const anchorText = cleanText(
+    (innerHtml.match(/<a\b[^>]*>[\s\S]*?<\/a>/gi) ?? []).join(" "),
+  );
+  return anchorText.length > 0 && anchorText.length >= text.length * 0.8;
 }
 
 /** Pull editorial paragraphs (p / h1-3 / li / blockquote) from an HTML fragment. */
 function paragraphsFromHtml(fragment: string): string[] {
-  const out: string[] = [];
+  const items: { text: string; navLi: boolean; end: number; start: number }[] = [];
   const re = /<(p|h[1-3]|li|blockquote)\b[^>]*>([\s\S]*?)<\/\1>/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(fragment)) !== null) {
     const t = cleanText(m[2]);
-    if (t.length >= 2 && !isBoilerplateParagraph(t)) out.push(t);
+    if (t.length >= 2 && !isBoilerplateParagraph(t, m[1])) {
+      const navLi = m[1].toLowerCase() === "li" && isNavLinkItem(m[2], t);
+      items.push({ text: t, navLi, start: m.index, end: m.index + m[0].length });
+    }
   }
-  return out;
+  // Drop runs of adjacent nav-link <li> items (only tags/whitespace between).
+  const drop = new Set<number>();
+  let i = 0;
+  while (i < items.length) {
+    if (!items[i].navLi) { i++; continue; }
+    let j = i;
+    while (
+      j + 1 < items.length && items[j + 1].navLi &&
+      !cleanText(fragment.slice(items[j].end, items[j + 1].start))
+    ) j++;
+    if (j - i + 1 >= NAV_LI_RUN_MIN) for (let k = i; k <= j; k++) drop.add(k);
+    i = j + 1;
+  }
+  return items.filter((_, idx) => !drop.has(idx)).map((it) => it.text);
 }
 
 function firstBlock(html: string, tag: string): string | null {
@@ -380,7 +470,7 @@ function extractTitle(html: string): string {
   const ld = extractJsonLdField(html, "headline");
   if (ld) return ld;
   const og = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
-  if (og?.[1]) return decodeEntities(og[1]).trim();
+  if (og?.[1]) return decodeEntities(og[1]).replace(/\s+/g, " ").trim();
   const t = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   return t ? cleanText(t[1]) : "";
 }
@@ -510,6 +600,38 @@ export function looksLikeBatchIdentifier(value: string): boolean {
   return /^[A-Z][A-Z/-]*$/.test(v) && v.length <= 6; // short all-uppercase digit-free code
 }
 
+// P2-FIX6: case-insensitive literal (letters only) without making the whole
+// regex case-insensitive — the product capture must keep its uppercase initial.
+function ciLiteral(s: string): string {
+  return s.replace(/[a-z]/gi, (c) => `[${c.toUpperCase()}${c.toLowerCase()}]`);
+}
+const RECALL_PRODUCT_PREFIXES = [
+  "a single lot of", "a single batch of", "one batch of", "one lot of", "a lot of", "all lots of",
+];
+const RECALL_PRODUCT_RE = new RegExp(
+  `${ciLiteral("recall of")} (?:(?:${RECALL_PRODUCT_PREFIXES.map(ciLiteral).join("|")}) )?` +
+    // P2R-11: also stop before a "for Injection/Oral/…" dosage-form phrase, so
+    // "Cyclophosphamide for Injection" yields "Cyclophosphamide", not "… for".
+    `([A-Z][A-Za-z0-9][\\w .\\-]{2,58}?)(?=,| for (?:Injection|Injectable|Oral|Solution|Suspension|Inhalation)| USP| Injection| Tablets| Capsules| due| because| after|\\.|$)`,
+  "g",
+);
+
+// P4R-10: verbs that open a sentence, never a product name. Matched on the
+// FIRST word of a capture (an optional و/ف conjunction stripped, hamza folded).
+const CAPTURE_VERB_PREFIXES = [
+  "تعتمد", "اعتمدت", "توافق", "وافقت", "تعلن", "اعلنت", "يعلن", "اعلن", "تحذر", "حذرت",
+  "تسحب", "سحبت", "تضبط", "ضبطت", "تطلق", "اطلقت", "تصدر", "اصدرت", "توضح", "اوضحت",
+  "تؤكد", "اكدت", "تكشف", "كشفت", "تدشن", "يدشن", "يدشنان", "تمنح", "منحت", "تقر", "اقرت",
+  "تجيز", "اجازت", "تسجل", "سجلت", "تعين", "عينت",
+];
+function startsWithVerb(capture: string): boolean {
+  const first = (capture.trim().split(/\s+/)[0] ?? "")
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[أإآ]/g, "ا");
+  const bare = first.replace(/^[وف](?=.{3,})/, "");
+  return CAPTURE_VERB_PREFIXES.includes(first) || CAPTURE_VERB_PREFIXES.includes(bare);
+}
+
 /**
  * Extract essential entities that appear IN the verified source text: the
  * registered organization name (only if present in the text), country names,
@@ -527,8 +649,27 @@ export function extractEssentialEntities(
   const org = (opts.sourceName ?? "").trim();
   if (org && lower.includes(org.toLowerCase())) out.push(org);
 
+  // P2-FIX6: country terms match only within article lines (navigation/menu
+  // lines are dropped first), and Latin terms only as whole words — "UAE" in a
+  // site menu or inside another token never becomes an essential entity.
+  //
+  //
+  // P2R2-B (owner decision, reverting the P2R-6 ≥2/title/first-300 rule): ANY
+  // mention of a country in the extracted article text makes it essential, as
+  // before Phase 2 — a safety alert must never lose a single "distributed to
+  // Kuwait". The accepted TRADEOFF is the returning warning noise (a country
+  // named once in passing becomes a required entity; e.g. replay A3/B4). Only a
+  // leading dateline (withoutDatelines, start-anchored) and pipe/bullet
+  // navigation lines are excluded.
+  const articleLines = withoutDatelines(
+    t.split(/\n+/).filter((line) => !looksLikeNavList(line, { commas: false })).join("\n"),
+  );
   for (const country of COUNTRY_TERMS) {
-    if (t.includes(country)) out.push(country);
+    const isLatin = /^[A-Za-z]+$/.test(country);
+    const hit = isLatin
+      ? new RegExp(`(?:^|[^A-Za-z0-9])${country}(?![A-Za-z0-9])`).test(articleLines)
+      : articleLines.includes(country);
+    if (hit) out.push(country);
   }
 
   // Batch / lot identifiers.
@@ -549,14 +690,79 @@ export function extractEssentialEntities(
   // phrase bounded by a dosage-form/reason cue so only the product name is
   // captured. Only names that are clearly delimited are taken — no free-form
   // guessing — because a wrong or invented product name is worse than none.
-  const productRes = [
-    /(?:دواء|عقار|لقاح|مستحضر صيدلاني|مستحضر|منتج)\s*«([^»]{2,60})»/g,
-    /(?:دواء|عقار|لقاح|مستحضر صيدلاني|مستحضر|منتج)\s*"([^"]{2,60})"/g,
-    /recall of (?:one lot of |a lot of |all lots of )?([A-Z][A-Za-z0-9][\w .\-]{2,58}?)(?=,| USP| Injection| Tablets| Capsules| due| because| after|\.|$)/g,
+  //
+  // P4R-10: the Arabic keyword must be a WHOLE word (optionally with «ال»), so
+  // «دواء» inside «والدواء» (the agency name «الغذاء والدواء») never anchors a
+  // capture; an ASCII-quoted capture must start at an OPENING quote (an even
+  // number of `"` precede it on the line), so a CLOSING quote after a quoted
+  // agency name never pairs with the next opening one; and a capture that
+  // starts with a verb («تعتمد تسجيل مستحضر») is a sentence, not a name.
+  // P4R3-1: an optional single attached proclitic (و/ف/ب/ل/ك) is allowed
+  // («ودواء»، «بلقاح»); the agency name «(ال)غذاء والدواء» is excluded by a
+  // direct negative match, not by the word boundary.
+  const AR_PRODUCT_KW =
+    "(?<![\\p{L}])(?<!غذاء\\s*)[وفبلك]?(?:ال)?(?:دواء|عقار|لقاح|مستحضر صيدلاني|مستحضر|منتج)(?![\\p{L}])";
+  const productRes: { re: RegExp; asciiQuote: boolean }[] = [
+    { re: new RegExp(`${AR_PRODUCT_KW}\\s*«([^»\\n]{2,60})»`, "gu"), asciiQuote: false },
+    { re: new RegExp(`${AR_PRODUCT_KW}\\s*"([^"\\n]{2,60})"`, "gu"), asciiQuote: true },
+    // P2-FIX6: "a single lot of / a single batch of / one batch of" prefixes, and
+    // the prefix group is case-insensitive ("Recall of A Single Lot of …"),
+    // aligned with safetyIdentifierNeeded. The capture still requires an
+    // uppercase initial and keeps the original boundary lookahead.
+    { re: new RegExp(RECALL_PRODUCT_RE.source, "g"), asciiQuote: false },
   ];
-  for (const re of productRes) {
+  for (const { re, asciiQuote } of productRes) {
     let m: RegExpExecArray | null;
-    while ((m = re.exec(t)) !== null) out.push(m[1].trim());
+    while ((m = re.exec(t)) !== null) {
+      const cap = m[1].trim();
+      if (asciiQuote) {
+        const openIdx = m.index + m[0].lastIndexOf(`"${m[1]}"`);
+        const lineStart = t.lastIndexOf("\n", openIdx - 1) + 1;
+        const quotesBefore = (t.slice(lineStart, openIdx).match(/"/g) ?? []).length;
+        if (quotesBefore % 2 !== 0) {
+          re.lastIndex = m.index + 1; // a closing quote — rescan from just after the keyword start
+          continue;
+        }
+      }
+      if (startsWithVerb(cap)) {
+        re.lastIndex = m.index + 1;
+        continue;
+      }
+      out.push(cap);
+    }
+  }
+
+  // P2R-7b: recall / approval name-capture shapes (capitalised names only):
+  //   company — "X, doing business as Y" → ONE entity «X dba Y» (P2R2-F:
+  //             either name satisfies presence; see salmaWriter.dbaAliases),
+  //             "Recall by X";
+  //   drug    — "approval of X (y)" (X and its INN y), "approved X".
+  // P2R2-D: a possessive is split off — "Eli Lilly's" → "Eli Lilly", and
+  // "Novo Nordisk's Wegovy" → "Novo Nordisk" + "Wegovy".
+  const NAME = `([A-Z][\\w&.'’\\-]*(?:\\s+(?:[A-Z][\\w&.'’\\-]*|of|and|&)){0,5})`;
+  const NOT_A_NAME = /^(?:The|A|An|This|That|These|Its|Their|It|In|On|By|For|FDA|U\.S\.?)$/;
+  const clean = (n: string) => n.replace(/[\s,.]+$/, "").replace(/\s+(?:of|and|&)$/, "").trim();
+  const names = (n: string | undefined): string[] =>
+    (n ?? "")
+      .split(/['’]s\b/)
+      .map((x) => clean(x.replace(/['’]$/, "")))
+      .filter((v) => v && !NOT_A_NAME.test(v) && v.length >= 3);
+  const keep = (n: string | undefined) => out.push(...names(n));
+  const CORP = `(?:,?\\s+(?:LLC|L\\.L\\.C\\.|Inc\\.?|Ltd\\.?|Corp\\.?|Co\\.|Corporation|Company|GmbH|PLC))?`;
+  for (const m of t.matchAll(new RegExp(`${NAME}${CORP},?\\s+(?:doing business as|d/b/a|dba)\\s+${NAME}`, "g"))) {
+    const x = names(m[1]).pop();
+    const y = names(m[2])[0];
+    if (x && y) out.push(`${x} dba ${y}`);
+    else keep(x ?? y);
+  }
+  for (const m of t.matchAll(new RegExp(`[Rr]ecall(?:ed)? by ${NAME}`, "g"))) keep(m[1]);
+  for (const m of t.matchAll(new RegExp(`[Aa]pproval of ${NAME}(?:\\s*\\(([a-z][a-z\\-]{3,})\\))?`, "g"))) {
+    keep(m[1]);
+    keep(m[2]);
+  }
+  for (const m of t.matchAll(new RegExp(`\\bapproved ${NAME}(?:\\s*\\(([a-z][a-z\\-]{3,})\\))?`, "g"))) {
+    keep(m[1]);
+    keep(m[2]);
   }
 
   // Study sample size ("شملت 1200 مشارك" / "عيّنة من 800" / "n = 1500").

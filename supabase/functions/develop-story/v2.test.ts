@@ -11,13 +11,19 @@ import {
   depthCaps,
   detectClaimDomains,
   rankEvidence,
+  resolveDraftSourceLang,
   roleToClass,
   shouldSearchLiterature,
   shouldSearchOpenFda,
   shouldSearchTrials,
 } from "./sourceNetwork.ts";
 import { buildSearchTerm, classifyPubTypes, orderPubmedItems, type PubmedItem } from "./retrievers.ts";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { checkFactGrounding, numberLocaleForLang } from "../ingest-news/salmaWriter.ts";
 import {
+  buildDevelopmentInstructions,
+  DEVELOP_EDITOR_OVERLAY,
   newVsUpdateAdvice,
   parseBriefV2Output,
   type BriefV2,
@@ -167,4 +173,82 @@ test("newVsUpdateAdvice branches (advisory only)", () => {
     newVsUpdateAdvice({ ...VALID, new_now: [VALID.new_now[0]], changed: [] }, true).key,
     "follow_up",
   );
+});
+
+// ---- e2.0 development overlay: depth by significance, not word count -------
+
+test("e2.0 development instructions: no numeric word target, depth sections kept", () => {
+  const t = buildDevelopmentInstructions({ direction: "deeper_explainer", editorNote: null });
+  assert.ok(!t.includes("٤٥٠"));
+  assert.ok(!t.includes("٨٠٠"));
+  assert.ok(!t.includes("الطول المستهدف"));
+  assert.ok(t.includes("لا يوجد طول مستهدف"));
+  assert.ok(t.includes("المعالجة السطحية لقصة كبيرة"));
+  // After-the-News depth is preserved: ordered sections, unknowns, disputes.
+  assert.ok(t.includes("«ما لا نعرفه»"));
+  assert.ok(t.includes("فاعرضه كخلاف صريح بين الموقفين"));
+  assert.ok(t.includes("فقط إذا كان هناك أمر محدّد منتظر فعلاً"));
+  assert.ok(t.includes("المخبرية والتجارب على الحيوانات والدراسات على البشر"));
+  assert.ok(!t.includes("أثبت")); // never model a CLAIM_KEYWORDS word
+});
+
+test("e2.0 develop editor overlay protects facts and material caveats, not word count", () => {
+  assert.ok(!DEVELOP_EDITOR_OVERLAY.includes("٤٥٠"));
+  assert.ok(!DEVELOP_EDITOR_OVERLAY.includes("لا تختصرها"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("يجوز الاختصار من أجل الوضوح"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("لا يُسقط أي حقيقة أو دليل أو رقم أو تحفّظ جوهري"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("«ما لا نعرفه»"));
+});
+
+test("e2.1 develop overlays: grammar pass, attribution, compression — depth kept", () => {
+  const t = buildDevelopmentInstructions({ direction: "deeper_explainer", editorNote: null });
+  assert.ok(t.includes("الضغط في مادة معمّقة يخدم الوضوح لا القِصر"));
+  assert.ok(t.includes("وانسب التوقّعات والتقديرات إلى أصحابها"));
+  assert.ok(t.includes("لا تذكر عدداً غير وارد نصاً في المصدر"));
+  assert.ok(t.includes("الفئات الأكثر عرضة للخطر"));
+  assert.ok(t.includes("المعالجة السطحية لقصة كبيرة")); // depth mandate untouched
+  assert.ok(!t.includes("أثبت"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("المراجعة النهائية الإلزامية للقواعد والمطابقة والانسياب"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("أمانة changes_made"));
+  assert.ok(DEVELOP_EDITOR_OVERLAY.includes("لا تحذف أقسام التحليل أو السياق")); // depth mandate untouched
+});
+
+
+// ---- P4R2: source language threaded into the draft stage ---------------------
+
+// D18 (hotnews.ro, Romanian), verbatim fragment: «peste 1.100 de pacienți».
+const D18_SOURCE =
+  "Datele din studiul de fază 3, care a inclus peste 1.100 de pacienți, au arătat, de asemenea, că vaccinul a redus riscul. Dintre cei care au primit vaccinul în plus față de Keytruda, 82,2% erau încă fără cancer după doi ani.";
+const d18Numbers = (draft: string, sourceLang: string | null) =>
+  checkFactGrounding({ title: "ع", excerpt: "", body: draft }, { sourceText: D18_SOURCE, sourceLang }, "research_study")
+    .errors.filter((e) => e.startsWith("unsupported_number"));
+
+test("P4R2 develop-story resolves the source language (draft_inputs first, then the origin article)", () => {
+  assert.equal(resolveDraftSourceLang({ source_lang: "ro" }, { source_lang: "en" }), "ro");
+  assert.equal(resolveDraftSourceLang({}, { source_lang: "ro" }), "ro");
+  assert.equal(resolveDraftSourceLang({ source_lang: "  " }, { source_lang: "ro" }), "ro");
+  assert.equal(resolveDraftSourceLang(null, null), null);
+  assert.equal(numberLocaleForLang("ro-RO"), "eu");
+  assert.equal(numberLocaleForLang("pt_BR"), "eu");
+});
+
+test("P4R2 D18: with the Romanian source language «1.100» grounds the draft's 1100 (and 82,2 ↔ 82.2)", () => {
+  const draft = "الدراسة كانت في المرحلة الثالثة وشملت أكثر من 1100 مريض. وبقي 82.2% بلا سرطان بعد عامين.";
+  assert.deepEqual(d18Numbers(draft, resolveDraftSourceLang({ source_lang: "ro" }, null)), []);
+  assert.deepEqual(d18Numbers("وشملت أكثر من 1,100 مريض.", "ro"), []);
+});
+
+test("P4R2 D18 counter (NF-1): «1.100» grounds 1100 even without a language; a wrong figure still fails", () => {
+  assert.deepEqual(d18Numbers("وشملت أكثر من 1100 مريض.", null), []);
+  assert.deepEqual(d18Numbers("وشملت أكثر من 1101 مريض.", null), ["unsupported_number:1101"]);
+  assert.deepEqual(d18Numbers("وشملت أكثر من 1101 مريض.", "ro"), ["unsupported_number:1101"]);
+  assert.deepEqual(d18Numbers("وبقي 82.3% بلا سرطان.", "ro"), ["unsupported_number:82.3"]);
+});
+
+test("P4R2 develop-story wiring: the draft stage no longer hard-codes sourceLang: null", () => {
+  const src = readFileSync(fileURLToPath(new URL("./index.ts", import.meta.url)), "utf8");
+  assert.ok(!src.includes("sourceLang: null"));
+  assert.ok(src.includes("const sourceLang = resolveDraftSourceLang(inputs, origin.original);"));
+  assert.ok(src.includes("source_lang: origin.kind === \"article\" ? origin.row.source_lang : null,"));
+  assert.equal((src.match(/sourceLang\b/g) ?? []).length, 3);
 });

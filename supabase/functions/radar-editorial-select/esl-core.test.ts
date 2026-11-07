@@ -316,3 +316,26 @@ test("low-score candidate is skipped with reason", () => {
   assert.equal(res.selected.length, 0);
   assert.equal(res.skipped[0].reason, "low_score");
 });
+
+// ---- Writer-mode gate (Jamal connection, owner-authorized 2026-11-07) -------
+
+test("resolveEslWriterMode: 'pilot' is the default and the fallback for every non-opt-in value", async () => {
+  const { resolveEslWriterMode } = await import("./esl-core.ts");
+  // Missing / empty / non-string → pilot (legacy Writer→Editor path).
+  assert.equal(resolveEslWriterMode(undefined), "pilot");
+  assert.equal(resolveEslWriterMode(null), "pilot");
+  assert.equal(resolveEslWriterMode(""), "pilot");
+  assert.equal(resolveEslWriterMode(1), "pilot");
+  assert.equal(resolveEslWriterMode(true), "pilot");
+  // Unrecognized / near-miss values NEVER select jamal.
+  assert.equal(resolveEslWriterMode("pilot"), "pilot");
+  assert.equal(resolveEslWriterMode("legacy"), "pilot");
+  assert.equal(resolveEslWriterMode("jamal1"), "pilot");
+  assert.equal(resolveEslWriterMode("on"), "pilot");
+});
+
+test("resolveEslWriterMode: 'jamal' only on the exact explicit opt-in (case/space tolerant)", async () => {
+  const { resolveEslWriterMode } = await import("./esl-core.ts");
+  assert.equal(resolveEslWriterMode("jamal"), "jamal");
+  assert.equal(resolveEslWriterMode(" JAMAL "), "jamal");
+});

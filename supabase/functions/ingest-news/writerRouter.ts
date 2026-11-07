@@ -63,7 +63,12 @@ export function selectWriterModel(profile: WritingProfile, config: WriterModelCo
 // run the Salma writer + factual validation). During the controlled pilot the
 // cron must stay on "legacy"; only an explicitly authorized manual request may
 // select "pilot".
-export type WriterMode = "legacy" | "pilot";
+// "jamal" (Jamal integration, Rev 2) is the dedicated editorial agent path:
+// verified-source fetch like "pilot", but the draft is written by Jamal
+// (jamal.ts) instead of the Writer→Editor pipeline. Only an explicitly
+// authorized request that sends writer_mode:"jamal" selects it — the cron,
+// ESL and every existing caller stay on their current modes.
+export type WriterMode = "legacy" | "pilot" | "jamal";
 
 /**
  * Resolve the ingestion run mode from the request. "pilot" is chosen ONLY when
@@ -76,7 +81,7 @@ export type WriterMode = "legacy" | "pilot";
 export function resolveWriterMode(input: { authorized: boolean; requestedMode?: unknown }): WriterMode {
   if (!input.authorized) return "legacy";
   const m = typeof input.requestedMode === "string" ? input.requestedMode.trim().toLowerCase() : "";
-  return m === "pilot" ? "pilot" : "legacy";
+  return m === "pilot" || m === "jamal" ? m : "legacy";
 }
 
 // --- Single-article pilot gate (E1.3E) -------------------------------------
@@ -93,6 +98,10 @@ export type PilotGateDecision =
   // omitted for an ordinary (discovery) pilot so the existing gate contract —
   // { mode: "pilot", limit: 1 } — is unchanged for non-targeted callers.
   | { mode: "pilot"; limit: 1; sourceUrl?: string }
+  // Jamal single-article gate: identical shape and constraints to "pilot"
+  // (explicit limit of exactly 1, optional targeted URL) so Jamal runs are
+  // just as bounded as controlled pilots.
+  | { mode: "jamal"; limit: 1; sourceUrl?: string }
   | { mode: "rejected"; reason: string };
 
 // The only pilot_limit the first controlled pilot accepts.
@@ -147,7 +156,8 @@ export function resolvePilotGate(input: {
   // this branch, so pilot_source_url is ignored there (never activates targeting).
   requestedSourceUrl?: unknown;
 }): PilotGateDecision {
-  if (resolveWriterMode({ authorized: input.authorized, requestedMode: input.requestedMode }) !== "pilot") {
+  const mode = resolveWriterMode({ authorized: input.authorized, requestedMode: input.requestedMode });
+  if (mode === "legacy") {
     return { mode: "legacy" };
   }
   const limit = parsePilotLimit(input.requestedLimit);
@@ -155,8 +165,8 @@ export function resolvePilotGate(input: {
   const targeted = parseTargetedSourceUrl(input.requestedSourceUrl);
   if (targeted === TARGETED_URL_INVALID) return { mode: "rejected", reason: "pilot_source_url_invalid" };
   return targeted
-    ? { mode: "pilot", limit: FIRST_PILOT_LIMIT, sourceUrl: targeted }
-    : { mode: "pilot", limit: FIRST_PILOT_LIMIT };
+    ? { mode, limit: FIRST_PILOT_LIMIT, sourceUrl: targeted }
+    : { mode, limit: FIRST_PILOT_LIMIT };
 }
 
 // --- Bounded representative processing (E1.3E, pure/injectable) -------------

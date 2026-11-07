@@ -35,7 +35,7 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
   clusterRows, bestSource, scoreCandidate, selectBalanced, resolveGcc,
   sourceTier, sourceRole, normalizeDomain, defaultLaneConfig, emptyDayState, isL5Eligible,
-  candidateMergeGroups, dominantStoryType,
+  candidateMergeGroups, dominantStoryType, resolveEslWriterMode,
   type RadarRow, type RegistryEntry, type StoryType, type Lane, type DayState, type ScoredCandidate,
 } from "./esl-core.ts";
 import { isAuthorizedInternal, resolveCap } from "./authz.ts";
@@ -72,6 +72,12 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const OPENROUTER_KEY = Deno.env.get("OPENROUTER_API_KEY") ?? "";
 const INGEST_SECRET = Deno.env.get("INGEST_SECRET") ?? "";
+// Which writer promotion requests (Jamal connection, owner-authorized
+// 2026-11-07). DEFAULT "pilot" — the existing Writer→Editorial-Director path
+// stays the fallback for any missing/unrecognized value. "jamal" only via an
+// exact ESL_WRITER_MODE="jamal" function secret: that flip is the owner's
+// separate activation decision and is NOT part of this integration.
+const ESL_WRITER_MODE = resolveEslWriterMode(Deno.env.get("ESL_WRITER_MODE"));
 
 // ---- classification -------------------------------------------------------
 
@@ -314,7 +320,10 @@ async function promote(admin: SupabaseClient, rep: RadarRow, categorySlug: strin
       headers: { "Content-Type": "application/json", "x-ingest-secret": INGEST_SECRET },
       body: JSON.stringify({
         op: "esl_promote",
-        writer_mode: "pilot",
+        // Gated writer selection: "pilot" unless the owner's ESL_WRITER_MODE
+        // secret says "jamal". Same limit/secret/prepare contract either way;
+        // ingest-news re-gates the mode independently (writerRouter).
+        writer_mode: ESL_WRITER_MODE,
         pilot_limit: 1,
         pilot_source_url: rep.url,
         radar_authorized_source: true,

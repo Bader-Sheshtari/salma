@@ -605,3 +605,20 @@ export function selectBalanced(
 
   return { selected, skipped };
 }
+
+// ---- Writer-mode gate (Jamal connection, owner-authorized 2026-11-07) -------
+
+// Which writer the ESL promotion asks ingest-news to run. "pilot" is the
+// existing Writer→Editorial-Director path and the PERMANENT fallback: it is
+// returned for a missing, empty, non-string, or unrecognized value, so Jamal
+// can only be selected by an exact, explicit opt-in ("jamal", case/space
+// tolerant) in the ESL_WRITER_MODE function secret. Flipping that secret is an
+// owner activation decision; nothing in code defaults to it. ingest-news
+// re-gates the request on its own side (authorized + explicit mode + limit 1),
+// so a bad value here can never widen anything there.
+export type EslWriterMode = "pilot" | "jamal";
+
+export function resolveEslWriterMode(raw: unknown): EslWriterMode {
+  if (typeof raw !== "string") return "pilot";
+  return raw.trim().toLowerCase() === "jamal" ? "jamal" : "pilot";
+}
