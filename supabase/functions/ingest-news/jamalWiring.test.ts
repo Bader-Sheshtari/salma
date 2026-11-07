@@ -73,6 +73,18 @@ test("index wiring: the legacy branch gate is untouched and jamal-mode runs asse
   assert.ok(indexSrc.includes('if (writerMode === "jamal") assertEditorConfig(jamalModel());'));
 });
 
+test("index wiring: URL-scoped Radar authorization applies to jamal mode like pilot (Foundayo regression, 2026-11-07)", () => {
+  // Jamal shares the pilot targeting contract: the synthetic-source bypass for
+  // the exact authorized Radar URL must be honored in BOTH non-legacy modes.
+  // A pilot-only gate here rejects every Jamal promotion whose written source
+  // is an unregistered discovery host with pilot_source_url_not_registered —
+  // including the preserved discovery source after a same-event gate rejection.
+  assert.ok(indexSrc.includes('const radarAuthorizedUrl: string | null = writerMode !== "legacy" ? (opts.radarAuthorizedUrl ?? null) : null;'));
+  assert.ok(!indexSrc.includes('writerMode === "pilot" ? (opts.radarAuthorizedUrl'));
+  // The targeted URL stays non-legacy-gated too (the contract this mirrors).
+  assert.ok(indexSrc.includes('const targetedSourceUrl: string | null = writerMode !== "legacy" ? (opts.targetedSourceUrl ?? null) : null;'));
+});
+
 // ---- Draft safety: Jamal's module is DB-free and publish-free ------------------
 
 test("draft safety: jamal.ts performs no DB access and contains no status/publish writes", () => {
