@@ -84,6 +84,26 @@ export function resolveWriterMode(input: { authorized: boolean; requestedMode?: 
   return m === "pilot" || m === "jamal" ? m : "legacy";
 }
 
+// --- Editor-tier request slice (universal Jamal action, 2026-11-07) ----------
+
+/**
+ * What an EDITOR-tier manual caller (trigger "manual_editor") may request.
+ * Owner decision 2: editors get the Jamal editorial action only — a Jamal
+ * rewrite proposal, or a Jamal single-article PREPARE — never the direct
+ * publish path, never legacy/pilot writers, never admin ops. Pure so the rule
+ * is unit-testable; the entrypoint rejects any other editor request with 403.
+ */
+export function editorRequestAllowed(body: {
+  op?: unknown;
+  writer_mode?: unknown;
+  radar_publish_mode?: unknown;
+}): boolean {
+  if (body.op === "jamal_rewrite") return true;
+  const mode = typeof body.writer_mode === "string" ? body.writer_mode.trim().toLowerCase() : "";
+  const publishMode = typeof body.radar_publish_mode === "string" ? body.radar_publish_mode.trim().toLowerCase() : "";
+  return mode === "jamal" && publishMode === "prepare";
+}
+
 // --- Single-article pilot gate (E1.3E) -------------------------------------
 
 // The first production pilot must touch production paths for at most ONE

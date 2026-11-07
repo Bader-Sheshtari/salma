@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requireStaff } from "@/lib/auth";
 
 // Fast News Radar — one-click publish + on-demand translation server actions.
 //
@@ -107,7 +107,11 @@ async function runRadarPipeline(
   mode: "publish" | "prepare",
   opts?: { categorySlug?: string | null; confirmPossibleDuplicate?: boolean },
 ): Promise<PublishRadarResult> {
-  const admin = await requireAdmin();
+  // Owner decision 2 (2026-11-07): PREPARE («تحرير بواسطة جمال») is available
+  // to all editorial staff; direct PUBLISH stays admin-tier. The edge function
+  // independently enforces the same boundary (editor JWTs are scoped to Jamal
+  // prepare/rewrite only), so this is defense in depth, not the sole gate.
+  const admin = mode === "publish" ? await requireAdmin() : await requireStaff();
   const supabase = await createClient();
   const svc = createAdminClient() as unknown as SupabaseClient;
 
@@ -201,7 +205,12 @@ async function runRadarPipeline(
     //    returning, so the outcome survives even if this action is terminated.
     const { data, error } = await supabase.functions.invoke("ingest-news", {
       body: {
-        writer_mode: "pilot",
+        // Universal Jamal action (owner decision 1, 2026-11-07): Jamal is the
+        // sole writer for manual Radar PREPARATION («تحرير بواسطة جمال»). The
+        // direct-publish path (نشر مباشر) deliberately keeps the pilot writer
+        // until the owner decides its fate — Jamal articles are never
+        // auto-published, and that path publishes on success.
+        writer_mode: mode === "prepare" ? "jamal" : "pilot",
         pilot_limit: 1,
         pilot_source_url: row.url,
         radar_authorized_source: true,

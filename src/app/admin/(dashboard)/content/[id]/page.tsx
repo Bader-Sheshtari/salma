@@ -28,6 +28,7 @@ import ActivityTimeline from "../ActivityTimeline";
 import { ContentForm } from "../ContentForm";
 import RejectButton from "../RejectButton";
 import JamalBadge from "../JamalBadge";
+import JamalRewritePanel from "../JamalRewritePanel";
 import { EvidencePanel } from "../EvidencePanel";
 import { ArticleStatsPanel } from "../ArticleStatsPanel";
 import VersionView from "../VersionView";
@@ -35,6 +36,9 @@ import VersionsPanel from "../VersionsPanel";
 import { requireStaff } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
+// The Jamal rewrite action writes + validates within the request (universal
+// Jamal action); same budget as the develop pages.
+export const maxDuration = 300;
 
 const STATUS_LABEL: Record<string, string> = {
   published: "منشور",
@@ -413,6 +417,12 @@ export default async function EditContent({ params, searchParams }: Props) {
           evidence this story rests on and what it can/can't support. Rendered
           only when the ESL pipeline produced an analysis row. */}
       <EvidencePanel evidence={evidence} />
+
+      {/* Universal Jamal action: propose a rewrite of THIS article; the text
+          changes only on explicit acceptance (previous version preserved). */}
+      {!content.deleted_at ? (
+        <JamalRewritePanel contentId={content.id} autoOpen={first(sp.jamal) === "1"} />
+      ) : null}
 
       <ContentForm content={data.content} sources={data.sources} media={data.media} categories={categories} />
     </div>

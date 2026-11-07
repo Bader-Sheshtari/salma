@@ -794,14 +794,15 @@ export default function RadarInbox({
                       </>
                     ) : (
                       <>
-                        {/* PRIMARY: prepare a draft in the Content editor. */}
+                        {/* PRIMARY: Jamal prepares a PENDING draft in the Content
+                            editor (universal Jamal action — writer_mode jamal). */}
                         <button
                           type="button"
                           disabled={isBusy}
                           onClick={() => doPrepare(a)}
                           className="rounded-lg bg-teal px-3 py-1.5 text-[12.5px] font-bold text-white disabled:opacity-50"
                         >
-                          تحرير في سلمى
+                          تحرير بواسطة جمال
                         </button>
                         {/* SECONDARY: direct publish (validated one-click pipeline). */}
                         <button

@@ -249,6 +249,9 @@ export default function ContentTable({
       danger: true,
       onClick: () => moveToTrash(row),
     };
+    // Universal Jamal action: opens the article's rewrite panel (proposal +
+    // explicit acceptance there — nothing is generated from the list itself).
+    const jamal: Action = { key: "jamal", label: "تحرير بواسطة جمال", href: `/admin/content/${row.id}?jamal=1` };
     if (row.deleted_at) {
       return {
         visible: [
@@ -266,6 +269,7 @@ export default function ContentTable({
             edit,
           ],
           menu: [
+            jamal,
             {
               key: "unpublish",
               label: "إلغاء النشر",
@@ -286,13 +290,14 @@ export default function ContentTable({
               onClick: () => changeStatus(row, "published", CONFIRM_REPUBLISH),
             },
           ],
-          menu: [trash],
+          menu: [jamal, trash],
         };
       case "draft":
         return {
           visible: [edit],
           menu: [
             { key: "submit", label: "إرسال للمراجعة", onClick: () => changeStatus(row, "pending") },
+            jamal,
             trash,
           ],
         };
@@ -306,7 +311,7 @@ export default function ContentTable({
         };
       default:
         // pending (seen in الكل / search results): triage happens in its tab.
-        return { visible: [preview("فتح معاينة"), edit], menu: [trash] };
+        return { visible: [preview("فتح معاينة"), edit], menu: [jamal, trash] };
     }
   }
 

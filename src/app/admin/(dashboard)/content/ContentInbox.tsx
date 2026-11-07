@@ -436,6 +436,9 @@ export default function ContentInbox({
                         <RowMenu
                           visible={[]}
                           menu={[
+                            // Universal Jamal action: opens the article's
+                            // rewrite panel (proposal + explicit acceptance).
+                            { key: "jamal", label: "تحرير بواسطة جمال", href: `/admin/content/${c.id}?jamal=1` },
                             {
                               key: "trash",
                               label: "نقل إلى المحذوفات",
