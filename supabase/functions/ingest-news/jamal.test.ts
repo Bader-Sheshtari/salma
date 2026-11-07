@@ -130,7 +130,7 @@ test("config: select_then_write requires selection instructions; stub is clearly
 
 test("j1.0: the owner-approved identity resolves, cites exactly the two approved references, and is clearly versioned", async () => {
   const { J1_0, JAMAL_ACTIVE_CONFIG } = await import("./jamal.ts");
-  assert.equal(J1_0.version, "j1.0");
+  assert.equal(J1_0.version, "j1.0-c1");
   assert.equal(J1_0.technique, "single_pass");
   assert.deepEqual(
     [...J1_0.referenceExamples].sort(),
@@ -151,6 +151,18 @@ test("j1.0: the owner-approved identity resolves, cites exactly the two approved
   assert.ok(w.includes("Integration transport envelope"));
   // The identity text itself embeds no reference bodies (registry supplies them).
   assert.ok(!w.includes("تشير مراجعة علمية جديدة"));
+  // c1 clarification (owner-approved 2026-11-08): present, BETWEEN the verbatim
+  // identity and the transport envelope, with the owner's example headline and
+  // the not-a-template reminder; the identity version line stays untouched.
+  const c1At = w.indexOf("Editorial clarification c1");
+  assert.ok(c1At > w.indexOf("Pre-submission checklist"));
+  assert.ok(c1At < w.indexOf("Integration transport envelope"));
+  assert.ok(w.includes("Headline clarity."));
+  assert.ok(w.includes("Body accessibility."));
+  assert.ok(w.includes("دواء تجريبي يُظهر نتائج واعدة لعلاج مضاعفات خطيرة لدى أطفال مصابين بمرض وراثي نادر"));
+  assert.ok(w.includes("NOT a headline template"));
+  assert.ok(w.includes("accuracy, safety conditions and evidence limits win"));
+  assert.ok(w.includes("Version: j1.0, 6 November 2026."));
 });
 
 // ---- Input sanitizer ---------------------------------------------------------

@@ -343,10 +343,37 @@ const J1_0_ENVELOPE = `
 - إضافة منصة النشر: "excerpt" = سطر تعريفي واحد للقارئ المتصفح تتطلبه المنصة، يضيف شيئاً ولا يكرر صياغة العنوان أو الجملة الأولى.
 `;
 
+// ---- c1 — editorial clarification (owner-approved 2026-11-08) ----------------
+//
+// A small, targeted addendum the owner approved verbatim after reviewing the
+// first real end-to-end article (Nature/EJHG Noonan test). It sharpens
+// headline/body accessibility emphasis WITHOUT touching the identity text
+// above, the approved references, the atlas, or any factual safety rule.
+// Assembled between the identity and the transport envelope; the config
+// version becomes "j1.0-c1" so audit rows distinguish pre/post-c1 runs.
+const J1_0_CLARIFICATION_C1 = `
+---
+[Editorial clarification c1 — approved by Salma's authorized editor, 7 November 2026. This addendum sharpens emphasis within the identity above; it relaxes no accuracy, safety or uncertainty rule. Wherever anything here could seem to conflict with the rules above, accuracy, safety conditions and evidence limits win.]
+
+Headline clarity.
+	•	Write the headline for a reader with no medical knowledge: what happened, and why it matters to them, in plain Arabic. Clear, engaging, immediately understandable and accurate — engagement never at accuracy's expense.
+	•	Lead with the most interesting VERIFIED finding, and keep the essential uncertainty in the wording itself (e.g. «قد»، «إشارات أولية»، «في دراسة صغيرة») when the evidence is early.
+	•	Avoid long, academic headlines and medical terminology the reader does not need: no study-title phrasing, no biomarker, pathway or technical disease terms where a plain description serves. A rare condition's name may move out of the headline when a plain description of the patients makes it clearer («أطفال مصابون بمرض وراثي نادر») — the body then names the condition precisely at first mention.
+
+Body accessibility.
+	•	Use natural, accessible Arabic throughout. When an unfamiliar condition or technical term must appear, explain it briefly at first mention — one plain clause saying what it is or does for the reader, not a textbook definition.
+	•	Omit technical measurements, biomarker values and drug dosages unless they are essential to understanding the finding, who it applies to (eligibility), or patient safety. An experimental dose range in a small study belongs in the internal note, not the article; a dosing or eligibility condition that defines who may use an approved treatment stays in the article — clinical-completeness protection is unchanged.
+
+Worked contrast (from the last real test, style only):
+	•	Before: «دواء تجريبي يعطي إشارات أولية لدى أطفال مصابين بمتلازمة نونان ومضاعفات قلبية أو لمفاوية شديدة»
+	•	In this spirit: «دواء تجريبي يُظهر نتائج واعدة لعلاج مضاعفات خطيرة لدى أطفال مصابين بمرض وراثي نادر» — plain description in the headline; «متلازمة نونان» named in the body's first sentence.
+	•	Reminder: this is an illustrative example of editorial judgment, NOT a headline template. Vary headlines naturally according to each story.
+`;
+
 export const J1_0: JamalConfig = Object.freeze({
-  version: "j1.0",
+  version: "j1.0-c1",
   technique: "single_pass" as JamalTechnique,
-  instructions: { write: J1_0_IDENTITY + J1_0_ENVELOPE },
+  instructions: { write: J1_0_IDENTITY + J1_0_CLARIFICATION_C1 + J1_0_ENVELOPE },
   referenceExamples: ["benchmark-1-alzheimers", "benchmark-2-blues-inflammation"],
   // Editorial Atlas v1.2 (26 cases) attached as a style reference per the
   // owner's instruction of 2026-11-07. The identity text above is UNCHANGED;
