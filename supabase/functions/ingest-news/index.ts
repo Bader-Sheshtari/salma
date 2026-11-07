@@ -1674,6 +1674,22 @@ async function finalizeRadarPublish(
   //     Leave it `pending` and mark the Radar row 'draft' linked to it — never
   //     publish here. `needs_cover` marks a missing cover image for the UI.
   if (mode === "prepare") {
+    // Apply the ESL/operator-selected category exactly as the direct-publish
+    // branch (a) does — validated against the categories table, so only an
+    // existing slug can ever be applied. Previously the prepare branch
+    // returned without this, silently discarding radar_category_slug on every
+    // ESL promotion (Foundayo 2026-11-07: requested 'gulf', kept the
+    // classifier's 'world'). The row is still pending; a human can re-assign
+    // in review as always.
+    const prepareCategory = await resolveRadarCategory(admin, categorySlugInput);
+    if (prepareCategory) {
+      await admin
+        .from("content")
+        .update({ category_slug: prepareCategory })
+        .eq("id", contentId)
+        .eq("status", "pending")
+        .is("deleted_at", null);
+    }
     const needsCover = !(await contentHasCover(admin, contentId));
     await setRadarTerminal(admin, radarId, {
       publish_status: "draft",

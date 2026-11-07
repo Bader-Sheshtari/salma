@@ -73,6 +73,18 @@ test("index wiring: the legacy branch gate is untouched and jamal-mode runs asse
   assert.ok(indexSrc.includes('if (writerMode === "jamal") assertEditorConfig(jamalModel());'));
 });
 
+test("index wiring: the prepare branch applies the validated radar category (Foundayo 'gulf'→'world' regression, 2026-11-07)", () => {
+  // finalizeRadarPublish's prepare branch must resolve and apply the
+  // ESL/operator category exactly like the direct-publish branch — previously
+  // it returned early and every ESL promotion discarded radar_category_slug.
+  const prepareAt = indexSrc.indexOf('if (mode === "prepare") {');
+  assert.ok(prepareAt > 0);
+  const prepareBlock = indexSrc.slice(prepareAt, indexSrc.indexOf("return { status: \"draft\"", prepareAt));
+  assert.ok(prepareBlock.includes("await resolveRadarCategory(admin, categorySlugInput)"));
+  assert.ok(prepareBlock.includes("category_slug: prepareCategory"));
+  assert.ok(prepareBlock.includes('.eq("status", "pending")'));
+});
+
 test("index wiring: URL-scoped Radar authorization applies to jamal mode like pilot (Foundayo regression, 2026-11-07)", () => {
   // Jamal shares the pilot targeting contract: the synthetic-source bypass for
   // the exact authorized Radar URL must be honored in BOTH non-legacy modes.
