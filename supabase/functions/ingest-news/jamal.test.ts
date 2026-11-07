@@ -130,7 +130,7 @@ test("config: select_then_write requires selection instructions; stub is clearly
 
 test("j1.0: the owner-approved identity resolves, cites exactly the two approved references, and is clearly versioned", async () => {
   const { J1_0, JAMAL_ACTIVE_CONFIG } = await import("./jamal.ts");
-  assert.equal(J1_0.version, "j1.0-c1");
+  assert.equal(J1_0.version, "j1.0-c2");
   assert.equal(J1_0.technique, "single_pass");
   assert.deepEqual(
     [...J1_0.referenceExamples].sort(),

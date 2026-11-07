@@ -370,10 +370,30 @@ Worked contrast (from the last real test, style only):
 	•	Reminder: this is an illustrative example of editorial judgment, NOT a headline template. Vary headlines naturally according to each story.
 `;
 
+// ---- c2 — article-body purity (owner-approved 2026-11-07) --------------------
+//
+// Approved after the Foundayo supervised review: the article closed with a
+// paragraph of source-gap meta-commentary («ولم يذكر الخبر المنشور…») with an
+// English connector ("beyond") embedded in the Arabic prose — observations the
+// model had ALSO correctly filed in review_notes. c2 restates body purity
+// within the identity's own rules (checklist: uncertainties belong in the
+// internal note); it relaxes no accuracy, safety or uncertainty rule, and the
+// identity text, references and atlas are untouched. The config version
+// becomes "j1.0-c2" so audit rows distinguish pre/post-c2 runs.
+const J1_0_CLARIFICATION_C2 = `
+---
+[Editorial clarification c2 — approved by Salma's authorized editor, 7 November 2026. Scope: article-body purity; this addendum relaxes no accuracy, safety or uncertainty rule. Wherever anything here could seem to conflict with the rules above, accuracy, safety conditions and evidence limits win.]
+
+Article-body purity.
+	•	The article body is finished news prose for the reader, in Arabic only — the sole exceptions are proper names, acronyms and scientific terms with no established Arabic form (GLP-1, DOI, Foundayo). Never let an English word slip into Arabic prose (e.g. "beyond", "however").
+	•	Observations about what the SOURCE did not mention or did not publish (missing study details, unstated eligibility, absent safety warnings) belong ONLY in the internal review notes — never in the article as commentary about the source («لم يذكر الخبر…», «لم يورد المصدر…»).
+	•	Reader-essential uncertainty and safety limits stay in the article, phrased about the facts themselves («لم تُحدَّد بعد الفئات المؤهلة بدقة») — never about the news article that reported them.
+`;
+
 export const J1_0: JamalConfig = Object.freeze({
-  version: "j1.0-c1",
+  version: "j1.0-c2",
   technique: "single_pass" as JamalTechnique,
-  instructions: { write: J1_0_IDENTITY + J1_0_CLARIFICATION_C1 + J1_0_ENVELOPE },
+  instructions: { write: J1_0_IDENTITY + J1_0_CLARIFICATION_C1 + J1_0_CLARIFICATION_C2 + J1_0_ENVELOPE },
   referenceExamples: ["benchmark-1-alzheimers", "benchmark-2-blues-inflammation"],
   // Editorial Atlas v1.2 (26 cases) attached as a style reference per the
   // owner's instruction of 2026-11-07. The identity text above is UNCHANGED;
@@ -421,6 +441,73 @@ export function sanitizeJamalInput(text: string): {
   }
   if (cut === -1) return { text, applied: false, version: JAMAL_SANITIZER_VERSION };
   return { text: text.slice(0, cut).trimEnd(), applied: true, version: JAMAL_SANITIZER_VERSION };
+}
+
+// ---- Article-body purity checks (c2; review-only, pure) ---------------------
+//
+// Deterministic backstops for the c2 clarification, run over Jamal's FINAL
+// article fields. Both are conservative by owner mandate (2026-11-07): they
+// must never flag legitimate medical terminology, drug names, abbreviations
+// or proper names — regardless of capitalization — and a hit is REVIEW-ONLY:
+// the caller routes the draft to human review and records a note; nothing is
+// removed, rewritten or rejected because of these checks.
+
+// Accidental-English connector/function words: closed, conservative list.
+// These words are never legitimate scientific terms, so flagging them inside
+// Arabic prose has effectively zero false-positive risk. Deliberately NOT a
+// general English dictionary — "orforglipron", "semaglutide" or any other
+// lowercase drug/term name must pass.
+const EN_CONNECTOR_LEAKS = new Set([
+  "beyond", "however", "despite", "although", "though", "whereas", "moreover",
+  "furthermore", "meanwhile", "therefore", "thus", "hence", "instead", "rather",
+  "regarding", "concerning", "according", "accordingly", "nevertheless",
+  "nonetheless", "otherwise", "whether", "unless", "until", "during", "between",
+  "among", "within", "without", "through", "throughout", "toward", "towards",
+  "about", "above", "below", "under", "over", "while", "since", "because",
+  "besides", "except", "including", "excluding", "also", "only", "both",
+  "either", "neither", "such", "very", "much", "many", "more", "most", "less",
+  "least", "and", "but", "the", "with", "from", "into", "onto", "upon", "than",
+  "then", "when", "where", "which", "that", "this", "these", "those", "they",
+  "their", "some", "same", "other", "another", "each", "every", "any", "all",
+]);
+
+/** Accidental English connector/function words embedded in the text
+ *  (deduped, lowercased). Pure-alphabetic Latin tokens only; membership in
+ *  the closed list above is required, so names/terms/acronyms always pass. */
+export function latinLeakWords(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of String(text ?? "").matchAll(/[A-Za-z]+/g)) {
+    // Fully-lowercase tokens only: capitalized words are proper-noun shaped
+    // ("The Lancet", "New England Journal") and acronyms are uppercase (FDA,
+    // DOI) — both must pass. An accidental connector leak is lowercase.
+    if (m[0] !== m[0].toLowerCase()) continue;
+    if (EN_CONNECTOR_LEAKS.has(m[0])) out.add(m[0]);
+  }
+  return [...out];
+}
+
+// Source-gap meta-commentary: sentences that talk about what «الخبر/المصدر/
+// التقرير/المقال» did not mention — editorial shop-talk that belongs in the
+// internal review notes. Reader-facing uncertainty about the FACTS themselves
+// («لم تُنشر نتائج الدراسة بعد», «لم تُحدَّد الفئات المؤهلة») has a different
+// subject and is deliberately NOT matched.
+// NOTE: no \b after Arabic — JS \b is ASCII-only and never matches between an
+// Arabic letter and a space; an explicit lookahead marks the word end instead.
+const META_NEG = /(?:^|\s)(?:و|ف)?(?:لم|لا)\s+(?:يذكرها|يوردها|يذكر|تذكر|يورد|تورد|يوضح|توضح|يحدد|تحدد|يُحدد)(?=[\s،.:؛!؟]|$)/;
+const META_SUBJECT = /(?:الخبر|المصدر|التقرير|المقال)(?:\s+(?:المنشور|الأصلي|المتاح))?/;
+
+/** Sentences of the article body that comment on what the SOURCE did not
+ *  state (deduped, in order). Sentence-level: a long sentence that opens with
+ *  «ولم يذكر الخبر…» flags as a whole even when later clauses elide the
+ *  subject («كما لم يورد تحذيرات السلامة»). */
+export function sourceMetaCommentary(body: string): string[] {
+  const out: string[] = [];
+  for (const raw of String(body ?? "").split(/(?<=[.!؟?])\s+|\n+/)) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (META_NEG.test(s) && META_SUBJECT.test(s)) out.push(s);
+  }
+  return out;
 }
 
 // ---- Structured output schemas ----------------------------------------------
@@ -774,10 +861,22 @@ export async function writeJamalArticle(input: {
     figuresLost: (before, after) => lostFigures(before, after, verifiedFactText),
   });
 
+  // Article-body purity flags (c2, review-only): accidental English connectors
+  // in Arabic prose, and source-gap meta-commentary that belongs in the
+  // internal notes. NEVER edits, deletes or rejects — a hit only routes the
+  // draft to human review below and records what was seen for the reviewer.
+  const leakWords = latinLeakWords(
+    [ran.draft.article.title, ran.draft.article.excerpt, ran.draft.article.body].join("\n"),
+  );
+  const metaCommentary = sourceMetaCommentary(ran.draft.article.body);
+  const purityNotes: string[] = [];
+  if (leakWords.length > 0) purityNotes.push(`فحص آلي: كلمات إنجليزية مُقحمة في النص العربي (${leakWords.join("، ")}) — للمراجعة البشرية.`);
+  if (metaCommentary.length > 0) purityNotes.push(`فحص آلي: تعليق تحريري عن المصدر داخل نص المقال («${metaCommentary[0].slice(0, 80)}…») — للمراجعة البشرية.`);
+
   const jamalRun: JamalRunRecord = {
     ...runBase,
     selection: ran.draft.trace.selection ?? null,
-    review_notes: ran.draft.reviewNotes,
+    review_notes: [...ran.draft.reviewNotes, ...purityNotes],
     source_reference: ran.draft.sourceReference || null,
     accepted: fidelity.decision !== "reject",
     validation_result: fidelity.decision === "reject" ? (fidelity.rejectionReason ?? "validation_failed") : fidelity.decision,
@@ -807,7 +906,9 @@ export async function writeJamalArticle(input: {
       [finalArticle.title, finalArticle.excerpt, finalArticle.body].join("\n"),
       verifiedFactText,
       null,
-    ).length > 0;
+    ).length > 0 ||
+    // c2 purity flags (review-only, see above): route to a human, never block.
+    leakWords.length > 0 || metaCommentary.length > 0;
 
   return {
     ok: true,
