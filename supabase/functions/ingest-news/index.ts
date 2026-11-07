@@ -656,9 +656,15 @@ async function runIngestion(
   // E1.3F: the targeted-pilot URL is honored ONLY in pilot mode; legacy/cron
   // runs ignore it so the scheduled path can never be steered to an arbitrary URL.
   const targetedSourceUrl: string | null = writerMode !== "legacy" ? (opts.targetedSourceUrl ?? null) : null;
-  // Honored ONLY in pilot mode; the entrypoint additionally restricts it to an
-  // authenticated manual trigger. Never consulted in legacy/cron runs.
-  const radarAuthorizedUrl: string | null = writerMode === "pilot" ? (opts.radarAuthorizedUrl ?? null) : null;
+  // Honored in pilot AND jamal modes (the entrypoint additionally restricts it
+  // to an authenticated manual trigger or the ESL promotion); never consulted
+  // in legacy/cron runs. Jamal shares the pilot targeting contract, so the
+  // URL-scoped Radar authorization (synthetic source for the exact authorized
+  // URL) must apply there too — without it, any Jamal promotion whose written
+  // source is an unregistered discovery host (e.g. a GCC publisher, or the
+  // preserved discovery source after a same-event gate rejection) is wrongly
+  // rejected with pilot_source_url_not_registered (2026-11-07 Foundayo retest).
+  const radarAuthorizedUrl: string | null = writerMode !== "legacy" ? (opts.radarAuthorizedUrl ?? null) : null;
   // Jamal (Rev 2): verified-source single-article mode like "pilot", but the
   // draft is written by Jamal instead of the Writer→Editor pipeline. Shares the
   // pilot cap/targeting above; the legacy path and "pilot" stay byte-identical.
