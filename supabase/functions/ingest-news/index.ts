@@ -75,6 +75,7 @@ import {
   evidenceDbDeps,
   makeEvidenceAnalyzer,
   type ResolvedEvidenceSource,
+  liveSameEventCheck,
   resolveAnalysisSource,
   runEscalation,
   type Citation,
@@ -1834,7 +1835,14 @@ Deno.serve(async (req: Request) => {
         titleAr: asTrimmedTop(b.title_ar),
       });
       if (esc.status === "upgraded" && /^https?:\/\//i.test(esc.selected_editorial_source.url)) {
-        resolved = await resolveAnalysisSource(esc, url);
+        // Same-event gate: the dry run exercises the LIVE promotion behavior,
+        // so the upgraded source is accepted only on a confirmed same-event
+        // verdict against its fetched text (otherwise discovery is preserved).
+        resolved = await resolveAnalysisSource(
+          esc,
+          url,
+          liveSameEventCheck({ title: asTrimmedTop(b.title), titleAr: asTrimmedTop(b.title_ar) }),
+        );
       }
     }
 
@@ -1985,7 +1993,35 @@ Deno.serve(async (req: Request) => {
         // supporting → discovery, and hand the Writer the strongest FETCHABLE
         // one. The identified primary is preserved as provenance either way;
         // it is never silently presented as the analyzed/written source.
-        evidenceResolved = await resolveAnalysisSource(escalation, radarAuthorizedUrl);
+        // Same-event gate (owner mandate 2026-11-07): a fetchable upgrade is
+        // additionally accepted ONLY when a bounded classifier confirms it
+        // covers the SAME specific news event as the selected story; anything
+        // short of that confirmation preserves the original story.
+        evidenceResolved = await resolveAnalysisSource(
+          escalation,
+          radarAuthorizedUrl,
+          liveSameEventCheck({ title: asTrimmed(bodyRec.esl_title), titleAr: asTrimmed(bodyRec.esl_title_ar) }),
+        );
+        if (evidenceResolved.kind === "discovery_fallback" && evidenceResolved.gate) {
+          const g = evidenceResolved.gate;
+          const rejected = g.primary === "different_event" || g.primary === "unconfirmed" ||
+            g.supporting === "different_event" || g.supporting === "unconfirmed";
+          if (rejected) {
+            // Make the preserved-story decision visible in the escalation audit
+            // row (best-effort; never blocks the run). The article itself still
+            // lands PENDING for human review with discovery provenance.
+            const note = ` · same-event check: primary=${g.primary ?? "n/a"}, supporting=${g.supporting ?? "n/a"} — selected story preserved`;
+            try {
+              const ck = asTrimmed(bodyRec.esl_cluster_key) ?? radarArticleId;
+              const { data: escRow } = await admin.from("radar_source_escalation").select("upgrade_reason").eq("cluster_key", ck).maybeSingle();
+              const prev = String((escRow as { upgrade_reason?: string } | null)?.upgrade_reason ?? "");
+              if (!prev.includes("same-event check")) {
+                await admin.from("radar_source_escalation").update({ upgrade_reason: prev + note, updated_at: new Date().toISOString() }).eq("cluster_key", ck);
+              }
+            } catch { /* audit best-effort */ }
+            console.log(`escalation same-event gate: discovery preserved (${note.trim()})`);
+          }
+        }
         if (evidenceResolved.kind !== "discovery_fallback") {
           // Writer fetches the resolved primary/supporting source (SSRF-safe
           // fetch re-validates).

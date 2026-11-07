@@ -178,6 +178,61 @@ export function sameDevelopment(candidateTitle: string, discoveryTitles: (string
   return false;
 }
 
+// ---- same-event verification (owner mandate 2026-11-07) --------------------
+// An upgraded source may replace the selected story ONLY when it covers the
+// SAME specific news event — not merely the same disease, place or topic
+// (incident: a Feb-2026 CDC wastewater-surveillance MMWR replaced a Nov-2026
+// infant-death story; both shared "wisconsin"+"measles"). These helpers are
+// pure: the prompt builder and the strict verdict parser for the ONE bounded
+// classifier call the resolver makes against the FETCHED candidate text.
+// Publication dates are EVIDENCE inside the verdict, never a rigid age cutoff:
+// a legitimate primary document (study/decision/report) that the story is
+// directly about counts as the same event even when published much earlier.
+
+export type SameEventVerdict = "same_event" | "different_event" | "unconfirmed";
+
+export type SameEventFacts = {
+  discoveryTitle: string | null;
+  discoveryTitleAr: string | null;
+  candidateTitle: string;
+  /** Opening of the FETCHED candidate text (the resolver slices ~600 chars). */
+  candidateExcerpt: string;
+  candidatePublishedDate: string | null;
+  /** Today, ISO date — context for the date-as-evidence reasoning. */
+  nowIso: string;
+};
+
+export function sameEventPrompt(f: SameEventFacts): { system: string; user: string } {
+  const system =
+    "You verify news-source matching for a health newsroom. Decide whether the CANDIDATE document reports the SAME specific news event/development as the SELECTED story. " +
+    "Rules: the same disease, the same place, or the same organization is NOT enough — it must be the same specific occurrence, announcement, decision or finding. " +
+    "A primary document (original study, regulatory decision, official report) that the selected story is directly ABOUT counts as the same event even if it was published earlier. " +
+    "Use the publication dates as evidence of whether they describe the same development, never as an age cutoff by itself. " +
+    "Answer with exactly one token: SAME_EVENT or DIFFERENT_EVENT.";
+  const user = [
+    `SELECTED story (picked from roughly the last 30 hours of health news; today is ${f.nowIso}):`,
+    `- Title: ${f.discoveryTitle ?? "(none)"}`,
+    `- Arabic title: ${f.discoveryTitleAr ?? "(none)"}`,
+    "",
+    "CANDIDATE document (fetched):",
+    `- Title: ${f.candidateTitle || "(none)"}`,
+    `- Published date: ${f.candidatePublishedDate ?? "unknown"}`,
+    `- Opening text: ${f.candidateExcerpt || "(empty)"}`,
+  ].join("\n");
+  return { system, user };
+}
+
+/** Strict parse: only an unambiguous single-answer counts; anything else is
+ *  "unconfirmed" (and an unconfirmed replacement is never accepted). */
+export function parseSameEventVerdict(raw: string | null | undefined): SameEventVerdict {
+  const t = String(raw ?? "").toUpperCase();
+  const same = /\bSAME_EVENT\b/.test(t);
+  const diff = /\bDIFFERENT_EVENT\b/.test(t);
+  if (same && !diff) return "same_event";
+  if (diff && !same) return "different_event";
+  return "unconfirmed";
+}
+
 // ---- orchestrator (injectable I/O) ----------------------------------------
 
 export type EscalationInput = {
