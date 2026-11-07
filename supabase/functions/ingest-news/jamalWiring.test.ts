@@ -87,9 +87,27 @@ test("draft safety: jamal.ts performs no DB access and contains no status/publis
   assert.ok(!jamalSrc.includes('get("OPENROUTER_WRITER'));
 });
 
-// ---- No Radar/ESL change --------------------------------------------------------
+// ---- ESL connection (owner-authorized 2026-11-07) -------------------------------
+// Supersedes the step-1-3 "ESL untouched" acceptance: ESL may now request
+// writer_mode:"jamal", but ONLY through the gated env resolver — the literal
+// "jamal" never appears as a hardcoded writer_mode, and the default stays the
+// legacy Writer->Editorial-Director pilot path.
 
-test("ESL untouched: radar-editorial-select still promotes with writer_mode pilot and never jamal", () => {
-  assert.ok(eslSrc.includes('writer_mode: "pilot"'));
-  assert.ok(!eslSrc.toLowerCase().includes("jamal"));
+test("ESL connection: writer_mode comes ONLY from the gated ESL_WRITER_MODE resolver (default pilot)", () => {
+  // The promote body routes through the resolver, not a literal.
+  assert.ok(eslSrc.includes("writer_mode: ESL_WRITER_MODE"));
+  assert.ok(eslSrc.includes('resolveEslWriterMode(Deno.env.get("ESL_WRITER_MODE"))'));
+  // No hardcoded mode anywhere in ESL: neither the old pilot literal nor a
+  // jamal literal can bypass the gate.
+  assert.ok(!eslSrc.includes('writer_mode: "pilot"'));
+  assert.ok(!eslSrc.includes('writer_mode: "jamal"'));
+  // The single-article limit contract ingest-news' jamal gate requires.
+  assert.ok(eslSrc.includes("pilot_limit: 1"));
+});
+
+test("ESL connection: the resolver itself defaults to pilot and only an exact opt-in selects jamal", async () => {
+  const { resolveEslWriterMode } = await import("../radar-editorial-select/esl-core.ts");
+  assert.equal(resolveEslWriterMode(undefined), "pilot");
+  assert.equal(resolveEslWriterMode("anything-else"), "pilot");
+  assert.equal(resolveEslWriterMode("jamal"), "jamal");
 });
