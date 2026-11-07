@@ -1482,6 +1482,18 @@ const CLAIM_KEYWORDS = [
   "أثبت", "مثبت", "مضمون", "علاج نهائي", "شفاء تام", "آمن تماماً", "آمن تماما",
   "معتمد رسمياً", "فعّال بنسبة", "يقضي نهائياً", "يشفي",
 ];
+// J1-FPD (owner-authorized 2026-11-07): cross-language claim support. The
+// claim gate required the ARABIC keyword in the source, so an English source
+// stating "proven" could not support «مثبت» — a pure language false positive
+// (WHO climate-health live test: source said "proven" 3×). Each entry lists
+// the English forms that state the SAME claim, matched as standalone words,
+// case-insensitive — "unproven" never matches. Mapped lemma pair ONLY
+// (مثبت/أثبت ↔ proven/proved); every other claim keyword still requires
+// Arabic-side support, and the draft-side negation logic is untouched.
+const CLAIM_KEYWORD_EN_SUPPORT: Readonly<Record<string, RegExp>> = Object.freeze({
+  "مثبت": /\b(?:proven|proved)\b/i,
+  "أثبت": /\b(?:proven|proved)\b/i,
+});
 // Causation verbs vs. association markers (research_study, Step 3E / Step 7).
 const CAUSATION_MARKERS = ["يسبب", "يسبّب", "يؤدي إلى", "يمنع", "يعالج", "يقي من"];
 const ASSOCIATION_MARKERS = ["ارتبط", "مرتبط", "علاقة", "ترافق", "associat", "correlat", "link"];
@@ -2640,6 +2652,9 @@ export function checkFactGrounding(
   //    non-negated occurrence still blocks.
   for (const kw of CLAIM_KEYWORDS) {
     if (!generated.includes(kw) || source.sourceText.includes(kw)) continue;
+    // J1-FPD: an English source stating the same claim ("proven"/"proved")
+    // supports مثبت/أثبت exactly as Arabic-side presence would.
+    if (CLAIM_KEYWORD_EN_SUPPORT[kw]?.test(source.sourceText)) continue;
     let idx = generated.indexOf(kw);
     let blocked = false;
     while (idx !== -1 && !blocked) {

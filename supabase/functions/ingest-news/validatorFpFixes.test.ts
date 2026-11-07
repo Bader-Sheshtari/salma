@@ -130,3 +130,58 @@ test("FP-C: a claim keyword the source itself states remains supported (unchange
   const errs = errorsOf("وبحسب الجهة، العلاج مثبت الفعالية في هذه الفئة.", src);
   assert.ok(!errs.includes("unsupported_claim:مثبت"), `got: ${errs}`);
 });
+
+// ---- FP-D: cross-language claim support (مثبت/أثبت ↔ proven/proved) ----------
+// Owner-authorized 2026-11-07 after the WHO climate-health live test: the
+// source said "proven" three times, the draft said «إجراءات مثبتة», and the
+// claim gate only accepted ARABIC-side support. Mapping is ONLY this lemma
+// pair; every other claim keyword still requires Arabic-side support.
+
+test("FP-D repro: «إجراءات مثبتة» is supported by an English source stating 'proven' (WHO live-test class)", () => {
+  const src = "Six proven climate and health measures could save 1.6 million lives a year, the report said.";
+  const errs = errorsOf("قالت المنظمة إن توسيع إجراءات مثبتة في مجالي المناخ والصحة قد يمنع وفيات كثيرة.", src);
+  assert.ok(!errs.includes("unsupported_claim:مثبت"), `got: ${errs}`);
+});
+
+test("FP-D repro: «أثبتت» is supported by an English source stating 'proved'", () => {
+  const src = "The randomised trial proved the vaccine effective in the study population, regulators said.";
+  const errs = errorsOf("وأثبتت التجربة العشوائية فعالية اللقاح لدى الفئة المدروسة بحسب الجهات التنظيمية.", src);
+  assert.ok(!errs.includes("unsupported_claim:أثبت"), `got: ${errs}`);
+});
+
+test("FP-D counter: an English source WITHOUT proven/proved still blocks an affirmative «مثبت»", () => {
+  const src = "The observational study reported associations between the measures and outcomes.";
+  const errs = errorsOf("ويُعد التدخل مثبت الفعالية لدى جميع الفئات بحسب التقرير.", src);
+  assert.ok(errs.includes("unsupported_claim:مثبت"), `got: ${errs}`);
+});
+
+test("FP-D counter: 'unproven' and 'not proven' in the source never support an affirmative «مثبت»", () => {
+  // Word-boundary matching: "unproven" does not contain the standalone word.
+  const e1 = errorsOf(
+    "ويُعد التدخل مثبت الفعالية لدى جميع الفئات بحسب التقرير.",
+    "The intervention remains unproven according to the review of available evidence.",
+  );
+  assert.ok(e1.includes("unsupported_claim:مثبت"), `got: ${e1}`);
+  // "not proven" carries the standalone word — parity with the Arabic-side
+  // substring behavior (source «غير مثبت» also counts as keyword presence);
+  // the draft-side negation check (FP-C) is what governs the claim itself.
+  const e2 = errorsOf(
+    "لم تثبت فعالية التدخل بعد، والنتائج أولية حتى الآن.",
+    "The benefit is not proven according to the review.",
+  );
+  assert.ok(!e2.includes("unsupported_claim:مثبت"), `got: ${e2}`);
+});
+
+test("FP-D counter: the mapping is ONLY مثبت/أثبت — «مضمون» with English 'guaranteed' still blocks", () => {
+  const src = "The programme guaranteed access to treatment for all enrolled patients.";
+  const errs = errorsOf("والعلاج مضمون النتائج لدى جميع المرضى بحسب البرنامج.", src);
+  assert.ok(errs.includes("unsupported_claim:مضمون"), `got: ${errs}`);
+});
+
+test("FP-D counter: English support does not bypass the draft-side negation/clause logic (comma resets)", () => {
+  // Source supports مثبت, so no error either way — but an UNRELATED keyword
+  // in the same draft is still independently checked and blocked.
+  const src = "Six proven measures could save lives, the report said.";
+  const errs = errorsOf("التدابير مثبتة الجدوى، والعلاج الجديد يشفي جميع الحالات بحسب التقرير.", src);
+  assert.ok(errs.includes("unsupported_claim:يشفي"), `got: ${errs}`);
+});
