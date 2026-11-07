@@ -804,15 +804,12 @@ export default function RadarInbox({
                         >
                           تحرير بواسطة جمال
                         </button>
-                        {/* SECONDARY: direct publish (validated one-click pipeline). */}
-                        <button
-                          type="button"
-                          disabled={isBusy}
-                          onClick={() => doPublish(a)}
-                          className="rounded-lg border border-line bg-white px-3 py-1.5 text-[12px] font-semibold text-gray hover:bg-cream disabled:opacity-50"
-                        >
-                          نشر مباشر
-                        </button>
+                        {/* Direct publish (نشر مباشر) is HIDDEN from the UI
+                            (owner, 2026-11-07): the standard workflow is
+                            select → «تحرير بواسطة جمال» → PENDING → human
+                            approval. The underlying server action and pipeline
+                            remain intact (doPublish and the confirmation flow
+                            below are kept for a deliberate future decision). */}
                         {/* Develop Story V2: research the whole story (cluster
                             reports = leads only) into an evidence-first brief. */}
                         <Link
