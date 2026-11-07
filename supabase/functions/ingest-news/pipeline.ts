@@ -54,16 +54,20 @@ import {
   isBlockedHostname,
   NEUTRAL_USER_AGENT,
   type RawResponse,
+  type SourceFetchResult,
   type SourceText,
   validateResolvedAddresses,
 } from "./fetchSourceText.ts";
 import {
   escalate,
   domainOf as escDomainOf,
+  parseSameEventVerdict,
   roleTier as escRoleTier,
+  sameEventPrompt,
   type EscalationInput,
   type EscalationResult,
   type RegistryEntry as EscRegistryEntry,
+  type SameEventVerdict,
   type StoryType as EscStoryType,
 } from "./sourceEscalation.ts";
 import {
@@ -1240,33 +1244,101 @@ export type ResolvedEvidenceSource = {
   kind: EvidenceSourceKind;
   url: string;                // the source the Writer/analysis will fetch
   primaryUrl: string | null;  // identified primary when it is NOT `url`
+  /** Same-event gate audit per candidate: the verdict that was reached,
+   *  "unfetchable" when the probe failed, or null when never evaluated. */
+  gate?: {
+    primary: SameEventVerdict | "unfetchable" | null;
+    supporting: SameEventVerdict | "unfetchable" | null;
+  };
 };
+
+/** Decides whether ONE fetched candidate covers the same specific news event
+ *  as the selected story. Injected so the gate is unit-testable; the live
+ *  implementation is `liveSameEventCheck` (one bounded classifier call).
+ *  Any error must surface as "unconfirmed", never as an exception. */
+export type SameEventCheck = (fetched: SourceText) => Promise<SameEventVerdict>;
 
 export async function resolveAnalysisSource(
   esc: EscalationResult,
   discoveryUrl: string,
+  // Same-event gate (owner mandate 2026-11-07): a stronger source may replace
+  // the selected story ONLY on an explicit "same_event" verdict against its
+  // FETCHED text. different_event / unconfirmed / unfetchable / any error all
+  // preserve the original story (discovery_fallback — the pre-escalation
+  // behavior). Deliberately NO date cutoff in code: publication dates are
+  // evidence inside the verdict prompt only.
+  confirmSameEvent: SameEventCheck,
+  deps: { fetch?: (url: string) => Promise<SourceFetchResult> } = {},
 ): Promise<ResolvedEvidenceSource> {
   const primary = esc.selected_editorial_source.url;
-  const probe = async (url: string): Promise<boolean> => {
+  const doFetch = deps.fetch ?? ((url: string) =>
+    fetchSourceText({
+      url,
+      registeredDomain: escDomainOf(url),
+      sourceName: null,
+      rawFetch: denoRawFetch,
+      resolveDns: denoResolveDns,
+    }));
+  const probe = async (url: string): Promise<SourceText | null> => {
     try {
-      const r = await fetchSourceText({
-        url,
-        registeredDomain: escDomainOf(url),
-        sourceName: null,
-        rawFetch: denoRawFetch,
-        resolveDns: denoResolveDns,
-      });
-      return r.ok;
+      const r = await doFetch(url);
+      return r.ok ? r : null;
     } catch {
-      return false;
+      return null;
     }
   };
-  if (await probe(primary)) return { kind: "primary", url: primary, primaryUrl: null };
-  const supporting = esc.supporting_url;
-  if (supporting && /^https?:\/\//i.test(supporting) && await probe(supporting)) {
-    return { kind: "supporting", url: supporting, primaryUrl: primary };
+  const verdictOf = async (fetched: SourceText): Promise<SameEventVerdict> => {
+    try {
+      return await confirmSameEvent(fetched);
+    } catch {
+      return "unconfirmed";
+    }
+  };
+  const gate: NonNullable<ResolvedEvidenceSource["gate"]> = { primary: null, supporting: null };
+
+  const primaryFetched = await probe(primary);
+  if (primaryFetched) {
+    gate.primary = await verdictOf(primaryFetched);
+    if (gate.primary === "same_event") return { kind: "primary", url: primary, primaryUrl: null, gate };
+  } else {
+    gate.primary = "unfetchable";
   }
-  return { kind: "discovery_fallback", url: discoveryUrl, primaryUrl: primary };
+
+  const supporting = esc.supporting_url;
+  if (supporting && /^https?:\/\//i.test(supporting)) {
+    const supportingFetched = await probe(supporting);
+    if (supportingFetched) {
+      gate.supporting = await verdictOf(supportingFetched);
+      if (gate.supporting === "same_event") return { kind: "supporting", url: supporting, primaryUrl: primary, gate };
+    } else {
+      gate.supporting = "unfetchable";
+    }
+  }
+  return { kind: "discovery_fallback", url: discoveryUrl, primaryUrl: primary, gate };
+}
+
+/** Live same-event check: ONE bounded classifier call (ESCALATION_MODEL) over
+ *  the fetched candidate's title, opening text and published date, against the
+ *  selected story's titles. Dates are evidence in the prompt, never a cutoff.
+ *  Returns "unconfirmed" on any transport/parse problem. */
+export function liveSameEventCheck(
+  story: { title: string | null; titleAr: string | null },
+): SameEventCheck {
+  return async (fetched) => {
+    const p = sameEventPrompt({
+      discoveryTitle: story.title,
+      discoveryTitleAr: story.titleAr,
+      candidateTitle: fetched.title,
+      candidateExcerpt: (fetched.text ?? "").slice(0, 600),
+      candidatePublishedDate: fetched.publishedDate,
+      nowIso: new Date().toISOString().slice(0, 10),
+    });
+    const r = await chatJson(
+      [{ role: "system", content: p.system }, { role: "user", content: p.user }],
+      { model: ESCALATION_MODEL, maxTokens: 12, temperature: 0, timeoutMs: 30000 },
+    );
+    return r.ok ? parseSameEventVerdict(r.content) : "unconfirmed";
+  };
 }
 
 /** Real DB deps for analyzeEvidence: per-cluster cache + audit row in the
