@@ -16,6 +16,75 @@
   --salma-coral: #e99e8e;
 }
 
+/* ---------------------------------------------------------------------------
+   Direction E brand tokens — Phase 0 of SALMA_HOMEPAGE_IMPLEMENTATION_PLAN.md.
+   Palette per the approved SALMA_BRAND_IDENTITY_SPEC.md; amethyst UI shades,
+   hairlines and type scale per the approved design/mockups/direction-e.html.
+   Intentionally UNUSED until Phase 1+ adopts them: nothing below changes any
+   rendered output while no markup references these tokens/utilities.
+--------------------------------------------------------------------------- */
+:root {
+  /* primary palette */
+  --brand-amethyst: #1d0446;
+  --brand-mauve: #c6a9fd;
+  --brand-vanilla: #f5e9a4;
+  --brand-seashell: #f1e5e0;
+  /* amethyst UI shades (approved mockup) */
+  --brand-amethyst-800: #341d59;
+  --brand-amethyst-600: #61507e;
+  --brand-amethyst-400: #8e82a3;
+  --brand-amethyst-200: #bbb4c8;
+  --brand-amethyst-100: #e8e6ed;
+  /* seashell surfaces (approved mockup) */
+  --brand-seashell-2: #f6f1ee;
+  --brand-seashell-1: #fcfaf9;
+  /* secondary palette (tags/accents/categorization) */
+  --brand-golden-pollen: #fbcf50;
+  --brand-pumpkin: #ff7307;
+  --brand-frosted-blue: #8ad4dd;
+  --brand-pink-mist: #fc97b9;
+  --brand-wine-plum: #662832;
+  --brand-coffee-bean: #2d1318;
+  --brand-jet-black: #2b3a36;
+  --brand-muted-teal: #8fb8ad;
+  /* hairlines */
+  --brand-hairline: #e8e6ed;
+  --brand-hairline-strong: #bbb4c8;
+  /* approved type scale (desktop; responsive caps applied at adoption:
+     hero ≤767px cap 28 / ≤400px cap 26; title ≤400px 20; meta ≤767px 13) */
+  --brand-fs-hero: clamp(24px, 0.9rem + 1.3vw, 32px);
+  --brand-fs-title: 22px;
+  --brand-fs-lead: 20px;
+  --brand-fs-rail: 18px;
+  --brand-fs-row: 16px;
+  --brand-fs-excerpt: 14px;
+  --brand-fs-meta: 11px;
+}
+
+@theme inline {
+  --color-amethyst: var(--brand-amethyst);
+  --color-amethyst-800: var(--brand-amethyst-800);
+  --color-amethyst-600: var(--brand-amethyst-600);
+  --color-amethyst-400: var(--brand-amethyst-400);
+  --color-amethyst-200: var(--brand-amethyst-200);
+  --color-amethyst-100: var(--brand-amethyst-100);
+  --color-mauve: var(--brand-mauve);
+  --color-vanilla: var(--brand-vanilla);
+  --color-seashell: var(--brand-seashell);
+  --color-seashell-2: var(--brand-seashell-2);
+  --color-seashell-1: var(--brand-seashell-1);
+  --color-golden-pollen: var(--brand-golden-pollen);
+  --color-pumpkin: var(--brand-pumpkin);
+  --color-frosted-blue: var(--brand-frosted-blue);
+  --color-pink-mist: var(--brand-pink-mist);
+  --color-wine-plum: var(--brand-wine-plum);
+  --color-coffee-bean: var(--brand-coffee-bean);
+  --color-jet-black: var(--brand-jet-black);
+  --color-muted-teal: var(--brand-muted-teal);
+  --color-hairline: var(--brand-hairline);
+  --color-hairline-strong: var(--brand-hairline-strong);
+}
+
 @theme inline {
   --color-teal: var(--salma-teal);
   --color-green: var(--salma-green);
