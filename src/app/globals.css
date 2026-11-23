@@ -174,9 +174,9 @@ body {
     transform: scale(0.97);
   }
 
-  /* Anchor targets stop clear of the sticky header. */
+  /* Anchor targets stop clear of the sticky header (Amethyst masthead + nav ≈ 152px). */
   [id] {
-    scroll-margin-top: 96px;
+    scroll-margin-top: 168px;
   }
 
   /* Selection in brand teal, not UA blue. */

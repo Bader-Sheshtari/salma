@@ -4,6 +4,9 @@ import { SITE_URL, SITE_NAME } from "@/lib/site";
 import "./globals.css";
 import { NavTracker } from "@/components/site/NavTracker";
 
+// IBM Plex Sans Arabic is a temporary development fallback pending KO Sans
+// web-license verification (SALMA_HOMEPAGE_IMPLEMENTATION_PLAN.md §2 DA);
+// do not treat as the brand typeface.
 const plexArabic = IBM_Plex_Sans_Arabic({
   variable: "--font-arabic",
   subsets: ["arabic"],
@@ -25,9 +28,9 @@ const plexMono = IBM_Plex_Mono({
 const DESCRIPTION =
   "منصة إخبارية صحية مستقلة من الكويت إلى الخليج — أخبار وتحقيقات وفيديو بمصادر موثوقة.";
 
-// Mobile browser chrome matches the white sticky header.
+// Mobile browser chrome matches the Amethyst sticky masthead (Direction E, Phase 1).
 export const viewport: Viewport = {
-  themeColor: "#ffffff",
+  themeColor: "#1d0446",
 };
 
 export const metadata: Metadata = {
