@@ -45,7 +45,8 @@ No `homepage_sections` schema change. Admin controls (`sort_order`, `items_limit
 - **DB — Supporting-stories selection (RULED).** Selection follows a **documented editorial selection logic**, not recency alone, with no hardcoded editorial choices (no article IDs/slugs in code) and no interference with existing admin-controlled featured-story settings. The v1 logic to implement, documented here as the single source of truth:
   1. Eligibility: published stories not already placed in the hero or «الأحدث» rail.
   2. Ranking: (a) `is_breaking` first; (b) then stories with a cover image (the rail is image-led); (c) then freshness (`published_at`). Importance signals available today are `is_breaking` and the admin's section/hero curation; if the owner later wants a dedicated "editorial importance" control, that is a separate admin proposal, not part of this plan.
-  3. The logic lives in one named function in `lib/queries.ts` with a doc comment pointing at this section.
+  3. The logic lives in one named function (`selectLeadBoard`, `src/lib/leadBoard.ts`) with a doc comment pointing at this section.
+  4. *(Resolution, owner-confirmed 2026-11-24.)* DB's original "not already placed in the hero or «الأحدث» rail" was circular with DC. The implemented, deterministic fill order is **hero → supporting → «الأحدث» → «المزيد»**; each slot excludes everything selected before it. Admin hero curation (`is_featured`) runs first, outside this function, and is never overridden by it.
 - **DC — «الأحدث» rail (RULED: approved in principle).** The most recently published **eligible** stories across all categories, 4 items. Eligibility and duplication handling: stories already selected for the hero or the supporting rail are excluded; the rail never shows a story twice with another lead-board slot. Downstream, the §DUP rule below governs reappearance in category sections.
 - **DD — Feed-prompt band (RULED: conditional).** The teal band is removed **visually only**; its functions are explicitly mapped and preserved:
   | Existing function of the band | Where it lives in Direction E |
@@ -57,6 +58,8 @@ No `homepage_sections` schema change. Admin controls (`sort_order`, `items_limit
 - **DE — Review channel (RULED: approved).** Initial visual review on the **local development preview**. Any GitHub push or Vercel preview deployment requires separate explicit owner approval.
 
 **§DUP — De-duplication rule (approved with Direction E).** A story appears once on the Homepage; hero-carousel stories may additionally appear in their own category section when the section would otherwise fall below its minimum (the carousel is transient). Original `category_slug` is always displayed where tags appear; category pages and database classifications are untouched. (Rev 3 note: §LBL below governs *where* tags appear.)
+
+**§DUP-V — Section-visibility guarantee (owner ruling 2026-11-24).** An enabled section that has eligible published stories never disappears because of de-duplication. Deterministic ladder in `dedupSectionItems` (`src/lib/leadBoard.ts`, unit-tested via `npm test`): (1) strict §DUP exclusion — the default; (2) the sanctioned hero-story re-admission above; (3) only when both leave the section EMPTY while it has stories, controlled duplication: the section renders its own stories newest-first, capped at the admin `items_limit`, which stays authoritative in every branch.
 
 ### Rev 3 — decisions RULED by owner 2026-11-24
 
@@ -97,6 +100,7 @@ Work happens on local branch `redesign/homepage-e` (never `main`). Each phase en
 
 ### Phase 3 — Section identity system + pre-footer [GATE]
 *(Supersedes Rev 2's Phase 3 "restyle all `display_style` variants uniformly". Rev 2's transfers treatment — "calm dark Amethyst, 64px portraits" — is superseded by the approved vanilla field; nothing else from Rev 2's Phase 3 is dropped.)*
+- *(Deferred here from Phase 2, owner-accepted 2026-11-24:)* the lead board's category marks, reading pills and icon tiles ship Phase 2 in neutral amethyst/mauve with a single pulse glyph; their per-category color treatment and story-type icons are delivered by the DF identity map below — accent-keyed, never hardcoded category slugs.
 - `HomeSection.tsx` + the DF config map: implement the binding identity map of `SALMA_HOMEPAGE_VISUAL_DIRECTION.md` §2 — per-section surfaces (teal-20 الخليج, pink-10 اقتصاد, frost-100 صحة-وحياة, mauve-20 داوي, wine-10 تحقيقات, paper + jet ink العالم, paper + frost rule الكويت), accent devices, and anatomy variants (underlined pair, numbered list, open 2:1, text-led, lead+standfirst) composed from `display_style` × `accent`. Hairlines not boxes throughout.
 - §LBL label rule: category tags omitted inside single-category sections; rendered in mixed collections only. One documented condition, no per-section exceptions.
 - Transfers band: **vanilla-40 field** (#FBF6DD), 96px portraits, golden من ← إلى ECG journey as the row's visual hero (#B98900 arrow graphic-only), airy rows.

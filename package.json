@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test": "node --test src/lib/leadBoard.test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
