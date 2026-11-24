@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { saveHomepageSection, type SaveResult } from "../../actions";
 import type { HomepageSection } from "@/lib/admin-queries";
+import { AccentPicker } from "./AccentPicker";
 
 const field =
   "w-full rounded-lg border border-gray/40 bg-white px-3 py-2 text-sm outline-none focus:border-teal";
@@ -44,7 +45,7 @@ export function HomepageSectionForm({ section }: { section: HomepageSection }) {
         </label>
       </div>
 
-      <div className="grid items-end gap-3 sm:grid-cols-[7rem_1fr_auto]">
+      <div className="grid items-end gap-3 sm:grid-cols-[7rem_auto]">
         <label className={label}>
           عدد العناصر
           <input
@@ -56,21 +57,14 @@ export function HomepageSectionForm({ section }: { section: HomepageSection }) {
             className={`${field} mt-1`}
           />
         </label>
-        <label className={label}>
-          لون مميّز (اختياري)
-          <input
-            name="accent"
-            defaultValue={section.accent ?? ""}
-            placeholder="#449785"
-            dir="ltr"
-            className={`${field} mt-1`}
-          />
-        </label>
         <label className="flex items-center gap-2 text-[13px] font-semibold text-ink">
           <input type="checkbox" name="show_view_all" defaultChecked={section.show_view_all} className="h-4 w-4 accent-teal" />
           زر «عرض الكل»
         </label>
       </div>
+
+      {/* Section identity (DF): family × official tint picker → hidden `accent`. */}
+      <AccentPicker name="accent" defaultValue={section.accent ?? ""} />
 
       {isSocial ? (
         <div className="text-[12px] text-gold">لا تظهر مساحة التواصل على الموقع بعد — ستُفعّل في مرحلة لاحقة.</div>

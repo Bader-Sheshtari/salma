@@ -28,6 +28,7 @@ export function LeadMeta({
   collectionCategory = null,
   mode = "read",
   pill = "bg-amethyst-100",
+  pillText = "text-amethyst",
   body = "text-amethyst-600",
 }: {
   c: Pick<Content, "read_minutes" | "published_at" | "category_slug">;
@@ -38,18 +39,21 @@ export function LeadMeta({
   pill?: string;
   /** Meta text colour of the surface the meta sits on (≥4.5:1). */
   body?: string;
+  /** Text colour on the pill (identity recipe; ≥4.5:1 on `pill`). */
+  pillText?: string;
 }) {
   const n = c.read_minutes;
   const showRead = mode === "read" && !!n;
   const slug = c.category_slug;
   const tag = slug && showCategoryTag(slug, collectionCategory) ? lookups.names[slug] : undefined;
-  const mark = slug ? identityFor(lookups.accents[slug]).mark : "";
+  const markId = slug ? identityFor(lookups.accents[slug]) : null;
+  const mark = markId ? markId.mark : "";
   if (!showRead && !c.published_at && !tag) return null;
   return (
     // 13px below 768px (no visible text under 13px on mobile), 11px desktop.
     <p className={`mt-2 flex flex-wrap items-center gap-1.5 text-[13px] leading-snug md:text-[11px] ${body}`}>
       {showRead ? (
-        <span className={`rounded-full px-2 pb-px pt-0.5 text-amethyst ${pill}`}>
+        <span className={`rounded-full px-2 pb-px pt-0.5 ${pillText} ${pill}`}>
           <span className="font-sans">{n}</span> {n === 1 ? "دقيقة" : "دقائق"} قراءة
         </span>
       ) : c.published_at ? (
@@ -63,7 +67,7 @@ export function LeadMeta({
             </span>
           ) : null}
           <span className="inline-flex items-center gap-1.5" data-cat-tag={slug}>
-            <span aria-hidden className={`h-[3px] w-3.5 shrink-0 rounded-sm ${mark}`} />
+            <span aria-hidden className={`h-[3px] w-3.5 shrink-0 rounded-sm ${mark}`} style={markId?.markStyle} />
             {tag}
           </span>
         </>
@@ -77,7 +81,16 @@ export function LeadMeta({
  * tile (DF map); glyph = story type (video: play · article: page · news and
  * anything else: the brand pulse). Graphic only.
  */
-export function StoryTile({ type, tile = "bg-mauve-20" }: { type?: string | null; tile?: string }) {
+export function StoryTile({
+  type,
+  tile = "bg-mauve-20",
+  style,
+}: {
+  type?: string | null;
+  tile?: string;
+  /** Palette-generated identities colour the tile inline. */
+  style?: { backgroundColor: string };
+}) {
   const glyph =
     type === "video" ? (
       <path d="M12 9.5v13l10-6.5z" fill="currentColor" />
@@ -90,7 +103,7 @@ export function StoryTile({ type, tile = "bg-mauve-20" }: { type?: string | null
       <path d="M3 17h7l3-8 5 14 3-6h8" />
     );
   return (
-    <span aria-hidden className={`grid size-12 shrink-0 place-items-center rounded-xl ${tile}`}>
+    <span aria-hidden className={`grid size-12 shrink-0 place-items-center rounded-xl ${tile}`} style={style}>
       <svg
         viewBox="0 0 32 32"
         fill="none"
@@ -109,4 +122,9 @@ export function StoryTile({ type, tile = "bg-mauve-20" }: { type?: string | null
 /** Tile tint for a story: its category's identity tile (paper default). */
 export function tileFor(c: Pick<Content, "category_slug">, lookups: CategoryLookups): string {
   return identityFor(c.category_slug ? lookups.accents[c.category_slug] : null).tile;
+}
+
+/** Inline tile colour for palette-generated identities (undefined for legacy). */
+export function tileStyleFor(c: Pick<Content, "category_slug">, lookups: CategoryLookups) {
+  return identityFor(c.category_slug ? lookups.accents[c.category_slug] : null).tileStyle;
 }

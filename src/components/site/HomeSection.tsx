@@ -31,6 +31,7 @@ function Meta({ c, ctx, mode }: { c: Content; ctx: Ctx; mode?: "read" | "time" }
       lookups={ctx.lookups}
       collectionCategory={ctx.sectionCategory}
       pill={ctx.idn.pill}
+      pillText={ctx.idn.pillText}
       body={ctx.idn.body}
       mode={mode}
     />
@@ -350,7 +351,7 @@ function TransferRow({ t, idn }: { t: PublicDoctorTransfer; idn: Identity }) {
       <p className="col-span-2 flex flex-wrap items-center gap-x-4 gap-y-1 md:col-span-1">
         <span className={`text-base md:text-[17px] ${idn.body}`}>من {t.from_hospital ?? "غير محدد"}</span>
         <JourneyArrow />
-        <span className="text-[17px] font-bold text-amethyst md:text-[19px]">إلى {t.to_hospital ?? "غير محدد"}</span>
+        <span className={`text-[17px] font-bold ${idn.ink} md:text-[19px]`}>إلى {t.to_hospital ?? "غير محدد"}</span>
       </p>
       {when ? (
         <p className={`col-span-2 text-[13px] md:col-span-1 md:whitespace-nowrap md:text-xs ${idn.body}`}>
@@ -393,7 +394,7 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
 
   const titleRow = (
     <>
-      <h2 id={hid} className="text-xl font-bold leading-snug text-amethyst min-[401px]:text-[length:var(--brand-fs-title)]">
+      <h2 id={hid} className={`text-xl font-bold leading-snug ${idn.ink} min-[401px]:text-[length:var(--brand-fs-title)]`}>
         {section.title_ar}
       </h2>
       <span aria-hidden className="flex min-w-4 flex-1 items-center">
@@ -405,7 +406,7 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
   const viewAll = showAll ? (
     <Link
       href={href!}
-      className={`-me-2 inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm font-semibold text-amethyst ${idn.linkHover}`}
+      className={`-me-2 inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm font-semibold ${idn.ink} ${idn.linkHover}`}
     >
       عرض الكل
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden className="size-3.5 max-md:hidden">
@@ -418,7 +419,7 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
   switch (anatomy) {
     case "journey":
       body = (
-        <div className={`divide-y ${idn.field ? "divide-amethyst/10" : "divide-hairline"}`}>
+        <div className={`divide-y ${idn.divide}`}>
           {transfers.map((t) => (
             <div key={t.id} className="py-4 first:pt-0 last:pb-0 md:py-5">
               <TransferRow t={t} idn={idn} />
@@ -461,7 +462,8 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
       data-identity={idn.key}
       data-anatomy={anatomy}
       data-category={section.category_slug ?? undefined}
-      className={`text-amethyst ${idn.field ? `my-12 py-10 md:py-12 ${idn.surface}` : "py-10"}`}
+      className={`${idn.ink} ${idn.field ? `my-12 py-10 md:py-12 ${idn.surface}` : "py-10"}`}
+      style={idn.vars as React.CSSProperties | undefined}
     >
       {anatomy === "rail" ? (
         <HomeRail

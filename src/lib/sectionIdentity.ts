@@ -7,11 +7,33 @@
 // No category slugs live here or in components; unknown/empty/legacy-hex values
 // fall back to PAPER (paper surface + amethyst rule) — always safe.
 //
+// GRAMMAR (owner-approved Color Picker): accent =
+//   ""/unknown            → paper (always safe)
+//   legacy key            → the exact refined-H1 recipe (LEGACY below, frozen)
+//   "<family>"            → that family's default recipe (legacy families keep
+//                           their legacy recipe; new families: see FAMILY_DEFAULTS)
+//   "<family>-<tint>"     → that official tint as the section surface
+//   "<family>-rule"       → paper surface + that family's devices
+// Families and tints come only from `lib/brandPalette.ts` (official guideline).
+//
 // Pure module (no React/Next imports) so `node --test` can exercise it.
-// Every class string is a literal so Tailwind's source scan picks it up.
+// Every class string is a literal so Tailwind's source scan picks it up;
+// palette-generated recipes carry their colours as CSS custom properties
+// (`vars`) consumed by literal `[var(--id-*)]` classes.
 // Colours: official palette + approved tints only (Phase 2a tokens); raw hex
 // only where no token exists (pink-30 #FED5E3, jet-20 #D5D8D7 — official ramp
 // values). DG is deferred: coloured TYPE is only amethyst / wine / jet.
+
+import {
+  BRAND_FAMILIES,
+  FAMILY_KEYS,
+  TEXT_COLORS,
+  TINT_STEPS,
+  contrast,
+  hostsText,
+  type FamilyKey,
+  type TintStep,
+} from "./brandPalette.ts";
 
 export const IDENTITY_KEYS = [
   "paper",
@@ -24,10 +46,11 @@ export const IDENTITY_KEYS = [
   "wine",
   "vanilla",
 ] as const;
+/** Legacy refined-H1 keys (frozen recipes). */
 export type IdentityKey = (typeof IDENTITY_KEYS)[number];
 
-export type Identity = {
-  key: IdentityKey;
+type LegacyIdentity = {
+  key: string;
   /** Tinted surface? Tinted fields own ≥48px paper margins (§3 rule 2). */
   field: boolean;
   /** Section surface (background) classes; "" = page paper. */
@@ -63,7 +86,26 @@ export type Identity = {
   drop?: string; // wine drop rule / frost-rule standfirst rule
 };
 
-const PAPER: Identity = {
+/** A complete identity: the legacy recipe fields plus the generalised ones. */
+export type Identity = LegacyIdentity & {
+  /** Brand family the recipe belongs to (anatomy variants); null = paper. */
+  family: FamilyKey | null;
+  /** Dark surface (light text)? */
+  dark: boolean;
+  /** Primary ink for titles/links on this surface. */
+  ink: string;
+  /** Text colour on the reading-time pill. */
+  pillText: string;
+  /** Divider colour between transfer rows. */
+  divide: string;
+  /** Palette-generated recipes only: CSS custom properties for the section. */
+  vars?: Record<string, string>;
+  /** Palette-generated recipes only: inline colour for the lead-board mark/tile. */
+  markStyle?: { backgroundColor: string };
+  tileStyle?: { backgroundColor: string };
+};
+
+const PAPER: LegacyIdentity = {
   key: "paper",
   field: false,
   surface: "",
@@ -80,7 +122,9 @@ const PAPER: Identity = {
   linkHover: "hover:bg-seashell-2",
 };
 
-const MAP: Record<IdentityKey, Identity> = {
+// FROZEN — the approved refined-H1 recipes. Owner condition 3: these keys must
+// resolve to exactly these recipes (asserted against a snapshot in tests).
+const LEGACY: Record<IdentityKey, LegacyIdentity> = {
   paper: PAPER,
   // الكويت-style: paper + 3px frost rule beside the lead standfirst.
   "frost-rule": {
@@ -201,16 +245,237 @@ const MAP: Record<IdentityKey, Identity> = {
   },
 };
 
-/** Normalises an admin `accent` value to an identity key; anything unknown
- * (empty, null, legacy hex colours, typos) → "paper". */
-export function identityKey(accent: string | null | undefined): IdentityKey {
+const LEGACY_FAMILY: Record<IdentityKey, FamilyKey | null> = {
+  paper: null,
+  "frost-rule": "frost",
+  teal: "teal",
+  pink: "pink",
+  jet: "jet",
+  frost: "frost",
+  mauve: "mauve",
+  wine: "wine",
+  vanilla: "vanilla",
+};
+
+function fromLegacy(k: IdentityKey): Identity {
+  const l = LEGACY[k];
+  return {
+    ...l,
+    family: LEGACY_FAMILY[k],
+    dark: false,
+    ink: "text-amethyst",
+    pillText: "text-amethyst",
+    divide: l.field ? "divide-amethyst/10" : "divide-hairline",
+  };
+}
+
+/** The pre-generalisation recipe of a legacy key (exact, for regression tests). */
+export function legacyRecipe(k: IdentityKey): LegacyIdentity {
+  return LEGACY[k];
+}
+
+// ------------------------------------------------------------------ grammar
+
+/** Default tint for a bare family key. Legacy families (teal, pink, frost,
+ * mauve, wine, vanilla, jet) resolve to their frozen legacy recipe instead;
+ * the tint listed for them is only what that recipe's surface corresponds to
+ * (used by the picker's «الافتراضي» badge). "rule" = paper surface. */
+export const FAMILY_DEFAULTS: Record<FamilyKey, TintStep | "rule"> = {
+  teal: 20,
+  pink: 10,
+  frost: 100,
+  mauve: 20,
+  wine: 10,
+  vanilla: 40,
+  jet: "rule",
+  // New families (owner-approved defaults):
+  golden: 20, // light warm surface
+  seashell: 60, // quiet light surface (= the seashell-2 well)
+  pumpkin: 10, // warm, pumpkin-10-style
+  amethyst: 100, // dark surface, light text
+  coffee: 100, // dark surface, light text
+};
+
+export type ParsedAccent =
+  | { kind: "paper" }
+  | { kind: "legacy"; key: IdentityKey }
+  | { kind: "family"; family: FamilyKey; tint: TintStep | "rule" };
+
+const isFamily = (v: string): v is FamilyKey => (FAMILY_KEYS as readonly string[]).includes(v);
+
+/** Parses and validates an admin accent against the official palette.
+ * Case/whitespace-insensitive; anything unrecognised → paper. Legacy keys
+ * (including bare legacy families and "frost-rule") resolve to "legacy". */
+export function parseAccent(accent: string | null | undefined): ParsedAccent {
   const v = (accent ?? "").trim().toLowerCase();
-  return (IDENTITY_KEYS as readonly string[]).includes(v) ? (v as IdentityKey) : "paper";
+  if (!v || v === "paper") return { kind: "paper" };
+  if ((IDENTITY_KEYS as readonly string[]).includes(v)) return { kind: "legacy", key: v as IdentityKey };
+  if (isFamily(v)) {
+    const d = FAMILY_DEFAULTS[v];
+    return { kind: "family", family: v, tint: d };
+  }
+  const m = /^([a-z]+)-(rule|100|90|80|70|60|50|40|30|20|10)$/.exec(v);
+  if (!m || !isFamily(m[1])) return { kind: "paper" };
+  const tint = m[2] === "rule" ? "rule" : (Number(m[2]) as TintStep);
+  if (tint !== "rule" && !hostsText(BRAND_FAMILIES[m[1]].tints[tint])) return { kind: "paper" };
+  return { kind: "family", family: m[1], tint };
+}
+
+/** The accent string a picker selection writes: a family's DEFAULT writes the
+ * bare family key (legacy families → their frozen recipe); frost+rule writes
+ * the legacy "frost-rule"; anything else `family-<tint|rule>`. */
+export function accentFor(family: FamilyKey, tint: TintStep | "rule"): string {
+  if (FAMILY_DEFAULTS[family] === tint) return family;
+  if (family === "frost" && tint === "rule") return "frost-rule";
+  return `${family}-${tint}`;
+}
+
+/** Normalised identity key for an accent ("paper" when unknown). */
+export function identityKey(accent: string | null | undefined): string {
+  const p = parseAccent(accent);
+  if (p.kind === "paper") return "paper";
+  if (p.kind === "legacy") return p.key;
+  return `${p.family}-${p.tint}`;
+}
+
+/** Page paper (homepage ground) — the surface of `-rule` recipes. */
+const PAPER_HEX = "#FCFAF9";
+const HAIRLINE_HEX = "#E8E6ED";
+
+const step = (t: TintStep, by: number): TintStep | null => {
+  const i = TINT_STEPS.indexOf(t) + by;
+  return i >= 0 && i < TINT_STEPS.length ? TINT_STEPS[i] : null;
+};
+
+/** First candidate text colour reaching ≥4.5:1 on the surface. */
+const pick = (surface: string, candidates: [string, string][]): string | null => {
+  for (const [cls, hex] of candidates) if (contrast(hex, surface) >= 4.5) return cls;
+  return null;
+};
+
+/**
+ * Recipe builder for palette accents (fixed rules, documented):
+ *  - surface = the chosen official tint (rule → page paper, no field).
+ *  - text NEVER uses the selected colour: light surfaces → amethyst headline,
+ *    amethyst-600 / -800 / amethyst body (first ≥4.5:1); dark surfaces →
+ *    white headline, amethyst-100 / white body (first ≥4.5:1).
+ *  - devices (rule, cap, drop, underline) = family 100 on light surfaces (or
+ *    amethyst when 100 is nearly invisible there, <1.5:1); family 30 on dark.
+ *  - pills / grounds / tiles = 2 steps lighter than the surface (white past
+ *    10); on dark surfaces family 30. Pill text = amethyst or white, ≥4.5:1.
+ *  - discs = family 100 when amethyst numerals reach ≥4.5:1 on it, else 30.
+ *  - hairlines = 2 steps darker than a light surface (official hairline on
+ *    paper); 3 steps lighter on a dark surface.
+ */
+function buildRecipe(family: FamilyKey, tint: TintStep | "rule"): Identity {
+  const T = BRAND_FAMILIES[family].tints;
+  const rule = tint === "rule";
+  const surfaceHex = rule ? PAPER_HEX : T[tint];
+  const dark = !rule && contrast(TEXT_COLORS.white, surfaceHex) > contrast(TEXT_COLORS.amethyst, surfaceHex);
+
+  const headline = dark ? "text-white" : "text-amethyst";
+  const body = dark
+    ? pick(surfaceHex, [["text-amethyst-100", TEXT_COLORS.amethyst100], ["text-white", TEXT_COLORS.white]])
+    : pick(surfaceHex, [
+        ["text-amethyst-600", TEXT_COLORS.amethyst600],
+        ["text-amethyst-800", TEXT_COLORS.amethyst800],
+        ["text-amethyst", TEXT_COLORS.amethyst],
+      ]);
+
+  const dev = dark
+    ? T[30]
+    : contrast(T[100], surfaceHex) >= 1.5
+      ? T[100]
+      : TEXT_COLORS.amethyst;
+
+  let pill: string;
+  if (rule) pill = T[30];
+  else if (dark) pill = T[30];
+  else {
+    const lighter = step(tint as TintStep, 2);
+    pill = lighter ? T[lighter] : "#FFFFFF";
+  }
+  if (contrast(TEXT_COLORS.amethyst, pill) < 4.5 && contrast(TEXT_COLORS.white, pill) < 4.5) pill = "#FFFFFF";
+  const pillText = contrast(TEXT_COLORS.amethyst, pill) >= 4.5 ? "text-amethyst" : "text-white";
+
+  const disc = contrast(TEXT_COLORS.amethyst, T[100]) >= 4.5 && !dark ? T[100] : T[30];
+  const line = rule
+    ? HAIRLINE_HEX
+    : dark
+      ? T[step(tint as TintStep, 3) ?? 10]
+      : T[step(tint as TintStep, -2) ?? 100];
+  const mark = contrast(T[100], PAPER_HEX) >= 1.3 ? T[100] : TEXT_COLORS.amethyst600;
+  const ink = dark ? "text-white" : "text-amethyst";
+
+  return {
+    key: `${family}-${tint}`,
+    family,
+    dark,
+    field: !rule,
+    surface: rule ? "" : dark ? "bg-[var(--id-surface)] [&_:focus-visible]:outline-mauve!" : "bg-[var(--id-surface)]",
+    rule: "bg-[var(--id-rule)]",
+    ruleLine: "bg-[var(--id-line)]",
+    hairline: "border-[var(--id-line)]",
+    headline,
+    body: body ?? "text-amethyst",
+    pill: "bg-[var(--id-pill)]",
+    pillText,
+    mark: "",
+    tile: "",
+    fieldTile: "bg-[var(--id-pill)]",
+    ground: "bg-[var(--id-pill)]",
+    linkHover: "hover:bg-[var(--id-pill)]",
+    underline: "decoration-[var(--id-dev)]",
+    disc: "bg-[var(--id-disc)]",
+    cap: "border-[var(--id-dev)]",
+    drop: "border-[var(--id-dev)]",
+    ink,
+    divide: "divide-[var(--id-line)]",
+    vars: {
+      "--id-surface": surfaceHex,
+      "--id-rule": dev,
+      "--id-dev": dev,
+      "--id-line": line,
+      "--id-pill": pill,
+      "--id-disc": disc,
+    },
+    markStyle: { backgroundColor: mark },
+    tileStyle: { backgroundColor: T[30] },
+  };
 }
 
 /** The complete identity for an admin `accent` value (paper fallback). */
 export function identityFor(accent: string | null | undefined): Identity {
-  return MAP[identityKey(accent)];
+  const p = parseAccent(accent);
+  if (p.kind === "paper") return fromLegacy("paper");
+  if (p.kind === "legacy") return fromLegacy(p.key);
+  return buildRecipe(p.family, p.tint);
+}
+
+/** The text/surface pairs a recipe emits (for audits/tests): [label, text, surface]. */
+export function recipeTextPairs(family: FamilyKey, tint: TintStep | "rule"): [string, string, string][] {
+  const id = buildRecipe(family, tint);
+  const surface = id.vars!["--id-surface"];
+  const hex: Record<string, string> = {
+    "text-amethyst": TEXT_COLORS.amethyst,
+    "text-amethyst-800": TEXT_COLORS.amethyst800,
+    "text-amethyst-600": TEXT_COLORS.amethyst600,
+    "text-amethyst-100": TEXT_COLORS.amethyst100,
+    "text-white": TEXT_COLORS.white,
+  };
+  return [
+    ["headline", hex[id.headline], surface],
+    ["body", hex[id.body], surface],
+    ["ink", hex[id.ink], surface],
+    ["pill", hex[id.pillText], id.vars!["--id-pill"]],
+    ["disc-numeral", TEXT_COLORS.amethyst, id.vars!["--id-disc"]],
+  ];
+}
+
+/** Tints a family offers as a SURFACE (text can be hosted); the rest are
+ * offered as `-rule` only. */
+export function offeredTints(family: FamilyKey): TintStep[] {
+  return TINT_STEPS.filter((t) => hostsText(BRAND_FAMILIES[family].tints[t]));
 }
 
 /**
@@ -240,13 +505,13 @@ export function anatomyFor(displayStyle: string | null | undefined, id: Identity
     case "carousel":
       return "rail";
     case "list":
-      return id.key === "pink" ? "numbered" : id.key === "wine" ? "text-led" : "rows";
+      return id.family === "pink" ? "numbered" : id.family === "wine" ? "text-led" : "rows";
     case "featured":
-      if (id.key === "jet") return "open21";
-      if (id.key === "mauve") return "feature-side";
-      if (id.key === "pink") return "lead-numbered";
-      if (id.key === "teal") return "columns";
-      if (id.key === "wine") return "text-led";
+      if (id.family === "jet") return "open21";
+      if (id.family === "mauve") return "feature-side";
+      if (id.family === "pink") return "lead-numbered";
+      if (id.family === "teal") return "columns";
+      if (id.family === "wine") return "text-led";
       return "lead-standfirst";
     default:
       return "columns";

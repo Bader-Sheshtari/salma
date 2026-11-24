@@ -3,7 +3,7 @@ import type { Content, HomepageData } from "@/lib/queries";
 import { BreakingTicker } from "./BreakingTicker";
 import { Cover, coverFor, hrefFor } from "./cards";
 import { RotatingHero } from "./RotatingHero";
-import { LeadMeta, StoryTile, tileFor, type CategoryLookups } from "./LeadMeta";
+import { LeadMeta, StoryTile, tileFor, tileStyleFor, type CategoryLookups } from "./LeadMeta";
 import { HomeSection } from "./HomeSection";
 import { NewsletterForm } from "./NewsletterForm";
 
@@ -16,7 +16,7 @@ const HEADLINE_HOVER = "decoration-1 underline-offset-[5px] group-hover:underlin
 function TileRow({ c, lookups, excerpt = false }: { c: Content; lookups: CategoryLookups; excerpt?: boolean }) {
   return (
     <Link href={hrefFor(c)} className="group grid grid-cols-[48px_minmax(0,1fr)] items-start gap-3">
-      <StoryTile type={c.type} tile={tileFor(c, lookups)} />
+      <StoryTile type={c.type} tile={tileFor(c, lookups)} style={tileStyleFor(c, lookups)} />
       <div className="min-w-0">
         <h3 className={`text-base font-semibold leading-normal text-amethyst ${HEADLINE_HOVER}`}>{c.title}</h3>
         {excerpt && c.excerpt ? (
