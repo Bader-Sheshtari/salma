@@ -39,6 +39,40 @@ test("every official tint token in globals.css exists verbatim in the palette", 
   for (const m of tokens) assert.ok(all.has(m[3]), `${m[0]} not in palette`);
 });
 
+// ------------------------------------------------------------------ DAWI
+import { DAWI_COLORS, DAWI_KEYS, DAWI_SHADES } from "./brandPalette.ts";
+
+test("DAWI collection: 6 documented pairs, verbatim hexes, no invented scale", () => {
+  assert.equal(DAWI_KEYS.length, 6);
+  assert.deepEqual([...DAWI_SHADES], ["primary", "light"]);
+  for (const k of DAWI_KEYS) {
+    const c = DAWI_COLORS[k];
+    assert.equal(c.key, k);
+    assert.ok(c.ar && c.en);
+    for (const s of DAWI_SHADES) assert.match(c.shades[s], /^#[0-9A-F]{6}$/, `dawi-${k} ${s}`);
+  }
+  // Exact owner-supplied values (cross-checked against the official image).
+  assert.deepEqual(
+    Object.fromEntries(DAWI_KEYS.map((k) => [k, [DAWI_COLORS[k].shades.primary, DAWI_COLORS[k].shades.light]])),
+    {
+      teal: ["#009984", "#CCE9E4"],
+      grey: ["#606261", "#E8E8E8"],
+      white: ["#FFFFFF", "#F7F7F5"],
+      coral: ["#F6988A", "#F8AEA5"],
+      darkteal: ["#117E6B", "#99D6CC"],
+      blue: ["#389BD4", "#43BDCC"],
+    },
+  );
+});
+
+test("DAWI: Bandage (logo-only) is absent; no collision with the SALMA palette", () => {
+  const dawi = DAWI_KEYS.flatMap((k) => DAWI_SHADES.map((s) => DAWI_COLORS[k].shades[s]));
+  assert.equal(new Set(dawi).size, 12); // no duplicate within DAWI
+  assert.ok(!dawi.includes("#D9AF85") && !dawi.includes("#ECCDB1"), "Bandage is logo-only");
+  const salma = new Set(FAMILY_KEYS.flatMap((k) => TINT_STEPS.map((t) => BRAND_FAMILIES[k].tints[t])));
+  for (const h of dawi) assert.ok(!salma.has(h), `${h} duplicates a SALMA tint`);
+});
+
 test("contrast helper matches known WCAG values", () => {
   assert.equal(contrast("#000000", "#FFFFFF").toFixed(1), "21.0");
   assert.equal(contrast("#1D0446", "#8AD4DD").toFixed(2), "10.83");

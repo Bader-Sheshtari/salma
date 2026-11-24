@@ -142,6 +142,67 @@ test("picker writes: defaults → bare key, frost+rule → legacy key, else fami
   for (const f of FAMILY_KEYS) for (const t of offeredTints(f)) assert.notEqual(identityKey(accentFor(f, t)), "paper");
 });
 
+// ------------------------------------------------- DAWI brand colors (separate collection)
+import { dawiAccent, dawiTextPairs, offeredDawiShades } from "./sectionIdentity.ts";
+import { DAWI_COLORS, DAWI_KEYS, DAWI_SHADES, hostsText } from "./brandPalette.ts";
+
+test("DAWI parser: dawi-<color>[-light|-rule], namespaced away from SALMA families", () => {
+  assert.deepEqual(parseAccent("dawi-teal-light"), { kind: "dawi", color: "teal", shade: "light" });
+  assert.deepEqual(parseAccent(" DAWI-BLUE "), { kind: "dawi", color: "blue", shade: "primary" });
+  assert.deepEqual(parseAccent("dawi-grey-rule"), { kind: "dawi", color: "grey", shade: "rule" });
+  // `teal` stays the SALMA legacy key; `dawi-teal` is a different namespace.
+  assert.deepEqual(parseAccent("teal"), { kind: "legacy", key: "teal" });
+  for (const v of ["dawi", "dawi-", "dawi-bandage", "dawi-teal-20", "dawi-teal-light-rule", "dawi-gold"]) {
+    assert.deepEqual(parseAccent(v), { kind: "paper" }, v);
+  }
+});
+
+test("DAWI: non-hostable shades are rule-only (teal/darkteal primaries)", () => {
+  for (const k of DAWI_KEYS) {
+    for (const s of DAWI_SHADES) {
+      if (!offeredDawiShades(k).includes(s)) {
+        assert.deepEqual(parseAccent(dawiAccent(k, s)), { kind: "paper" }, `dawi-${k} ${s}`);
+      }
+    }
+    assert.ok(offeredDawiShades(k).length >= 1, `dawi-${k} offers at least one surface`);
+  }
+  // The computed outcome, pinned: both deep DAWI greens fail the 4.5:1 host
+  // standard for surfaces and are offered as rule/device colours instead.
+  assert.equal(hostsText(DAWI_COLORS.teal.shades.primary), false);
+  assert.equal(hostsText(DAWI_COLORS.darkteal.shades.primary), false);
+});
+
+test("DAWI: every offered shade (+rule) emits only ≥4.5:1 text pairs, same Identity shape", () => {
+  let checked = 0;
+  for (const k of DAWI_KEYS) {
+    for (const s of [...offeredDawiShades(k), "rule" as const]) {
+      const id = identityFor(dawiAccent(k, s));
+      assert.equal(id.key, dawiAccent(k, s));
+      assert.equal(id.family, null);
+      assert.equal(id.field, s !== "rule");
+      for (const [label, text, surface] of dawiTextPairs(k, s)) {
+        const r = contrast(text, surface);
+        assert.ok(r >= 4.5, `dawi-${k}-${s} ${label}: ${text} on ${surface} = ${r.toFixed(2)}`);
+        checked++;
+      }
+      if (!id.dark) {
+        const v = id.vars!;
+        assert.ok(contrast(v["--id-dev"], v["--id-surface"]) >= 1.5, `dawi-${k}-${s} device visible`);
+      }
+    }
+  }
+  assert.ok(checked >= 80);
+  assert.equal(identityFor("dawi-grey").dark, true); // white text on DAWI grey
+  assert.equal(identityFor("dawi-coral").dark, false); // amethyst text on coral
+});
+
+test("DAWI: never applied automatically — defaults and legacy recipes untouched", () => {
+  assert.equal(identityKey(""), "paper");
+  for (const k of IDENTITY_KEYS) assert.deepEqual(legacyRecipe(k), LEGACY_FIXTURE[k], k);
+  assert.equal(anatomyFor("featured", identityFor("dawi-coral")), "lead-standfirst");
+  assert.equal(anatomyFor("list", identityFor("dawi-teal-light")), "rows");
+});
+
 test("new-family defaults: golden/seashell light, pumpkin warm-10, amethyst/coffee dark with light text", () => {
   assert.equal(identityFor("golden").vars!["--id-surface"], BRAND_FAMILIES.golden.tints[20]);
   assert.equal(identityFor("seashell").vars!["--id-surface"], BRAND_FAMILIES.seashell.tints[60]);

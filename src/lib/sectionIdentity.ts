@@ -26,11 +26,16 @@
 
 import {
   BRAND_FAMILIES,
+  DAWI_COLORS,
+  DAWI_KEYS,
+  DAWI_SHADES,
   FAMILY_KEYS,
   TEXT_COLORS,
   TINT_STEPS,
   contrast,
   hostsText,
+  type DawiKey,
+  type DawiShade,
   type FamilyKey,
   type TintStep,
 } from "./brandPalette.ts";
@@ -299,17 +304,28 @@ export const FAMILY_DEFAULTS: Record<FamilyKey, TintStep | "rule"> = {
 export type ParsedAccent =
   | { kind: "paper" }
   | { kind: "legacy"; key: IdentityKey }
-  | { kind: "family"; family: FamilyKey; tint: TintStep | "rule" };
+  | { kind: "family"; family: FamilyKey; tint: TintStep | "rule" }
+  | { kind: "dawi"; color: DawiKey; shade: DawiShade | "rule" };
 
 const isFamily = (v: string): v is FamilyKey => (FAMILY_KEYS as readonly string[]).includes(v);
+const isDawi = (v: string): v is DawiKey => (DAWI_KEYS as readonly string[]).includes(v);
 
 /** Parses and validates an admin accent against the official palette.
  * Case/whitespace-insensitive; anything unrecognised → paper. Legacy keys
- * (including bare legacy families and "frost-rule") resolve to "legacy". */
+ * (including bare legacy families and "frost-rule") resolve to "legacy".
+ * DAWI brand colors live in their own `dawi-` namespace, so they can never
+ * collide with a SALMA family (e.g. `dawi-teal` vs `teal`). */
 export function parseAccent(accent: string | null | undefined): ParsedAccent {
   const v = (accent ?? "").trim().toLowerCase();
   if (!v || v === "paper") return { kind: "paper" };
   if ((IDENTITY_KEYS as readonly string[]).includes(v)) return { kind: "legacy", key: v as IdentityKey };
+  if (v.startsWith("dawi-")) {
+    const d = /^([a-z]+)(?:-(light|rule))?$/.exec(v.slice(5));
+    if (!d || !isDawi(d[1])) return { kind: "paper" };
+    const shade = (d[2] ?? "primary") as DawiShade | "rule";
+    if (shade !== "rule" && !hostsText(DAWI_COLORS[d[1]].shades[shade])) return { kind: "paper" };
+    return { kind: "dawi", color: d[1], shade };
+  }
   if (isFamily(v)) {
     const d = FAMILY_DEFAULTS[v];
     return { kind: "family", family: v, tint: d };
@@ -319,6 +335,17 @@ export function parseAccent(accent: string | null | undefined): ParsedAccent {
   const tint = m[2] === "rule" ? "rule" : (Number(m[2]) as TintStep);
   if (tint !== "rule" && !hostsText(BRAND_FAMILIES[m[1]].tints[tint])) return { kind: "paper" };
   return { kind: "family", family: m[1], tint };
+}
+
+/** The accent string a DAWI picker selection writes. */
+export function dawiAccent(color: DawiKey, shade: DawiShade | "rule"): string {
+  return shade === "primary" ? `dawi-${color}` : `dawi-${color}-${shade}`;
+}
+
+/** DAWI shades a pair offers as a SURFACE (text can be hosted, same standard
+ * as the SALMA tints); the rest are offered as `-rule` only. */
+export function offeredDawiShades(color: DawiKey): DawiShade[] {
+  return DAWI_SHADES.filter((s) => hostsText(DAWI_COLORS[color].shades[s]));
 }
 
 /** The accent string a picker selection writes: a family's DEFAULT writes the
@@ -335,6 +362,7 @@ export function identityKey(accent: string | null | undefined): string {
   const p = parseAccent(accent);
   if (p.kind === "paper") return "paper";
   if (p.kind === "legacy") return p.key;
+  if (p.kind === "dawi") return dawiAccent(p.color, p.shade);
   return `${p.family}-${p.tint}`;
 }
 
@@ -444,11 +472,112 @@ function buildRecipe(family: FamilyKey, tint: TintStep | "rule"): Identity {
   };
 }
 
+/**
+ * Recipe builder for DAWI accents — the same documented coherence rules as
+ * `buildRecipe`, expressed over a documented PAIR instead of a 10-step scale
+ * (no tints are invented; owner requirement):
+ *  - surface = the chosen official shade (rule → page paper, no field).
+ *  - text NEVER uses the selected colour (same candidates / ≥4.5:1 rule).
+ *  - devices = the pair's primary on light surfaces (amethyst when nearly
+ *    invisible there, <1.5:1); the pair's light shade on dark surfaces.
+ *  - pills / grounds / tiles = the pair's light shade (white when the surface
+ *    IS the light shade, or when no official text reaches 4.5:1 on it).
+ *  - hairlines = official amethyst-10 hairline on light surfaces and rule;
+ *    the pair's light shade on dark surfaces.
+ */
+function buildDawiRecipe(color: DawiKey, shade: DawiShade | "rule"): Identity {
+  const c = DAWI_COLORS[color];
+  const rule = shade === "rule";
+  const surfaceHex = rule ? PAPER_HEX : c.shades[shade];
+  const dark = !rule && contrast(TEXT_COLORS.white, surfaceHex) > contrast(TEXT_COLORS.amethyst, surfaceHex);
+
+  const headline = dark ? "text-white" : "text-amethyst";
+  const body = dark
+    ? pick(surfaceHex, [["text-amethyst-100", TEXT_COLORS.amethyst100], ["text-white", TEXT_COLORS.white]])
+    : pick(surfaceHex, [
+        ["text-amethyst-600", TEXT_COLORS.amethyst600],
+        ["text-amethyst-800", TEXT_COLORS.amethyst800],
+        ["text-amethyst", TEXT_COLORS.amethyst],
+      ]);
+
+  const dev = dark
+    ? c.shades.light
+    : contrast(c.shades.primary, surfaceHex) >= 1.5
+      ? c.shades.primary
+      : TEXT_COLORS.amethyst;
+
+  let pill = shade === "light" ? "#FFFFFF" : c.shades.light;
+  if (contrast(TEXT_COLORS.amethyst, pill) < 4.5 && contrast(TEXT_COLORS.white, pill) < 4.5) pill = "#FFFFFF";
+  const pillText = contrast(TEXT_COLORS.amethyst, pill) >= 4.5 ? "text-amethyst" : "text-white";
+
+  const disc = contrast(TEXT_COLORS.amethyst, c.shades.primary) >= 4.5 && !dark ? c.shades.primary : c.shades.light;
+  const line = dark ? c.shades.light : HAIRLINE_HEX;
+  const mark = contrast(c.shades.primary, PAPER_HEX) >= 1.3 ? c.shades.primary : TEXT_COLORS.amethyst600;
+  const ink = dark ? "text-white" : "text-amethyst";
+
+  return {
+    key: dawiAccent(color, shade),
+    family: null,
+    dark,
+    field: !rule,
+    surface: rule ? "" : dark ? "bg-[var(--id-surface)] [&_:focus-visible]:outline-mauve!" : "bg-[var(--id-surface)]",
+    rule: "bg-[var(--id-rule)]",
+    ruleLine: "bg-[var(--id-line)]",
+    hairline: "border-[var(--id-line)]",
+    headline,
+    body: body ?? "text-amethyst",
+    pill: "bg-[var(--id-pill)]",
+    pillText,
+    mark: "",
+    tile: "",
+    fieldTile: "bg-[var(--id-pill)]",
+    ground: "bg-[var(--id-pill)]",
+    linkHover: "hover:bg-[var(--id-pill)]",
+    underline: "decoration-[var(--id-dev)]",
+    disc: "bg-[var(--id-disc)]",
+    cap: "border-[var(--id-dev)]",
+    drop: "border-[var(--id-dev)]",
+    ink,
+    divide: "divide-[var(--id-line)]",
+    vars: {
+      "--id-surface": surfaceHex,
+      "--id-rule": dev,
+      "--id-dev": dev,
+      "--id-line": line,
+      "--id-pill": pill,
+      "--id-disc": disc,
+    },
+    markStyle: { backgroundColor: mark },
+    tileStyle: { backgroundColor: c.shades.light },
+  };
+}
+
+/** The text/surface pairs a DAWI recipe emits (for audits/tests). */
+export function dawiTextPairs(color: DawiKey, shade: DawiShade | "rule"): [string, string, string][] {
+  const id = buildDawiRecipe(color, shade);
+  const surface = id.vars!["--id-surface"];
+  const hex: Record<string, string> = {
+    "text-amethyst": TEXT_COLORS.amethyst,
+    "text-amethyst-800": TEXT_COLORS.amethyst800,
+    "text-amethyst-600": TEXT_COLORS.amethyst600,
+    "text-amethyst-100": TEXT_COLORS.amethyst100,
+    "text-white": TEXT_COLORS.white,
+  };
+  return [
+    ["headline", hex[id.headline], surface],
+    ["body", hex[id.body], surface],
+    ["ink", hex[id.ink], surface],
+    ["pill", hex[id.pillText], id.vars!["--id-pill"]],
+    ["disc-numeral", TEXT_COLORS.amethyst, id.vars!["--id-disc"]],
+  ];
+}
+
 /** The complete identity for an admin `accent` value (paper fallback). */
 export function identityFor(accent: string | null | undefined): Identity {
   const p = parseAccent(accent);
   if (p.kind === "paper") return fromLegacy("paper");
   if (p.kind === "legacy") return fromLegacy(p.key);
+  if (p.kind === "dawi") return buildDawiRecipe(p.color, p.shade);
   return buildRecipe(p.family, p.tint);
 }
 

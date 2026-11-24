@@ -3,13 +3,26 @@
 import { useId, useState, type CSSProperties, type KeyboardEvent } from "react";
 import {
   BRAND_FAMILIES,
+  DAWI_COLORS,
+  DAWI_KEYS,
+  DAWI_SHADES,
   FAMILY_KEYS,
   TINT_STEPS,
   hostsText,
+  type DawiKey,
+  type DawiShade,
   type FamilyKey,
   type TintStep,
 } from "@/lib/brandPalette";
-import { FAMILY_DEFAULTS, accentFor, identityFor, parseAccent, type IdentityKey } from "@/lib/sectionIdentity";
+import {
+  FAMILY_DEFAULTS,
+  accentFor,
+  dawiAccent,
+  identityFor,
+  offeredDawiShades,
+  parseAccent,
+  type IdentityKey,
+} from "@/lib/sectionIdentity";
 
 /**
  * Section identity picker (owner-approved family × tint grammar). Writes the
@@ -22,7 +35,12 @@ import { FAMILY_DEFAULTS, accentFor, identityFor, parseAccent, type IdentityKey 
  * colour is never the only information.
  */
 
-type Choice = { family: FamilyKey | null; tint: TintStep | "rule" | null };
+type Choice = {
+  family: FamilyKey | null;
+  tint: TintStep | "rule" | null;
+  dawi?: DawiKey | null;
+  shade?: DawiShade | "rule" | null;
+};
 
 /** Legacy keys → the family/tint they correspond to (for highlighting). */
 const LEGACY_CHOICE: Record<IdentityKey, Choice> = {
@@ -41,6 +59,7 @@ function choiceOf(value: string): Choice {
   const p = parseAccent(value);
   if (p.kind === "paper") return { family: null, tint: null };
   if (p.kind === "legacy") return LEGACY_CHOICE[p.key];
+  if (p.kind === "dawi") return { family: null, tint: null, dawi: p.color, shade: p.shade };
   return { family: p.family, tint: p.tint };
 }
 
@@ -75,8 +94,10 @@ export function AccentPicker({ name, defaultValue }: { name: string; defaultValu
   const [advanced, setAdvanced] = useState(false);
   const uid = useId();
   const choice = choiceOf(value);
-  const legacyRaw = value.trim() !== "" && value.trim().toLowerCase() !== "paper" && choice.family === null;
+  const legacyRaw =
+    value.trim() !== "" && value.trim().toLowerCase() !== "paper" && choice.family === null && !choice.dawi;
   const fam = choice.family ? BRAND_FAMILIES[choice.family] : null;
+  const dawi = choice.dawi ? DAWI_COLORS[choice.dawi] : null;
   const idn = identityFor(value);
 
   return (
@@ -102,10 +123,10 @@ export function AccentPicker({ name, defaultValue }: { name: string; defaultValu
         <button
           type="button"
           role="radio"
-          aria-checked={choice.family === null && !legacyRaw}
-          tabIndex={choice.family === null ? 0 : -1}
+          aria-checked={choice.family === null && !choice.dawi && !legacyRaw}
+          tabIndex={choice.family === null && !choice.dawi ? 0 : -1}
           onClick={() => setValue("")}
-          className={`${swatchBtn} ${choice.family === null && !legacyRaw ? "border-ink ring-2 ring-ink" : "border-line"}`}
+          className={`${swatchBtn} ${choice.family === null && !choice.dawi && !legacyRaw ? "border-ink ring-2 ring-ink" : "border-line"}`}
         >
           <span aria-hidden className="size-7 shrink-0 rounded-md border border-line" style={{ background: "#FCFAF9" }} />
           <span>
@@ -200,6 +221,105 @@ export function AccentPicker({ name, defaultValue }: { name: string; defaultValu
         </div>
       ) : null}
 
+      {/* DAWI brand colors — a separate collection (documented pairs, no tint
+          scale; Bandage is logo-only and deliberately absent). Never applied
+          automatically: selectable for any section, like any other identity. */}
+      <div className="mt-1 flex flex-wrap items-center gap-2">
+        <span className="font-semibold">ألوان داوي (مجموعة منفصلة)</span>
+        <span className="text-[12px] text-gray">درجتان رسميتان لكل لون — لا تُطبّق تلقائياً على أي قسم</span>
+      </div>
+      <div
+        role="radiogroup"
+        aria-label="ألوان داوي"
+        onKeyDown={onRadioKeys}
+        className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4"
+      >
+        {DAWI_KEYS.map((k) => {
+          const c = DAWI_COLORS[k];
+          const on = choice.dawi === k;
+          return (
+            <button
+              key={k}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              tabIndex={on ? 0 : -1}
+              onClick={() => {
+                const shades = offeredDawiShades(k);
+                setValue(dawiAccent(k, shades[0] ?? "rule"));
+              }}
+              className={`${swatchBtn} ${on ? "border-ink ring-2 ring-ink" : "border-line"}`}
+            >
+              <span
+                aria-hidden
+                className="size-7 shrink-0 rounded-md border border-line"
+                style={{ background: c.shades.primary }}
+              />
+              <span>
+                {c.ar}
+                <span dir="ltr" className="block font-mono text-[12px] text-gray">
+                  {c.en} · {c.shades.primary}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Shades of the selected DAWI color */}
+      {dawi ? (
+        <div
+          role="radiogroup"
+          aria-label={`درجات ${dawi.ar}`}
+          onKeyDown={onRadioKeys}
+          className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6"
+        >
+          {DAWI_SHADES.map((s) => {
+            const hex = dawi.shades[s];
+            const ok = hostsText(hex);
+            const on = choice.shade === s;
+            return (
+              <button
+                key={s}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                disabled={!ok}
+                tabIndex={on ? 0 : -1}
+                onClick={() => setValue(dawiAccent(dawi.key, s))}
+                title={ok ? undefined : "لا تستضيف نصاً مقروءاً — متاحة كخط فقط"}
+                className={`${swatchBtn} disabled:cursor-not-allowed disabled:opacity-50 ${
+                  on ? "border-ink ring-2 ring-ink" : "border-line"
+                }`}
+              >
+                <span aria-hidden className="size-7 shrink-0 rounded-md border border-line" style={{ background: hex }} />
+                <span>
+                  {dawi.labels[s]}
+                  <span dir="ltr" className="block font-mono text-[12px] text-gray">{hex}</span>
+                  {!ok ? <span className="block text-[12px] text-gray">خط فقط</span> : null}
+                </span>
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            role="radio"
+            aria-checked={choice.shade === "rule"}
+            tabIndex={choice.shade === "rule" ? 0 : -1}
+            onClick={() => setValue(dawiAccent(dawi.key, "rule"))}
+            className={`${swatchBtn} ${choice.shade === "rule" ? "border-ink ring-2 ring-ink" : "border-line"}`}
+          >
+            <span aria-hidden className="relative size-7 shrink-0 rounded-md border border-line bg-[#FCFAF9]">
+              <span className="absolute inset-x-1 top-3 h-[3px]" style={{ background: dawi.shades.primary }} />
+            </span>
+            <span>
+              خط فقط (ورق)
+              <span dir="ltr" className="block font-mono text-[12px] text-gray">{dawiAccent(dawi.key, "rule")}</span>
+            </span>
+          </button>
+        </div>
+      ) : null}
+
       {/* Live preview — the same identity module the homepage renders with */}
       <div aria-label="معاينة الهوية" role="group" className="overflow-hidden rounded-xl border border-line">
         <div
@@ -252,7 +372,7 @@ export function AccentPicker({ name, defaultValue }: { name: string; defaultValu
       </div>
       {advanced ? (
         <label id={`${uid}-adv`} className="block text-[12px] font-semibold text-gray">
-          قيمة الهوية (مثال: teal ، golden-30 ، jet-rule)
+          قيمة الهوية (مثال: teal ، golden-30 ، jet-rule ، dawi-teal-light)
           <input
             value={value}
             onChange={(e) => setValue(e.target.value)}

@@ -130,6 +130,75 @@ export const BRAND_FAMILIES: Record<FamilyKey, BrandFamily> = {
   },
 };
 
+// ------------------------------------------------------------------ DAWI
+// DAWI official brand colors — a SEPARATE collection (owner-supplied list,
+// cross-checked against the official DAWI palette image, 2026-11-24). Each
+// DAWI color is a documented PAIR (primary + light); the DAWI guideline has
+// no 10-step tint scale and none is invented here (owner requirement).
+// "Bandage" (#D9AF85 outer / #ECCDB1 centre) is LOGO-ONLY per the guideline
+// and is deliberately NOT an interface color: it must not appear below.
+
+export const DAWI_SHADES = ["primary", "light"] as const;
+export type DawiShade = (typeof DAWI_SHADES)[number];
+
+export const DAWI_KEYS = ["teal", "grey", "white", "coral", "darkteal", "blue"] as const;
+/** Sub-key of a DAWI pair; the stored accent is `dawi-<key>[-light|-rule]`. */
+export type DawiKey = (typeof DAWI_KEYS)[number];
+
+export type DawiColor = {
+  key: DawiKey;
+  ar: string;
+  en: string;
+  /** Official shade names (e.g. the Blue pair's light shade is "Cyan"). */
+  labels: Record<DawiShade, string>;
+  shades: Record<DawiShade, string>;
+};
+
+export const DAWI_COLORS: Record<DawiKey, DawiColor> = {
+  teal: {
+    key: "teal",
+    ar: "تيل داوي",
+    en: "DAWI Teal",
+    labels: { primary: "Primary", light: "Light" },
+    shades: { primary: "#009984", light: "#CCE9E4" },
+  },
+  grey: {
+    key: "grey",
+    ar: "رمادي داوي",
+    en: "DAWI Grey",
+    labels: { primary: "Primary", light: "Light" },
+    shades: { primary: "#606261", light: "#E8E8E8" },
+  },
+  white: {
+    key: "white",
+    ar: "أبيض داوي",
+    en: "White",
+    labels: { primary: "Pure", light: "Off White" },
+    shades: { primary: "#FFFFFF", light: "#F7F7F5" },
+  },
+  coral: {
+    key: "coral",
+    ar: "مرجاني داوي",
+    en: "Coral",
+    labels: { primary: "Primary", light: "Light" },
+    shades: { primary: "#F6988A", light: "#F8AEA5" },
+  },
+  darkteal: {
+    key: "darkteal",
+    ar: "تيل داكن",
+    en: "Dark Teal",
+    labels: { primary: "Primary", light: "Light" },
+    shades: { primary: "#117E6B", light: "#99D6CC" },
+  },
+  blue: {
+    key: "blue",
+    ar: "أزرق / سايان",
+    en: "Blue / Cyan",
+    labels: { primary: "Blue", light: "Cyan" },
+    shades: { primary: "#389BD4", light: "#43BDCC" },
+  },
+};
+
 // ------------------------------------------------------------------ contrast
 // WCAG 2.x relative luminance / contrast ratio (pure, exact formula).
 
