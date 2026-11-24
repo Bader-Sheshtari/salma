@@ -75,7 +75,7 @@ export function HomeRail({
 
   return (
     <div role="region" aria-roledescription="carousel" aria-label={label}>
-      <div className="mb-6 flex min-h-11 items-center gap-3">
+      <div className="mx-auto mb-6 flex min-h-11 w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
         {heading}
         {count > 1 && scrollable ? (
           <div className="flex shrink-0 items-center gap-1">
@@ -98,7 +98,9 @@ export function HomeRail({
       <ul
         ref={track}
         onScroll={() => window.requestAnimationFrame(sync)}
-        className="salma-scroll -mx-4 flex snap-x snap-mandatory scroll-px-4 gap-6 overflow-x-auto px-4 pb-1 sm:-mx-6 sm:scroll-px-6 sm:px-6"
+        // Edge-to-edge track: the first card aligns with the centred content
+        // start (max-w-6xl = 72rem + gutter); the rail runs to the viewport end.
+        className="salma-scroll flex snap-x snap-mandatory gap-6 overflow-x-auto pb-1 pe-4 ps-[max(1rem,calc((100%-72rem)/2+1rem))] scroll-ps-[max(1rem,calc((100%-72rem)/2+1rem))] sm:pe-6 sm:ps-[max(1.5rem,calc((100%-72rem)/2+1.5rem))] sm:scroll-ps-[max(1.5rem,calc((100%-72rem)/2+1.5rem))]"
       >
         {items.map((item, i) => (
           <li

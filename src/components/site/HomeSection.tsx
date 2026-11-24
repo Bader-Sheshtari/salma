@@ -393,7 +393,7 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
 
   const titleRow = (
     <>
-      <h2 id={hid} className="text-xl font-bold leading-snug text-amethyst min-[401px]:text-[22px]">
+      <h2 id={hid} className="text-xl font-bold leading-snug text-amethyst min-[401px]:text-[length:var(--brand-fs-title)]">
         {section.title_ar}
       </h2>
       <span aria-hidden className="flex min-w-4 flex-1 items-center">
@@ -461,7 +461,7 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
       data-identity={idn.key}
       data-anatomy={anatomy}
       data-category={section.category_slug ?? undefined}
-      className={`px-4 text-amethyst sm:px-6 ${idn.field ? `my-12 py-10 md:py-12 ${idn.surface}` : "py-10"}`}
+      className={`text-amethyst ${idn.field ? `my-12 py-10 md:py-12 ${idn.surface}` : "py-10"}`}
     >
       {anatomy === "rail" ? (
         <HomeRail
@@ -483,13 +483,14 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
           bodyClass={idn.body}
         />
       ) : (
-        <>
+        // Full-bleed band (homepage shell), content centred at the H1 width.
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <div className="mb-6 flex min-h-11 items-center gap-3 md:gap-4">
             {titleRow}
             {viewAll}
           </div>
           {body}
-        </>
+        </div>
       )}
     </section>
   );

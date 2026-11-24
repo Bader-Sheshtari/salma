@@ -53,7 +53,8 @@ export function HomeView({ data }: { data: HomepageData }) {
           dominant) · supporting stories (end), then «المزيد من الأخبار». DOM order
           is editorial importance (hero first); the 3-rail order is visual (lg). */}
       {heroPool.length > 0 ? (
-        <section aria-label="أبرز الأخبار" className="px-4 pb-8 pt-6 text-amethyst sm:px-6">
+        <section aria-label="أبرز الأخبار" className="pb-8 pt-6 text-amethyst">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[minmax(0,3fr)_minmax(0,6fr)_minmax(0,3fr)]">
             <div className="md:col-span-2 md:mb-6 md:border-b md:border-hairline md:pb-6 lg:order-2 lg:col-span-1 lg:mb-0 lg:border-x lg:border-b-0 lg:px-6 lg:pb-0">
               <RotatingHero items={heroPool} lookups={lookups} />
@@ -123,7 +124,8 @@ export function HomeView({ data }: { data: HomepageData }) {
               </ul>
             </div>
           ) : null}
-        </section>
+                </div>
+      </section>
       ) : null}
 
       {/* The teal feed-prompt band was removed (plan §2 DD): its #newsletter
@@ -144,7 +146,8 @@ export function HomeView({ data }: { data: HomepageData }) {
           the dark-amethyst «لماذا سلمى» panel (mission text verbatim) beside the
           newsletter signup (NewsletterForm unchanged: endpoint + honeypot). The
           form keeps a light ground so its existing colours stay legible. */}
-      <section aria-label="عن سلمى والنشرة" className="mt-12 border-t border-hairline bg-seashell-2 px-4 py-10 text-amethyst sm:px-6 md:py-12">
+      <section aria-label="عن سلمى والنشرة" className="mt-12 border-t border-hairline bg-seashell-2 py-10 text-amethyst md:py-12">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
         <div className="grid gap-8 md:grid-cols-2 md:items-center md:gap-10">
           <div className="rounded-[10px] bg-amethyst p-6 text-white md:p-8">
             <div className="mb-3 flex items-center gap-2.5 text-sm font-bold text-mauve">
@@ -172,13 +175,14 @@ export function HomeView({ data }: { data: HomepageData }) {
             </Link>
           </div>
           <div id="newsletter">
-            <h2 className="text-[22px] font-bold">اشترك بنشرة سلمى</h2>
+            <h2 className="text-xl font-bold min-[401px]:text-[length:var(--brand-fs-title)]">اشترك بنشرة سلمى</h2>
             <p className="mt-1.5 text-[13px] leading-relaxed text-amethyst-600">
               سجّل بريدك — وستصلك نشرة سلمى الصحية عند انطلاقها.
             </p>
             <NewsletterForm />
           </div>
         </div>
+              </div>
       </section>
     </>
   );
@@ -189,9 +193,10 @@ function VideoBand({ videos }: { videos: Content[] }) {
   const [flag, ...rest] = videos;
   const focus = "focus-visible:outline-mauve!";
   return (
-    <section aria-labelledby="video-h" className="my-12 bg-amethyst px-4 py-10 text-white sm:px-6 md:py-12">
+    <section aria-labelledby="video-h" className="my-12 bg-amethyst py-10 text-white md:py-12">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
       <div className="mb-6 flex min-h-11 items-center gap-4">
-        <h2 id="video-h" className="text-xl font-bold leading-snug min-[401px]:text-[22px]">
+        <h2 id="video-h" className="text-xl font-bold leading-snug min-[401px]:text-[length:var(--brand-fs-title)]">
           فيديو وتبسيط طبي
         </h2>
         <span aria-hidden className="flex min-w-4 flex-1 items-center">
@@ -239,6 +244,7 @@ function VideoBand({ videos }: { videos: Content[] }) {
           ))}
         </ul>
       ) : null}
-    </section>
+            </div>
+      </section>
   );
 }

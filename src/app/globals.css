@@ -70,7 +70,7 @@
   /* approved type scale (desktop; responsive caps applied at adoption:
      hero ≤767px cap 28 / ≤400px cap 26; title ≤400px 20; meta ≤767px 13) */
   --brand-fs-hero: clamp(24px, 0.9rem + 1.3vw, 32px);
-  --brand-fs-title: 22px;
+  --brand-fs-title: 24px;
   --brand-fs-lead: 20px;
   --brand-fs-rail: 18px;
   --brand-fs-row: 16px;
