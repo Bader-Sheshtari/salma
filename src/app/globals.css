@@ -47,6 +47,23 @@
   --brand-coffee-bean: #2d1318;
   --brand-jet-black: #2b3a36;
   --brand-muted-teal: #8fb8ad;
+  /* Rev 3 / Phase 2a — official tint-ramp values consumed by the approved
+     refined H1 baseline (SALMA_HOMEPAGE_VISUAL_DIRECTION.md §2). Sourced from
+     the brand guidelines' tint tables; names carry the ramp position.
+     Intentionally UNUSED until Phase 3 adopts them. */
+  --brand-muted-teal-30: #ddeae6;
+  --brand-muted-teal-20: #e9f1ef;
+  --brand-pink-mist-10: #fff5f8;
+  --brand-frosted-blue-40: #d0eef1;
+  --brand-frosted-blue-30: #dcf2f5;
+  --brand-mauve-20: #f3eefe;
+  --brand-vanilla-40: #fbf6dd;
+  --brand-wine-plum-20: #e0d4d6;
+  --brand-wine-plum-10: #f0eaea;
+  /* approved design value (AD Rev 2 golden journey arrow; graphic-only,
+     never text — SALMA_HOMEPAGE_VISUAL_DIRECTION.md §4); not a guidelines
+     ramp value */
+  --brand-journey-arrow: #b98900;
   /* hairlines */
   --brand-hairline: #e8e6ed;
   --brand-hairline-strong: #bbb4c8;
@@ -81,6 +98,16 @@
   --color-coffee-bean: var(--brand-coffee-bean);
   --color-jet-black: var(--brand-jet-black);
   --color-muted-teal: var(--brand-muted-teal);
+  --color-muted-teal-30: var(--brand-muted-teal-30);
+  --color-muted-teal-20: var(--brand-muted-teal-20);
+  --color-pink-mist-10: var(--brand-pink-mist-10);
+  --color-frosted-blue-40: var(--brand-frosted-blue-40);
+  --color-frosted-blue-30: var(--brand-frosted-blue-30);
+  --color-mauve-20: var(--brand-mauve-20);
+  --color-vanilla-40: var(--brand-vanilla-40);
+  --color-wine-plum-20: var(--brand-wine-plum-20);
+  --color-wine-plum-10: var(--brand-wine-plum-10);
+  --color-journey-arrow: var(--brand-journey-arrow);
   --color-hairline: var(--brand-hairline);
   --color-hairline-strong: var(--brand-hairline-strong);
 }
