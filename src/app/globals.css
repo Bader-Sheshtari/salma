@@ -239,6 +239,17 @@ select:focus-visible {
 /* For focusable surfaces clipped by an `overflow-hidden` ancestor (hero
    slides, ticker headlines), draw the ring inside the edge so it stays
    visible. */
+/* Homepage (Direction E) only: brand focus ring on light surfaces. The legacy
+   teal ring measures 2.9:1 on the frost-100 field (WCAG 1.4.11 needs ≥3:1);
+   amethyst is ≥9:1 on paper and every tinted field. Dark surfaces keep their
+   mauve rings (layered !important utilities still win). Internal routes keep
+   the global teal ring unchanged. */
+.salma-home :focus-visible,
+.salma-home input:focus-visible,
+.salma-home textarea:focus-visible,
+.salma-home select:focus-visible {
+  outline-color: var(--brand-amethyst);
+}
 .salma-focus-inset:focus-visible {
   outline-offset: -3px;
 }

@@ -12,7 +12,7 @@ export default async function Page() {
     // Homepage only: full-bleed shell on the H1 paper ground (#FCFAF9). Internal
     // routes keep the shared max-w-6xl white card; bands here span the viewport
     // with their content centred in an inner max-w-6xl container.
-    <div className="min-h-screen bg-seashell-1">
+    <div className="salma-home min-h-screen bg-seashell-1">
       <Header categories={categories} />
       <main>
         <HomeView data={data} />

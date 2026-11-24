@@ -40,7 +40,7 @@ function Meta({ c, ctx, mode }: { c: Content; ctx: Ctx; mode?: "read" | "time" }
 function Img({ c, ratio, ctx, className = "" }: { c: Content; ratio: string; ctx: Ctx; className?: string }) {
   return (
     <div className={`relative isolate overflow-hidden rounded-lg ${ctx.idn.ground} ${ratio} ${className}`}>
-      <Cover src={coverFor(c)} alt="صورة" className="absolute inset-0" zoom />
+      <Cover src={coverFor(c)} alt="صورة" className="absolute inset-0" zoom lazy />
     </div>
   );
 }
@@ -336,7 +336,7 @@ function TransferRow({ t, idn }: { t: PublicDoctorTransfer; idn: Identity }) {
       <div className="size-[72px] overflow-hidden rounded-full border-[3px] border-white bg-seashell-2 md:size-24">
         {t.doctor_photo_url ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={t.doctor_photo_url} alt={t.doctor_name} className="h-full w-full object-cover" />
+          <img src={t.doctor_photo_url} alt={t.doctor_name} loading="lazy" className="h-full w-full object-cover" />
         ) : (
           <div aria-hidden className="grid h-full w-full place-items-center text-3xl font-bold text-amethyst-600">
             {monogram(t.doctor_name)}

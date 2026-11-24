@@ -55,7 +55,7 @@ export function NewsletterForm({ source = "homepage" }: { source?: SignupSource 
           aria-label="البريد الإلكتروني"
           dir="rtl"
           required
-          className="min-h-12 min-w-0 flex-1 rounded-full border border-hairline-strong bg-white px-4 py-3 text-sm text-amethyst outline-none placeholder:text-amethyst-600 focus:border-amethyst focus-visible:outline-amethyst/40!"
+          className="min-h-12 min-w-0 flex-1 rounded-full border border-hairline-strong bg-white px-4 py-3 text-sm text-amethyst outline-none placeholder:text-amethyst-600 focus:border-amethyst focus-visible:outline-amethyst!"
         />
         <button
           type="submit"
@@ -66,7 +66,7 @@ export function NewsletterForm({ source = "homepage" }: { source?: SignupSource 
         </button>
       </form>
       {state && !state.ok ? (
-        <div className="mt-2 text-[12.5px] text-coral">{state.error}</div>
+        <div role="alert" className="mt-2 text-[13px] text-wine-plum">{state.error}</div>
       ) : null}
       {/* Phase 3: ≥13px below 768px and ≥4.5:1 (was gray/70 ≈3:1). */}
       <p className="mt-2 text-[13px] text-amethyst-600 md:text-[11px]">

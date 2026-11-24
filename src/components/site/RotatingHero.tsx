@@ -86,7 +86,7 @@ export function RotatingHero({
               className="group block rounded-[10px]"
             >
               <div className="relative isolate aspect-video overflow-hidden rounded-[10px] bg-seashell-2">
-                <Cover src={coverFor(c)} alt="صورة رئيسية" className="absolute inset-0" zoom />
+                <Cover src={coverFor(c)} alt="صورة رئيسية" className="absolute inset-0" zoom priority={i === 0} lazy={i !== 0} />
               </div>
               <h2 className="mt-4 text-[length:var(--brand-fs-hero)] font-bold leading-[1.3] text-amethyst decoration-1 underline-offset-[5px] group-hover:underline">
                 {c.title}

@@ -73,7 +73,7 @@ export function Header({ categories, active }: { categories: Category[]; active?
             required
             dir="rtl"
             placeholder={SEARCH_PLACEHOLDER}
-            className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-amethyst-200 focus-visible:outline-none!"
+            className="min-w-0 flex-1 self-stretch bg-transparent text-sm text-white outline-none placeholder:text-amethyst-200 focus-visible:outline-none!"
           />
           <button
             type="submit"

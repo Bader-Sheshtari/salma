@@ -16,7 +16,7 @@ export function Footer({ categories }: { categories: Category[] }) {
       <div className="mx-auto max-w-6xl">
         <div className="grid grid-cols-1 gap-6 border-b border-amethyst-800 pb-6 min-[401px]:grid-cols-2 md:grid-cols-[1.2fr_1.2fr_1fr] md:gap-8">
           <div className="min-[401px]:col-span-2 md:col-span-1">
-            <Link href="/" aria-label="سلمى — الصفحة الرئيسية" className="inline-block rounded focus-visible:outline-mauve!">
+            <Link href="/" aria-label="سلمى — الصفحة الرئيسية" className="inline-flex min-h-11 items-center rounded focus-visible:outline-mauve!">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="/brand/wordmark-white.svg"

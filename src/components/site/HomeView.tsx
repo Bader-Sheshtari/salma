@@ -47,6 +47,9 @@ export function HomeView({ data }: { data: HomepageData }) {
 
   return (
     <>
+      {/* The homepage's single h1 (document outline); visually the masthead
+          wordmark carries the name. Text = the site title. */}
+      <h1 className="sr-only">سلمى · SALMA — أخبار صحية موثوقة</h1>
       <BreakingTicker items={data.breaking} />
 
       {/* LEAD BOARD — Direction E / refined H1: «الأحدث» (start) · hero (centre,
@@ -152,7 +155,7 @@ export function HomeView({ data }: { data: HomepageData }) {
           <div className="rounded-[10px] bg-amethyst p-6 text-white md:p-8">
             <div className="mb-3 flex items-center gap-2.5 text-sm font-bold text-mauve">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/brand/mark-mauve.svg" alt="" aria-hidden width={28} height={28} className="h-7 w-7" />
+              <img src="/brand/mark-mauve.svg" alt="" aria-hidden width={28} height={28} loading="lazy" className="h-7 w-7" />
               <span>
                 لماذا سلمى · <span className="font-sans text-[13px] tracking-[2px] md:text-[11px]">WHY SALMA</span>
               </span>
@@ -206,7 +209,7 @@ function VideoBand({ videos }: { videos: Content[] }) {
       </div>
       <Link href={hrefFor(flag)} className={`group grid items-center gap-6 md:grid-cols-2 md:gap-10 ${focus}`}>
         <div className="relative isolate grid aspect-video place-items-center overflow-hidden rounded-lg bg-amethyst-800">
-          <Cover src={coverFor(flag)} alt="فيديو" dark className="absolute inset-0" zoom />
+          <Cover src={coverFor(flag)} alt="فيديو" dark className="absolute inset-0" zoom lazy />
           <span aria-hidden className="relative grid size-16 place-items-center rounded-full bg-mauve text-amethyst md:size-[84px]">
             <svg viewBox="0 0 24 24" fill="currentColor" className="-me-1 size-6 md:size-8">
               <path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.4-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z" />
@@ -234,7 +237,7 @@ function VideoBand({ videos }: { videos: Content[] }) {
             <li key={c.id}>
               <Link href={hrefFor(c)} className={`group grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] items-start gap-3 ${focus}`}>
                 <div className="relative isolate aspect-video overflow-hidden rounded-md bg-amethyst-800">
-                  <Cover src={coverFor(c)} alt="فيديو" dark className="absolute inset-0" zoom />
+                  <Cover src={coverFor(c)} alt="فيديو" dark className="absolute inset-0" zoom lazy />
                 </div>
                 <h3 className="text-[15px] font-semibold leading-snug decoration-1 underline-offset-4 group-hover:underline">
                   {c.title}

@@ -38,6 +38,8 @@ export function Cover({
   dark,
   zoom = false,
   sizes = "(max-width: 768px) 100vw, 768px",
+  priority = false,
+  lazy = false,
 }: {
   src: string | null;
   alt: string;
@@ -45,6 +47,12 @@ export function Cover({
   dark?: boolean;
   zoom?: boolean;
   sizes?: string;
+  /** LCP candidate (homepage hero's first slide): preload / high priority. */
+  priority?: boolean;
+  /** Below-the-fold hotlinked image: defer loading. (next/image lazy-loads by
+   * default; this only affects the plain <img> path.) Defaults keep existing
+   * callers unchanged. */
+  lazy?: boolean;
 }) {
   // next/image `fill` needs a positioned ancestor; the wrapper provides it
   // unless the caller already supplies an absolute position.
@@ -57,7 +65,7 @@ export function Cover({
     if (isStorageImage(src)) {
       return (
         <div className={wrap}>
-          <Image src={src} alt={alt} fill sizes={sizes} className={`object-cover${img}`} />
+          <Image src={src} alt={alt} fill sizes={sizes} priority={priority} className={`object-cover${img}`} />
         </div>
       );
     }
@@ -73,7 +81,13 @@ export function Cover({
         >
           [ {alt} ]
         </div>
-        <HotImg src={src} alt={alt} className={`absolute inset-0 h-full w-full object-cover${img}`} />
+        <HotImg
+          src={src}
+          alt={alt}
+          className={`absolute inset-0 h-full w-full object-cover${img}`}
+          loading={priority ? "eager" : lazy ? "lazy" : undefined}
+          fetchPriority={priority ? "high" : undefined}
+        />
       </div>
     );
   }
