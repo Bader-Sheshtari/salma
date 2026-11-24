@@ -42,3 +42,6 @@ next-env.d.ts
 
 # supabase CLI temp
 supabase/.temp/
+
+# preview-only dev server (npm run dev:preview)
+/.next-preview/

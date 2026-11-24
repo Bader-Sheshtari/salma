@@ -34,8 +34,10 @@ function Chip({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`rounded-full px-3 py-1.5 text-[12.5px] font-semibold transition-colors ${
-        active ? "bg-teal text-white" : "border border-line bg-white text-gray hover:border-teal/60"
+      className={`min-h-11 rounded-full border px-4 py-2 text-[13px] font-semibold transition-colors ${
+        active
+          ? "border-amethyst bg-amethyst text-white"
+          : "border-hairline-strong bg-white text-amethyst hover:border-amethyst"
       }`}
     >
       {label}
@@ -95,7 +97,7 @@ function SingleChips({
 function Question({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mt-5">
-      <div className="mb-2 text-[13px] font-bold text-ink">{title}</div>
+      <div className="mb-2 text-sm font-bold text-amethyst">{title}</div>
       {children}
     </div>
   );
@@ -137,27 +139,27 @@ export function AudienceSurvey({ token }: { token: string }) {
 
   if (state?.ok) {
     return (
-      <div className="mt-4 rounded-lg bg-cream px-4 py-3 text-[13px] text-teal">
+      <div className="mt-4 rounded-lg bg-white px-4 py-3 text-[13px] text-amethyst">
         {state.saved ? "شكراً لك! تم حفظ إجاباتك." : "تم التخطي — اشتراكك في النشرة قائم."}
       </div>
     );
   }
 
   const selectClass =
-    "w-full max-w-xs rounded-lg border border-line bg-white px-3 py-2.5 text-[13px] outline-none focus:border-teal";
+    "min-h-11 w-full max-w-xs rounded-lg border border-hairline-strong bg-white px-3 py-2.5 text-sm text-amethyst outline-none focus:border-amethyst";
 
   return (
-    <div className="mt-5 rounded-2xl border border-line bg-white p-5 text-start sm:p-6">
+    <div className="mt-5 rounded-2xl border border-hairline bg-white p-5 text-start text-amethyst sm:p-6">
       <div className="flex flex-wrap items-center justify-center gap-2">
-        <span className="rounded-full bg-cream px-2.5 py-1 text-[11px] font-bold text-teal">
+        <span className="rounded-full bg-mauve-20 px-2.5 py-1 text-[13px] font-bold text-amethyst md:text-xs">
           اختياري
         </span>
       </div>
-      <p className="mt-3 text-center text-[13px] leading-relaxed text-gray">
+      <p className="mt-3 text-center text-[13px] leading-relaxed text-amethyst-600">
         إذا حاب، جاوب على كم سؤال اختياري يساعدنا نفهم اهتمامات جمهور سلمى بشكل أفضل ونقدم محتوى
         أقرب لما يفيدك فعلاً.
       </p>
-      <p className="mt-2 text-center text-[11.5px] leading-relaxed text-gray/80">
+      <p className="mt-2 text-center text-[13px] leading-relaxed text-amethyst-600 md:text-xs">
         تساعدنا هذه المعلومات على فهم جمهور سلمى واهتماماته بشكل أفضل، حتى نطور المحتوى والنشرات
         والخدمات المستقبلية ونقدم ما هو أكثر فائدة وملاءمة لقرائنا. جميع هذه الأسئلة اختيارية ولا
         تؤثر على اشتراكك في النشرة.
@@ -189,7 +191,7 @@ export function AudienceSurvey({ token }: { token: string }) {
               dir="rtl"
               maxLength={280}
               placeholder="اذكر السبب (اختياري)"
-              className="mt-2 w-full max-w-xs rounded-lg border border-line bg-white px-3 py-2 text-[13px] outline-none focus:border-teal"
+              className="mt-2 min-h-11 w-full max-w-xs rounded-lg border border-hairline-strong bg-white px-3 py-2 text-sm text-amethyst outline-none placeholder:text-amethyst-600 focus:border-amethyst"
             />
           ) : null}
         </Question>
@@ -245,21 +247,21 @@ export function AudienceSurvey({ token }: { token: string }) {
         </Question>
 
         {state && !state.ok ? (
-          <div className="mt-4 text-[12.5px] text-coral">{state.error}</div>
+          <div className="mt-4 text-[13px] text-wine-plum">{state.error}</div>
         ) : null}
 
         <div className="mt-6 flex items-center justify-center gap-2">
           <button
             type="submit"
             disabled={pending}
-            className="rounded-lg bg-teal px-6 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+            className="min-h-11 rounded-full bg-amethyst px-6 py-2.5 text-sm font-bold text-white hover:bg-amethyst-800 disabled:opacity-60"
           >
             {pending ? "…" : "حفظ الإجابات"}
           </button>
           <button
             type="button"
             onClick={() => setSkipped(true)}
-            className="rounded-lg border border-line bg-white px-6 py-2.5 text-sm font-semibold text-gray"
+            className="min-h-11 rounded-full border border-hairline-strong bg-white px-6 py-2.5 text-sm font-semibold text-amethyst hover:border-amethyst"
           >
             تخطي
           </button>

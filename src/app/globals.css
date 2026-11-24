@@ -16,6 +16,102 @@
   --salma-coral: #e99e8e;
 }
 
+/* ---------------------------------------------------------------------------
+   Direction E brand tokens — Phase 0 of SALMA_HOMEPAGE_IMPLEMENTATION_PLAN.md.
+   Palette per the approved SALMA_BRAND_IDENTITY_SPEC.md; amethyst UI shades,
+   hairlines and type scale per the approved design/mockups/direction-e.html.
+   Intentionally UNUSED until Phase 1+ adopts them: nothing below changes any
+   rendered output while no markup references these tokens/utilities.
+--------------------------------------------------------------------------- */
+:root {
+  /* primary palette */
+  --brand-amethyst: #1d0446;
+  --brand-mauve: #c6a9fd;
+  --brand-vanilla: #f5e9a4;
+  --brand-seashell: #f1e5e0;
+  /* amethyst UI shades (approved mockup) */
+  --brand-amethyst-800: #341d59;
+  --brand-amethyst-600: #61507e;
+  --brand-amethyst-400: #8e82a3;
+  --brand-amethyst-200: #bbb4c8;
+  --brand-amethyst-100: #e8e6ed;
+  /* seashell surfaces (approved mockup) */
+  --brand-seashell-2: #f6f1ee;
+  --brand-seashell-1: #fcfaf9;
+  /* secondary palette (tags/accents/categorization) */
+  --brand-golden-pollen: #fbcf50;
+  --brand-pumpkin: #ff7307;
+  --brand-frosted-blue: #8ad4dd;
+  --brand-pink-mist: #fc97b9;
+  --brand-wine-plum: #662832;
+  --brand-coffee-bean: #2d1318;
+  --brand-jet-black: #2b3a36;
+  --brand-muted-teal: #8fb8ad;
+  /* Rev 3 / Phase 2a — official tint-ramp values consumed by the approved
+     refined H1 baseline (SALMA_HOMEPAGE_VISUAL_DIRECTION.md §2). Sourced from
+     the brand guidelines' tint tables; names carry the ramp position.
+     Intentionally UNUSED until Phase 3 adopts them. */
+  --brand-muted-teal-30: #ddeae6;
+  --brand-muted-teal-20: #e9f1ef;
+  --brand-pink-mist-10: #fff5f8;
+  --brand-frosted-blue-40: #d0eef1;
+  --brand-frosted-blue-30: #dcf2f5;
+  --brand-mauve-20: #f3eefe;
+  --brand-vanilla-40: #fbf6dd;
+  --brand-wine-plum-20: #e0d4d6;
+  --brand-wine-plum-10: #f0eaea;
+  /* approved design value (AD Rev 2 golden journey arrow; graphic-only,
+     never text — SALMA_HOMEPAGE_VISUAL_DIRECTION.md §4); not a guidelines
+     ramp value */
+  --brand-journey-arrow: #b98900;
+  /* hairlines */
+  --brand-hairline: #e8e6ed;
+  --brand-hairline-strong: #bbb4c8;
+  /* approved type scale (desktop; responsive caps applied at adoption:
+     hero ≤767px cap 28 / ≤400px cap 26; title ≤400px 20; meta ≤767px 13) */
+  --brand-fs-hero: clamp(24px, 0.9rem + 1.3vw, 32px);
+  --brand-fs-title: 24px;
+  --brand-fs-lead: 20px;
+  --brand-fs-rail: 18px;
+  --brand-fs-row: 16px;
+  --brand-fs-excerpt: 14px;
+  --brand-fs-meta: 11px;
+}
+
+@theme inline {
+  --color-amethyst: var(--brand-amethyst);
+  --color-amethyst-800: var(--brand-amethyst-800);
+  --color-amethyst-600: var(--brand-amethyst-600);
+  --color-amethyst-400: var(--brand-amethyst-400);
+  --color-amethyst-200: var(--brand-amethyst-200);
+  --color-amethyst-100: var(--brand-amethyst-100);
+  --color-mauve: var(--brand-mauve);
+  --color-vanilla: var(--brand-vanilla);
+  --color-seashell: var(--brand-seashell);
+  --color-seashell-2: var(--brand-seashell-2);
+  --color-seashell-1: var(--brand-seashell-1);
+  --color-golden-pollen: var(--brand-golden-pollen);
+  --color-pumpkin: var(--brand-pumpkin);
+  --color-frosted-blue: var(--brand-frosted-blue);
+  --color-pink-mist: var(--brand-pink-mist);
+  --color-wine-plum: var(--brand-wine-plum);
+  --color-coffee-bean: var(--brand-coffee-bean);
+  --color-jet-black: var(--brand-jet-black);
+  --color-muted-teal: var(--brand-muted-teal);
+  --color-muted-teal-30: var(--brand-muted-teal-30);
+  --color-muted-teal-20: var(--brand-muted-teal-20);
+  --color-pink-mist-10: var(--brand-pink-mist-10);
+  --color-frosted-blue-40: var(--brand-frosted-blue-40);
+  --color-frosted-blue-30: var(--brand-frosted-blue-30);
+  --color-mauve-20: var(--brand-mauve-20);
+  --color-vanilla-40: var(--brand-vanilla-40);
+  --color-wine-plum-20: var(--brand-wine-plum-20);
+  --color-wine-plum-10: var(--brand-wine-plum-10);
+  --color-journey-arrow: var(--brand-journey-arrow);
+  --color-hairline: var(--brand-hairline);
+  --color-hairline-strong: var(--brand-hairline-strong);
+}
+
 @theme inline {
   --color-teal: var(--salma-teal);
   --color-green: var(--salma-green);
@@ -105,9 +201,9 @@ body {
     transform: scale(0.97);
   }
 
-  /* Anchor targets stop clear of the sticky header. */
+  /* Anchor targets stop clear of the sticky header (Amethyst masthead + nav ≈ 152px). */
   [id] {
-    scroll-margin-top: 96px;
+    scroll-margin-top: 168px;
   }
 
   /* Selection in brand teal, not UA blue. */
@@ -143,6 +239,17 @@ select:focus-visible {
 /* For focusable surfaces clipped by an `overflow-hidden` ancestor (hero
    slides, ticker headlines), draw the ring inside the edge so it stays
    visible. */
+/* Homepage (Direction E) only: brand focus ring on light surfaces. The legacy
+   teal ring measures 2.9:1 on the frost-100 field (WCAG 1.4.11 needs ≥3:1);
+   amethyst is ≥9:1 on paper and every tinted field. Dark surfaces keep their
+   mauve rings (layered !important utilities still win). Internal routes keep
+   the global teal ring unchanged. */
+.salma-home :focus-visible,
+.salma-home input:focus-visible,
+.salma-home textarea:focus-visible,
+.salma-home select:focus-visible {
+  outline-color: var(--brand-amethyst);
+}
 .salma-focus-inset:focus-visible {
   outline-offset: -3px;
 }

@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { Tables } from "@/lib/supabase/database.types";
 import { scoreFields } from "@/lib/search";
 import { videoThumbnail } from "@/lib/format";
+import { applyPreviewIdentity, previewIdentityEnabled } from "@/lib/previewIdentity";
 
 export type Content = Tables<"content">;
 export type Category = Tables<"categories">;
@@ -49,6 +50,13 @@ export type HomeSectionItems = {
   transfers: PublicDoctorTransfer[];
 };
 
+// Lead-board selection + §DUP/§DUP-V dedup live in @/lib/leadBoard (pure,
+// unit-tested with `npm test`); re-exported here for existing import sites.
+import { selectLeadBoard, dedupSectionItems } from "@/lib/leadBoard";
+import type { LeadBoard } from "@/lib/leadBoard";
+export { LEAD_BOARD_COUNTS, selectLeadBoard, dedupSectionItems } from "@/lib/leadBoard";
+export type { LeadBoard } from "@/lib/leadBoard";
+
 export type HomepageData = {
   hero: Content | null;
   /** Ordered pool the homepage hero rotates through: the featured pick first,
@@ -57,7 +65,21 @@ export type HomepageData = {
   breaking: Content[];
   videos: Content[];
   sections: HomeSectionItems[];
+  leadBoard: LeadBoard;
+  /** IDs of every story placed on the lead board (hero carousel included).
+   * Sections exclude these (§DUP); see `getHomepage`. */
+  leadBoardIds: string[];
+  /** category_slug → Arabic display name, for tags in mixed collections (§LBL). */
+  categoryNames: Record<string, string>;
+  /** category_slug → the `accent` of its enabled homepage section (DF identity
+   * key). Lets mixed collections colour a story's category mark/tile by its
+   * section identity without hardcoding slugs. */
+  categoryAccents: Record<string, string | null>;
 };
+
+/** How many recent stories feed the lead board selection (hero takes ≤5,
+ * the board ≤9 more; the rest is headroom for breaking/cover ranking). */
+const LEAD_POOL_SIZE = 40;
 
 export async function getHomepage(): Promise<HomepageData> {
   const supabase = await createClient();
@@ -69,9 +91,10 @@ export async function getHomepage(): Promise<HomepageData> {
       .eq("status", "published")
       .is("deleted_at", null);
 
-  const [heroRes, latestRes, breakingRes, videosRes, sectionsRes] = await Promise.all([
+  const [heroRes, latestRes, breakingRes, videosRes, sectionsRes, categoriesRes] = await Promise.all([
     base().eq("is_featured", true).order("published_at", { ascending: false }).limit(1).maybeSingle(),
-    base().neq("type", "video").order("published_at", { ascending: false }).limit(6),
+    // Lead-board pool; its first 6 are the hero's "latest articles" (unchanged).
+    base().neq("type", "video").order("published_at", { ascending: false }).limit(LEAD_POOL_SIZE),
     base().eq("is_breaking", true).order("published_at", { ascending: false }).limit(8),
     base().eq("type", "video").order("published_at", { ascending: false }).limit(6),
     supabase
@@ -79,14 +102,19 @@ export async function getHomepage(): Promise<HomepageData> {
       .select("*")
       .eq("is_enabled", true)
       .order("sort_order", { ascending: true }),
+    supabase.from("categories").select("slug,name_ar"),
   ]);
 
   const hero = (heroRes.data as unknown as Content) ?? null;
-  const sectionRows = (sectionsRes.data as HomepageSection[]) ?? [];
+  const adminRows = (sectionsRes.data as HomepageSection[]) ?? [];
+  // Preview-only overlay (lib/previewIdentity.ts): dev + SALMA_PREVIEW_IDENTITY=1
+  // only. In production builds NODE_ENV is "production" → real Admin rows.
+  const sectionRows = previewIdentityEnabled() ? applyPreviewIdentity(adminRows) : adminRows;
 
   // Build the hero rotation pool: featured pick first, then latest articles,
   // deduped, capped at 5 so the rotation stays focused on the top stories.
-  const latest = (latestRes.data as Content[]) ?? [];
+  const pool = (latestRes.data as Content[]) ?? [];
+  const latest = pool.slice(0, 6);
   const heroPool: Content[] = [];
   const seen = new Set<string>();
   for (const c of [...(hero ? [hero] : []), ...latest]) {
@@ -96,16 +124,28 @@ export async function getHomepage(): Promise<HomepageData> {
     if (heroPool.length >= 5) break;
   }
 
+  const leadBoard = selectLeadBoard(pool, heroPool);
+  const heroIds = new Set(heroPool.map((c) => c.id));
+  const leadBoardIds = new Set<string>([
+    ...heroIds,
+    ...leadBoard.supporting.map((c) => c.id),
+    ...leadBoard.latest.map((c) => c.id),
+    ...leadBoard.more.map((c) => c.id),
+  ]);
+
   // Resolve each enabled section's items in parallel. `feature:social` has no
   // UI yet (built in a later stage), so it is skipped here.
   const resolved = await Promise.all(
     sectionRows.map(async (section): Promise<HomeSectionItems | null> => {
       if (section.kind === "category" && section.category_slug) {
+        // §DUP (plan §2): a story appears once on the homepage, so lead-board
+        // stories are excluded here. Over-fetch by the board size so the
+        // section can still fill its admin `items_limit` after exclusion.
         const { data } = await base()
           .eq("category_slug", section.category_slug)
           .order("published_at", { ascending: false })
-          .limit(section.items_limit);
-        const content = ((data as Content[]) ?? []).filter((c) => c.id !== hero?.id);
+          .limit(section.items_limit + leadBoardIds.size);
+        const content = dedupSectionItems((data as Content[]) ?? [], section.items_limit, leadBoardIds, heroIds);
         return content.length > 0 ? { section, content, transfers: [] } : null;
       }
       if (section.key === "feature:doctor_transfers") {
@@ -120,8 +160,18 @@ export async function getHomepage(): Promise<HomepageData> {
     hero,
     heroPool,
     breaking: (breakingRes.data as Content[]) ?? [],
-    videos: (videosRes.data as Content[]) ?? [],
+    // The video lane is not a category section: lead-board stories never
+    // reappear in it (relevant only if the featured hero pick is a video).
+    videos: ((videosRes.data as Content[]) ?? []).filter((c) => !leadBoardIds.has(c.id)),
     sections: resolved.filter((s): s is HomeSectionItems => s !== null),
+    leadBoard,
+    leadBoardIds: [...leadBoardIds],
+    categoryNames: Object.fromEntries(
+      ((categoriesRes.data as Pick<Category, "slug" | "name_ar">[]) ?? []).map((c) => [c.slug, c.name_ar]),
+    ),
+    categoryAccents: Object.fromEntries(
+      sectionRows.filter((r) => r.category_slug).map((r) => [r.category_slug as string, r.accent]),
+    ),
   };
 }
 

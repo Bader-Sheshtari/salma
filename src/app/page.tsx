@@ -9,7 +9,10 @@ export default async function Page() {
   const [data, categories] = await Promise.all([getHomepage(), getCategories()]);
 
   return (
-    <div className="mx-auto min-h-screen max-w-6xl bg-white shadow-[0_0_60px_rgba(46,46,45,.12)]">
+    // Homepage only: full-bleed shell on the H1 paper ground (#FCFAF9). Internal
+    // routes keep the shared max-w-6xl white card; bands here span the viewport
+    // with their content centred in an inner max-w-6xl container.
+    <div className="salma-home min-h-screen bg-seashell-1">
       <Header categories={categories} />
       <main>
         <HomeView data={data} />

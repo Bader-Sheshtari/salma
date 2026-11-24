@@ -1,86 +1,126 @@
 import Link from "next/link";
+import Form from "next/form";
 import type { Category } from "@/lib/queries";
 
+// Same copy as SearchBox — the masthead field replaces the old homepage hero box.
+const SEARCH_PLACEHOLDER = "ابحث في سلمى عن خبر، دراسة، طبيب، أو موضوع صحي...";
+
+// On the Amethyst masthead the default teal focus ring disappears; mirror the
+// mockup's mauve ring. `!` is needed because the global :focus-visible rule is
+// unlayered and would otherwise win over utilities.
+const focusMauve = "focus-visible:outline-mauve!";
+
+/**
+ * Direction E masthead (design/mockups/direction-e.html §A):
+ *   row 1 — wordmark · search · «اشتراك»   (≤767px: wordmark + اشتراك, search wraps full-width below)
+ *   row 2 — pill nav rail, horizontally scrollable, hidden scrollbar (no hamburger)
+ */
 export function Header({ categories, active }: { categories: Category[]; active?: string }) {
   // `categories` arrives ordered by sort_order; the nav shows only the ones
   // an admin has flagged `show_in_nav` (managed from /admin/categories).
   const nav = categories.filter((c) => c.show_in_nav);
 
-  // Nav links are ~26px tall visually; the invisible ::before extends each
-  // one to ~44px (apple-design §10). The rail's `-mt-2 pt-2` keeps that
-  // upward reach inside its own padding box, since `overflow-x-auto` clips
-  // there — the header's height and the underline position don't move.
-  const navLink = "relative pb-1.5 before:absolute before:-inset-x-2 before:-top-2 before:-bottom-2.5";
+  const pill = (on: boolean) =>
+    `flex min-h-11 shrink-0 items-center rounded-full px-3.5 text-[15px] transition-colors ${focusMauve} ${
+      on ? "bg-mauve font-bold text-amethyst" : "font-medium text-white hover:bg-amethyst-800"
+    }`;
 
   return (
-    <header className="sticky top-0 z-40 border-b border-line bg-white">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-2.5 sm:px-6">
-        {/* py-1/-my-1: 44px tall tap area on mobile, row height unchanged */}
-        <Link href="/" className="-my-1 flex items-center gap-2.5 py-1">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal text-xl font-bold text-white sm:h-10 sm:w-10">
-            س
-          </span>
-          <span className="leading-none">
-            <span className="block text-xl font-bold tracking-tight text-teal sm:text-2xl">سلمى</span>
-            <span className="mt-0.5 block font-sans text-[10px] font-medium tracking-[1.5px] text-green">
-              SALMA · HEALTH
-            </span>
-          </span>
-        </Link>
-        <div className="flex items-center gap-3 sm:gap-4">
-          {/* 32px visual circle, 44px hit area via ::before */}
-          <Link
-            href="/search"
-            aria-label="بحث"
-            className="relative flex h-8 w-8 items-center justify-center rounded-full border border-gray/40 text-gray before:absolute before:-inset-1.5"
-          >
-            ⌕
-          </Link>
-          {/* 32px tall pill, 44px hit area via ::before */}
-          <Link
-            href="#newsletter"
-            className="relative rounded-lg bg-teal px-3 py-2 text-xs font-semibold text-white before:absolute before:inset-x-0 before:-inset-y-1.5"
-          >
-            اشتراك
-          </Link>
-        </div>
-      </div>
-      <nav className="salma-scroll mx-auto -mt-2 flex max-w-6xl gap-5 overflow-x-auto whitespace-nowrap px-4 pb-2.5 pt-2 text-[13.5px] font-semibold sm:px-6">
+    <header className="sticky top-0 z-40 bg-amethyst text-white">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-4 py-4 sm:px-6 md:flex-nowrap md:gap-6">
         <Link
           href="/"
-          className={`${navLink} ${
-            !active ? "border-b-[2.5px] border-teal text-teal" : "text-gray hover:text-teal"
-          }`}
+          aria-label="سلمى — الصفحة الرئيسية"
+          className={`block shrink-0 rounded ${focusMauve}`}
         >
-          الرئيسية
+          {/* Official wordmark (viewBox 443×125). width/height reserve space (no CLS). */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/brand/wordmark-white.svg"
+            alt="سلمى"
+            width={208}
+            height={59}
+            className="h-auto w-[170px] md:w-[208px]"
+          />
         </Link>
-        {nav.map((c) => {
-          const on = active === c.slug;
-          return (
-            <Link
-              key={c.slug}
-              href={`/category/${c.slug}`}
-              className={`${navLink} ${on ? "border-b-[2.5px]" : "hover:opacity-80"}`}
-              style={{ color: c.accent, borderColor: on ? c.accent : "transparent" }}
-            >
-              {c.name_ar}
-            </Link>
-          );
-        })}
-        {/* Launch Hardening V1: the doctors directory has no production data
-            yet (0 rows), so its public entry point is hidden — the /doctors
-            route and all admin capability remain intact. Restore this link
-            when real doctor profiles exist. */}
+
+        {/* Search: GET /search?q=… — same route as SearchBox; next/form adds
+            client-side navigation and still works without JS. */}
+        <Form
+          action="/search"
+          role="search"
+          className="order-3 flex h-12 basis-full items-center gap-2 rounded-full border border-transparent bg-amethyst-800 pe-1 ps-4 transition-colors focus-within:border-mauve md:order-none md:mx-auto md:max-w-[480px] md:flex-1 md:basis-auto"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            aria-hidden="true"
+            className="h-[18px] w-[18px] shrink-0 text-mauve"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-4.2-4.2" />
+          </svg>
+          <label htmlFor="site-search" className="sr-only">
+            بحث في سلمى
+          </label>
+          <input
+            id="site-search"
+            name="q"
+            type="search"
+            required
+            dir="rtl"
+            placeholder={SEARCH_PLACEHOLDER}
+            className="min-w-0 flex-1 self-stretch bg-transparent text-sm text-white outline-none placeholder:text-amethyst-200 focus-visible:outline-none!"
+          />
+          <button
+            type="submit"
+            className={`h-11 shrink-0 rounded-full px-3.5 text-sm font-bold text-mauve hover:bg-amethyst ${focusMauve}`}
+          >
+            بحث
+          </button>
+        </Form>
+
         <Link
-          href="/transfers"
-          className={`${navLink} ${
-            active === "transfers"
-              ? "border-b-[2.5px] border-teal text-teal"
-              : "text-gray hover:text-teal"
-          }`}
+          href="#newsletter"
+          className={`ms-auto inline-flex min-h-11 shrink-0 items-center rounded-full bg-mauve px-4 text-sm font-bold text-amethyst transition-colors hover:bg-[color-mix(in_srgb,var(--brand-mauve)_80%,white)] md:ms-0 md:px-5 ${focusMauve}`}
         >
-          انتقال الأطباء
+          اشتراك
         </Link>
+      </div>
+
+      <nav aria-label="الأقسام" className="border-t border-amethyst-800">
+        <div className="salma-scroll mx-auto flex max-w-6xl gap-1 overflow-x-auto whitespace-nowrap px-4 py-2 sm:px-6">
+          <Link href="/" aria-current={!active ? "page" : undefined} className={pill(!active)}>
+            الرئيسية
+          </Link>
+          {nav.map((c) => {
+            const on = active === c.slug;
+            return (
+              <Link
+                key={c.slug}
+                href={`/category/${c.slug}`}
+                aria-current={on ? "page" : undefined}
+                className={pill(on)}
+              >
+                {c.name_ar}
+              </Link>
+            );
+          })}
+          {/* Launch Hardening V1: the doctors directory has no production data
+              yet (0 rows), so its public entry point is hidden — the /doctors
+              route and all admin capability remain intact. Restore this link
+              when real doctor profiles exist. */}
+          <Link
+            href="/transfers"
+            aria-current={active === "transfers" ? "page" : undefined}
+            className={pill(active === "transfers")}
+          >
+            انتقال الأطباء
+          </Link>
+        </div>
       </nav>
     </header>
   );

@@ -1,0 +1,887 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>سلمى — Direction E</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="assets/logo/symbol-tile-amethyst.svg" type="image/svg+xml">
+<style>
+/* ===== Fonts ===== */
+@font-face{font-family:"KO Sans";src:url("assets/fonts/KOSans-Regular.otf") format("opentype");font-weight:400;font-display:swap}
+@font-face{font-family:"KO Sans";src:url("assets/fonts/KOSans-Medium.otf") format("opentype");font-weight:500;font-display:swap}
+@font-face{font-family:"KO Sans";src:url("assets/fonts/KOSans-SemiBold.otf") format("opentype");font-weight:600;font-display:swap}
+@font-face{font-family:"KO Sans";src:url("assets/fonts/KOSans-Bold.otf") format("opentype");font-weight:700;font-display:swap}
+/* DM Sans = TEMPORARY Latin substitute for pending Seabass. Latin + digits only; Arabic falls through to KO Sans. */
+@font-face{font-family:"DM Sans";src:url("assets/fonts/DMSans-Variable.ttf") format("truetype");font-weight:100 1000;font-display:swap;unicode-range:U+0020-007E,U+00A0-00FF,U+2013-2014,U+2022,U+2026}
+
+/* =====================================================================
+   DESIGN TOKENS — Direction E · "Editorial first"
+   ---------------------------------------------------------------------
+   TYPE SCALE (KO Sans; Latin/numerals DM Sans)
+     --fs-hero   clamp(24px → 32px)  Bold 700      lh 1.3    lead-board dominant story (≈30px @1240; ≤767 cap 28, ≤400 cap 26, floor 22)
+     --fs-title  22px (≤400: 20px)   Bold 700      lh 1.3    section titles
+     --fs-lead   20px                Bold 700      lh 1.4    feature cards + section-lead headlines
+     --fs-rail   18px                Bold 700      lh 1.4    lead-board end-rail feature
+     --fs-row    16px                SemiBold 600  lh 1.5    rails, rows, lists
+     --fs-ex     14px                Regular 400   lh 1.7    real excerpts (#61507E), CSS line-clamped
+     --fs-label  14px                Bold 700                rail purpose labels
+     --fs-meta   11px desktop  (≤767: 13px)                  time · reading time · category (plain text)
+     --fs-kick   11px desktop  (≤767: 13px, ≤400 hidden)     Latin kicker, DM Sans 600 uppercase
+     Brand statement (Why Salma panel) 28px (≤767: 22px).
+     Rule: no visible text < 13px below 768px.
+   SPACING — 8px grid (4px half-step for hairline-adjacent nudges only):
+     --s1 4 · --s2 8 · --s3 16 · --s4 24 · --s5 32 · --s6 48
+   STRUCTURE — hairlines (--line) carry the layout; no boxes, no shadows on editorial cards.
+   CHIPS — only «الأبرز» (lead board) and «عاجل» (ticker). Category = plain meta text.
+   ===================================================================== */
+:root{
+  --am:#1D0446;--am-800:#341D59;--am-600:#61507E;--am-400:#8E82A3;--am-200:#BBB4C8;--am-100:#E8E6ED;
+  --mauve:#C6A9FD;--vanilla:#F5E9A4;--sea:#F1E5E0;--sea-2:#F6F1EE;--sea-1:#FCFAF9;
+  --gold:#FBCF50;--frost:#8AD4DD;--pink:#FC97B9;--wine:#662832;
+  --line:#E8E6ED;--line-strong:#BBB4C8;
+  --ff:"DM Sans","KO Sans",system-ui,sans-serif;
+
+  --fs-hero:clamp(24px, .9rem + 1.3vw, 32px);
+  --fs-title:22px;--fs-lead:20px;--fs-rail:18px;--fs-row:16px;--fs-ex:14px;--fs-meta:11px;--fs-kick:11px;--fs-tag:12px;
+
+  --s1:4px;--s2:8px;--s3:16px;--s4:24px;--s5:32px;--s6:48px;
+  --wrap:1240px;--gut:20px;--col:24px;--r-img:8px;
+}
+@media (max-width:767px){:root{--gut:16px;--col:16px;--fs-meta:13px;--fs-kick:13px;--fs-tag:13px}}
+@media (max-width:400px){:root{--fs-title:20px}}
+
+/* ===== Base ===== */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:#fff;color:var(--am);font-family:var(--ff);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+img{display:block;max-width:100%}
+a{color:inherit;text-decoration:none}
+h1,h2,h3,p{margin:0}
+ul{margin:0;padding:0;list-style:none}
+button,input{font:inherit;color:inherit}
+.wrap{max-width:var(--wrap);margin-inline:auto;padding-inline:var(--gut)}
+.sr{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+:focus-visible{outline:2px solid var(--am);outline-offset:3px;border-radius:4px}
+.dark :focus-visible,.mast :focus-visible,.ticker :focus-visible,.why :focus-visible{outline-color:var(--mauve)}
+.lat{font-family:"DM Sans",system-ui,sans-serif}
+
+/* Stories */
+a.story{transition:opacity .12s}
+:where(a.story){display:block}
+a.story:active{opacity:.72}
+a.story:hover .hl,a.story:focus-visible .hl{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:5px}
+.press{transition:transform .12s,background-color .15s,color .15s}
+.press:active{transform:scale(.97)}
+
+/* Images */
+.ph{position:relative;background:var(--sea-2);border-radius:var(--r-img);overflow:hidden;aspect-ratio:16/9}
+.ph img{width:100%;height:100%;object-fit:cover;transition:opacity .2s}
+.ph img.img-x{opacity:0}
+.ph.r1610{aspect-ratio:16/10}
+.ph.r32{aspect-ratio:3/2}
+a.story:hover .ph img:not(.img-x){opacity:.92}
+.media{margin-bottom:var(--s3)}
+
+/* Type */
+.t-hero{font-size:var(--fs-hero);line-height:1.3;font-weight:700}
+.t-lead{font-size:var(--fs-lead);line-height:1.4;font-weight:700}
+.t-rail{font-size:var(--fs-rail);line-height:1.4;font-weight:700}
+.t-row{font-size:var(--fs-row);line-height:1.5;font-weight:600}
+.ex{font-size:var(--fs-ex);line-height:1.7;color:var(--am-600);margin-top:var(--s2);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.ex.c1{-webkit-line-clamp:1;margin-top:var(--s1)}
+.meta{font-size:var(--fs-meta);line-height:1.4;color:var(--am-600);margin-top:var(--s2);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.meta .dot{opacity:.6}
+.meta .num{font-family:"DM Sans",sans-serif}
+.kick{font-family:"DM Sans",system-ui,sans-serif;font-size:var(--fs-kick);font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--am-600);display:inline-flex;align-items:center;gap:6px;margin-bottom:var(--s2)}
+.kick svg{width:14px;height:14px}
+
+/* Chip — «الأبرز» only */
+.tag{display:inline-block;font-size:var(--fs-tag);font-weight:600;line-height:1;padding:5px 10px 4px;border-radius:999px;color:var(--am);background:var(--vanilla)}
+
+/* ===== Draft badge ===== */
+.badge{position:fixed;z-index:60;inset-block-end:12px;inset-inline-end:12px;max-width:210px;background:rgba(255,255,255,.95);border:1px dashed var(--am-400);border-radius:8px;padding:6px 10px;font-size:11px;line-height:1.45;color:var(--am);pointer-events:none}
+.badge b{display:block;font-weight:700}
+.badge span{display:block;color:var(--am-600)}
+@media (max-width:767px){
+  .badge{position:static;max-width:none;border:0;border-bottom:1px dashed var(--am-400);border-radius:0;background:var(--sea-2);display:flex;gap:4px 8px;justify-content:center;flex-wrap:wrap;padding:4px 12px;font-size:13px;text-align:center}
+}
+
+/* ===== A. Masthead: one row (wordmark · search · subscribe) + nav row ===== */
+.mast{background:var(--am);color:#fff}
+.mast-row{display:flex;align-items:center;gap:var(--s4);padding-block:var(--s3)}
+.mast-logo{flex:none;display:block}
+.mast-logo img{width:208px;height:auto}
+.search{flex:1;max-width:480px;margin-inline:auto;display:flex;align-items:center;height:48px;background:var(--am-800);border-radius:999px;padding-inline:16px 4px;gap:8px;border:1px solid transparent;transition:border-color .15s,background-color .15s}
+.search:focus-within{border-color:var(--mauve);background:#2a1352}
+.search svg{width:18px;height:18px;flex:none;color:var(--mauve)}
+.search input{flex:1;min-width:0;background:none;border:0;outline:0;color:#fff;font-size:14px}
+.search input::placeholder{color:var(--am-200)}
+.search button{height:44px;border:0;border-radius:999px;background:none;color:var(--mauve);font-weight:700;font-size:14px;padding-inline:14px;cursor:pointer}
+.search button:hover{background:var(--am)}
+.sub-btn{flex:none;display:inline-flex;align-items:center;min-height:44px;padding-inline:20px;border-radius:999px;background:var(--mauve);color:var(--am);font-weight:700;font-size:14.5px}
+.sub-btn:hover{background:#d6c0fe}
+.nav{border-top:1px solid var(--am-800)}
+.nav ul{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;padding-block:var(--s2)}
+.nav ul::-webkit-scrollbar{display:none}
+.nav a{display:flex;align-items:center;min-height:44px;padding:0 14px;border-radius:999px;white-space:nowrap;font-size:15px;font-weight:500;color:#fff}
+.nav a:hover{background:var(--am-800)}
+.nav a[aria-current="page"]{background:var(--mauve);color:var(--am);font-weight:700}
+@media (max-width:767px){
+  .mast-row{flex-wrap:wrap;gap:var(--s3);padding-block:var(--s3)}
+  .mast-logo img{width:170px}
+  .sub-btn{margin-inline-start:auto;font-size:14px;padding-inline:16px}
+  .search{order:3;flex-basis:100%;max-width:none;margin:0}
+  .nav ul{margin-inline:calc(var(--gut) * -1);padding-inline:var(--gut)}
+}
+
+/* ===== B. Ticker (unchanged from D-R2) ===== */
+.ticker{background:var(--mauve);color:var(--am)}
+.ticker .wrap{display:flex;align-items:center;gap:12px;height:44px}
+.brk{flex:none;display:inline-flex;align-items:center;gap:8px;background:var(--am);color:#fff;font-weight:700;font-size:13.5px;border-radius:999px;padding:5px 12px 4px}
+.brk i{width:8px;height:8px;border-radius:50%;background:var(--mauve);position:relative}
+.brk i::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--mauve);animation:ping 1.6s ease-out infinite}
+@keyframes ping{0%{transform:scale(1);opacity:.9}100%{transform:scale(2.6);opacity:0}}
+.tk-view{flex:1;min-width:0;overflow:hidden;mask-image:linear-gradient(to left,transparent,#000 24px,#000 calc(100% - 24px),transparent)}
+.tk-track{display:flex;width:max-content;animation:tk 30s linear infinite}
+.ticker:hover .tk-track,.ticker:focus-within .tk-track{animation-play-state:paused}
+@keyframes tk{from{transform:translateX(0)}to{transform:translateX(50%)}}
+.tk-set{display:flex}
+.tk-set a{display:flex;align-items:center;min-height:44px;white-space:nowrap;font-size:14.5px;font-weight:500;padding-inline:22px;position:relative}
+.tk-set a::before{content:"";position:absolute;inset-inline-start:0;top:50%;width:4px;height:4px;margin-top:-2px;border-radius:50%;background:var(--am)}
+.tk-set a:hover{text-decoration:underline;text-underline-offset:4px}
+
+/* ===== Rail label (purpose label inside the lead board) ===== */
+.rl{display:flex;align-items:center;gap:var(--s2);min-height:32px;font-size:14px;font-weight:700;line-height:1.3;padding-bottom:var(--s2);margin-bottom:var(--s3);border-bottom:1px solid var(--am)}
+.rl .count{font-family:"DM Sans",sans-serif;font-size:var(--fs-meta);font-weight:500;color:var(--am-600);margin-inline-start:auto;letter-spacing:.06em}
+
+/* Hairline-separated stacks */
+.rows > li + li{border-top:1px solid var(--line)}
+.rows > li > a{padding-block:var(--s3)}
+.rows > li:first-child > a{padding-top:0}
+.rows > li:last-child > a{padding-bottom:0}
+
+/* ===== C. LEAD BOARD ===== */
+.board{padding-block:var(--s4) var(--s5)}
+.bgrid{display:grid;grid-template-columns:minmax(0,1fr)}
+.b-latest,.b-side{border-top:1px solid var(--line);margin-top:var(--s4);padding-top:var(--s4)}
+.slides{display:grid}
+.slide{grid-area:1/1;opacity:0;visibility:hidden;transition:opacity .7s ease,visibility 0s linear .7s}
+.slide.on{opacity:1;visibility:visible;transition:opacity .7s ease,visibility 0s}
+.slide .ph{border-radius:10px;margin-bottom:var(--s3)}
+.dots{display:flex;align-items:center;margin-top:var(--s2);margin-inline-start:-8px}
+.dots button{width:44px;height:44px;border:0;background:none;cursor:pointer;display:grid;place-items:center;padding:0;border-radius:8px}
+.dots button[aria-current="true"]{width:56px}
+.dots button span{width:8px;height:8px;border-radius:999px;background:var(--am-200);transition:width .3s,background-color .3s}
+.dots button[aria-current="true"] span{width:24px;background:var(--am)}
+.dots button:hover span{background:var(--am-600)}
+@media (max-width:767px){.rl.blank{display:none}}
+.side-more{border-top:1px solid var(--line);margin-top:var(--s3);padding-top:var(--s3)}
+.more{margin-top:var(--s4);padding-top:var(--s3);border-top:1px solid var(--line-strong)}
+.more .rl{border-bottom:0;margin-bottom:var(--s2);padding-bottom:0}
+.more-grid{display:grid;grid-template-columns:minmax(0,1fr)}
+.more-grid .story{padding-block:var(--s3)}
+.more-grid .story + .story{border-top:1px solid var(--line)}
+.more-grid .story:first-child{padding-top:0}
+
+@media (min-width:768px){
+  .bgrid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"hero hero" "latest side"}
+  .b-hero{grid-area:hero;padding-bottom:var(--s4);border-bottom:1px solid var(--line)}
+  .b-latest{grid-area:latest;border-top:0;margin-top:0;padding-inline-end:var(--col)}
+  .b-side{grid-area:side;border-top:0;margin-top:0;padding-inline-start:var(--col);border-inline-start:1px solid var(--line)}
+  .more-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .more-grid .story{padding-block:0;padding-inline:var(--col)}
+  .more-grid .story:first-child{padding-inline-start:0}
+  .more-grid .story:last-child{padding-inline-end:0}
+  .more-grid .story + .story{border-top:0;border-inline-start:1px solid var(--line)}
+}
+@media (min-width:1024px){
+  /* RTL: first track = right rail («الأحدث»), centre = dominant story, last = left rail */
+  .bgrid{grid-template-columns:minmax(0,3fr) minmax(0,6fr) minmax(0,3fr);grid-template-areas:"latest hero side"}
+  .b-hero{padding-bottom:0;border-bottom:0;padding-inline:var(--col);border-inline:1px solid var(--line)}
+  .b-latest{padding-top:0;padding-inline-end:var(--col)}
+  .b-side{padding-top:0;border-inline-start:0}
+}
+
+/* ===== D. FEATURES BAND (video + Why Salma panel) ===== */
+.feat{padding-block:var(--s5);border-top:1px solid var(--line)}
+.vstrip{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s3);align-items:center}
+.vstrip .ph{border-radius:10px}
+.vtext{min-width:0}
+.play{position:absolute;inset:0;margin:auto;width:56px;height:56px;border-radius:50%;background:var(--am);color:#fff;display:grid;place-items:center}
+.play svg{width:20px;height:20px;margin-inline-end:-3px}
+a.story:hover .play{background:var(--am-800)}
+.why{background:var(--am);color:#fff;border-radius:10px;padding:var(--s5);display:flex;flex-direction:column;gap:var(--s3);min-width:0}
+.why .kick{color:var(--mauve);gap:10px;margin-bottom:0}
+.why .kick img{width:28px;height:auto}
+.why .kick .ar{font-family:var(--ff);font-size:14px;font-weight:700;letter-spacing:0;text-transform:none}
+.why h2{font-size:28px;line-height:1.35;font-weight:700}
+.why h2 em{font-style:normal;color:var(--mauve)}
+.why p.txt{font-size:16px;line-height:1.75;color:var(--am-100);max-width:46ch}
+.why .go{display:inline-flex;align-items:center;gap:6px;min-height:44px;align-self:flex-start;font-weight:700;font-size:14.5px;color:var(--mauve);border-radius:8px}
+.why .go svg{width:14px;height:14px}
+.why .go:hover{text-decoration:underline;text-underline-offset:4px}
+.pulse{display:block;width:100%;height:24px;color:var(--mauve)}
+.pulse path{fill:none;stroke:currentColor;stroke-width:1.4;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round}
+.why .pulse{opacity:.35;margin-top:auto}
+@media (min-width:768px){.vstrip{grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:var(--s4)}}
+@media (max-width:767px){.why{padding:var(--s4)}.why h2{font-size:22px}.why p.txt{font-size:15px}.play{width:48px;height:48px}}
+@media (max-width:400px){.why .kick .lat{display:none}}
+
+/* ===== E. TOPIC SECTIONS — one anatomy ===== */
+.sec{padding-block:var(--s4) var(--s4)}
+.docs-band + .sec{padding-top:var(--s5)}
+.sh{display:flex;align-items:center;gap:12px;min-height:44px;margin-bottom:var(--s3)}
+.sh h2{font-size:var(--fs-title);font-weight:700;line-height:1.3;white-space:nowrap}
+.sh .k{font-family:"DM Sans",system-ui,sans-serif;font-size:var(--fs-kick);font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--am-600);white-space:nowrap;min-width:0;overflow:hidden;flex:0 1 auto}
+.sh .rule{flex:1 1 0;min-width:16px;height:1px;background:var(--line-strong)}
+.sh .all{flex:none;white-space:nowrap;font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:4px;min-height:44px;padding-inline:8px;margin-inline-end:-8px;border-radius:6px}
+.sh .all svg{width:14px;height:14px}
+.sh .all:hover{background:var(--sea-2)}
+.sh.inv .rule{background:var(--wine);height:2px}
+@media (max-width:767px){.sh .k{letter-spacing:.1em}.sh .all svg{display:none}}
+@media (max-width:400px){.sh .k{display:none}}
+
+/* Mobile-first: lead stacked, rows beneath */
+.tsec{display:grid;grid-template-columns:minmax(0,1fr)}
+.tlead{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s3);align-content:start}
+.trows{border-top:1px solid var(--line);margin-top:var(--s3);padding-top:var(--s3)}
+.trows > li + li{border-top:1px solid var(--line)}
+.trows > li > a{padding-block:var(--s3)}
+.trows > li:first-child > a{padding-top:0}
+.trows > li:last-child > a{padding-bottom:0}
+.tsec.text .tlead{gap:0}
+
+@media (min-width:768px){
+  /* Tablet: lead (image | text) full width, rows in two columns beneath */
+  .tlead{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--col);align-items:start}
+  .tsec.text .tlead{grid-template-columns:minmax(0,1fr)}
+  .trows{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:var(--col);row-gap:0}
+  .trows > li > a,.trows > li:first-child > a,.trows > li:last-child > a{padding-block:var(--s3)}
+  .trows > li + li{border-top:0}
+  .trows > li:nth-child(n+3){border-top:1px solid var(--line)}
+  .trows > li:nth-child(-n+2) > a{padding-top:0}
+}
+@media (min-width:1024px){
+  /* ≤3 rows: lead spans 8 cols (image 5 · text 3), rows in the remaining 4 cols */
+  .tsec{grid-template-columns:minmax(0,8fr) minmax(0,4fr)}
+  .tlead{grid-template-columns:minmax(0,5fr) minmax(0,3fr);padding-inline-end:var(--col)}
+  .trows{display:block;border-top:0;margin-top:0;padding-top:0;padding-inline-start:var(--col);border-inline-start:1px solid var(--line)}
+  .trows > li:nth-child(n+3){border-top:0}
+  .trows > li + li{border-top:1px solid var(--line)}
+  .trows > li:first-child > a{padding-top:0}
+  .trows > li:last-child > a{padding-bottom:0}
+  /* ≥4 rows (admin-controlled count): lead stacks in 5 cols, rows flow into two columns across 7 */
+  .tsec:has(.trows > li:nth-child(4)){grid-template-columns:minmax(0,5fr) minmax(0,7fr)}
+  .tsec:has(.trows > li:nth-child(4)) .tlead{grid-template-columns:minmax(0,1fr);gap:var(--s3)}
+  .tsec:has(.trows > li:nth-child(4)) .trows{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-auto-flow:column;grid-template-rows:repeat(3,auto);column-gap:0;align-content:start}
+  .trows:has(> li:nth-child(4)):not(:has(> li:nth-child(5))){grid-template-rows:repeat(2,auto)!important}
+  .tsec:has(.trows > li:nth-child(4)) .trows > li{padding-inline-end:var(--col)}
+  .tsec:has(.trows > li:nth-child(4)) .trows > li > a{padding-block:var(--s3)}
+  .tsec:has(.trows > li:nth-child(4)) .trows > li:nth-child(3n+1){border-top:0}
+  .tsec:has(.trows > li:nth-child(4)) .trows > li:nth-child(3n+1) > a{padding-top:0}
+  .tsec:has(.trows > li:nth-child(4)) .trows > li:nth-child(n+4){padding-inline:var(--col) 0;border-inline-start:1px solid var(--line)}
+  .trows:has(> li:nth-child(4)):not(:has(> li:nth-child(5))) > li:nth-child(3){padding-inline:var(--col) 0;border-inline-start:1px solid var(--line);border-top:0}
+  .trows:has(> li:nth-child(4)):not(:has(> li:nth-child(5))) > li:nth-child(3) > a{padding-top:0}
+  /* text-led variant (تحقيقات): 6 | 6 */
+  .tsec.text{grid-template-columns:minmax(0,6fr) minmax(0,6fr)}
+  .tsec.text .tlead{grid-template-columns:minmax(0,1fr)}
+}
+
+/* صحة وحياة — the one visual variant: 3-up image row */
+.row3{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s4)}
+@media (min-width:768px){.row3{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+/* ===== F. Doctor moves (calm dark band, from D-R2) ===== */
+.dark{background:var(--am);color:#fff}
+.docs-band{padding-block:var(--s4) var(--s5)}
+.docs-band .pulse{opacity:.4;margin-bottom:var(--s2)}
+.dark .sh .rule{background:rgba(198,169,253,.28)}
+.dark .sh .k{color:var(--mauve)}
+.dark .sh .all:hover{background:var(--am-800)}
+.docs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+.doc{display:grid;grid-template-columns:64px 1fr;gap:var(--s3);align-items:start;padding-inline:var(--s5);padding-block:var(--s2);min-width:0}
+.doc:first-child{padding-inline-start:0}
+.doc:last-child{padding-inline-end:0}
+.doc + .doc{border-inline-start:1px solid rgba(198,169,253,.16)}
+.portrait{width:64px;height:64px;border-radius:50%;overflow:hidden;background:var(--am-800)}
+.portrait img{width:100%;height:100%;object-fit:cover}
+.portrait img.img-x{opacity:0}
+.doc h3{font-size:var(--fs-row);font-weight:700;line-height:1.4}
+.doc .spec{font-size:13.5px;font-weight:500;color:var(--mauve);margin-top:2px}
+.doc .move{font-size:13.5px;color:var(--am-100);margin-top:var(--s2);line-height:1.5}
+.doc .move .arr{color:var(--gold);font-weight:700;padding-inline:4px}
+.doc .when{font-size:var(--fs-meta);color:var(--am-200);margin-top:var(--s1)}
+a.doc:hover h3{text-decoration:underline;text-underline-offset:5px;text-decoration-thickness:1px}
+@media (max-width:1023px){.doc{padding-inline:var(--s4)}}
+@media (max-width:767px){
+  .docs{grid-template-columns:1fr}
+  .doc{padding:var(--s3) 0!important;border-inline-start:0!important;grid-template-columns:56px 1fr}
+  .doc:first-child{padding-top:0!important}
+  .doc + .doc{border-top:1px solid rgba(198,169,253,.16)}
+  .portrait{width:56px;height:56px}
+}
+
+/* ===== G. Newsletter ===== */
+/* Pre-footer: «لماذا سلمى» panel beside the subscribe block (stacked on mobile, mission first) */
+.pre{background:var(--sea-2);border-block:1px solid var(--line);margin-top:var(--s4)}
+.pre .wrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--s5);align-items:center;padding-block:var(--s5)}
+.nl{min-width:0}
+.nl h2{font-size:22px;font-weight:700;margin-bottom:var(--s3)}
+.nl form{display:flex;gap:var(--s2)}
+.nl input{flex:1;min-width:0;height:48px;border:1px solid var(--line-strong);border-radius:999px;background:#fff;padding-inline:18px;font-size:15px;direction:ltr;text-align:right}
+.nl input::placeholder{color:var(--am-400)}
+.nl input:focus{outline:2px solid var(--am);outline-offset:1px;border-color:var(--am)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding-inline:24px;border-radius:999px;background:var(--am);color:#fff;font-weight:700;font-size:14.5px;border:0;cursor:pointer;white-space:nowrap}
+.btn:hover{background:var(--am-800)}
+.nl .hp{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.nl .priv{font-size:13px;color:var(--am-600);margin-top:var(--s2)}
+.nl .priv a{text-decoration:underline;text-underline-offset:3px}
+.nl .ok{display:none;align-items:center;min-height:48px;font-weight:700;font-size:17px}
+.nl.done form,.nl.done .priv{display:none}
+.nl.done .ok{display:flex}
+@media (max-width:767px){.pre .wrap{grid-template-columns:1fr;gap:var(--s4);padding-block:var(--s4)}.nl form{flex-direction:column}.nl .btn{width:100%}}
+
+/* ===== Footer ===== */
+.foot{background:var(--am);color:#fff;padding-block:var(--s5) 72px}
+.foot-top{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1.2fr) minmax(0,1fr);gap:var(--s5);padding-bottom:var(--s4);border-bottom:1px solid var(--am-800)}
+.foot-brand img{width:150px;height:auto}
+.foot h3{font-size:12px;letter-spacing:.04em;color:var(--mauve);font-weight:600;margin-bottom:var(--s2)}
+.foot li a{display:inline-flex;min-height:44px;align-items:center;font-size:14px;color:var(--am-100)}
+.foot li a:hover{color:#fff;text-decoration:underline;text-underline-offset:4px}
+.foot-cats{columns:2;column-gap:var(--s4)}
+.foot-cats li{break-inside:avoid}
+.foot-bot{display:flex;gap:var(--s3);align-items:center;justify-content:space-between;flex-wrap:wrap;padding-top:var(--s3);font-size:13px;color:var(--am-200)}
+.foot-bot .src{display:flex;align-items:center;gap:10px}
+.foot-bot .src img{width:24px;height:24px}
+.foot-bot .src b{color:#fff;font-weight:500}
+@media (max-width:767px){.foot-top{grid-template-columns:1fr 1fr;gap:var(--s4)}.foot-brand{grid-column:1/-1}.foot{padding-bottom:var(--s4)}.foot h3{font-size:13px}.foot li a{min-height:44px}}
+@media (max-width:400px){.foot-top{grid-template-columns:1fr}}
+
+/* ===== C. Mobile flow + spacing (<768) — 8px grid, tighter rhythm ===== */
+@media (max-width:767px){
+  :root{--fs-hero:clamp(22px, 1rem + 1.6vw, 28px)}
+  .board{padding-block:var(--s3) var(--s4)}
+  .slide .ph{margin-bottom:var(--s2)}
+  .b-latest,.b-side{margin-top:var(--s3);padding-top:var(--s3)}
+  .rows > li > a{padding-block:12px}
+  .more{margin-top:var(--s3);padding-top:var(--s2)}
+  .more-grid .story{padding-block:12px}
+  .feat{padding-block:var(--s3)}
+  .sec{padding-block:var(--s3) var(--s2)}
+  .docs-band + .sec{padding-top:var(--s4)}
+  .sh{margin-bottom:var(--s2);gap:8px}
+  .tlead{gap:var(--s2)}
+  .trows{margin-top:var(--s2);padding-top:var(--s2)}
+  .trows > li > a{padding-block:12px}
+  .row3{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--s3)}
+  .row3 > :first-child{grid-column:1/-1}
+  .row3 .media{margin-bottom:var(--s2)}
+  .docs-band{padding-block:var(--s3) var(--s4)}
+  .foot{padding-top:var(--s4)}
+}
+@media (max-width:400px){:root{--fs-hero:clamp(22px, 1rem + 1.6vw, 26px)}}
+
+/* ===== Reduced motion ===== */
+@media (prefers-reduced-motion:reduce){
+  .tk-track{animation:none}
+  .tk-view{overflow-x:auto;mask-image:none;scrollbar-width:thin}
+  .tk-set[aria-hidden="true"]{display:none}
+  .brk i::after{animation:none}
+  .slide,.slide.on{transition:none}
+  .dots button span{transition:none}
+  .press:active{transform:none}
+}
+</style>
+</head>
+<body>
+
+<div class="badge" aria-hidden="true"><b>مسودة تصميم — الاتجاه E · تحريري أولاً</b><span>Latin: DM Sans مؤقتاً — Seabass قيد التوريد</span></div>
+
+<!-- ============ A. Masthead (one row) + nav ============ -->
+<header class="mast">
+  <div class="wrap mast-row">
+    <a class="mast-logo" href="#" aria-label="سلمى — الصفحة الرئيسية"><img src="assets/logo/wordmark-white.svg" alt="سلمى" width="208" height="60"></a>
+    <form class="search" role="search" action="#" onsubmit="event.preventDefault()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4.2-4.2"/></svg>
+      <label class="sr" for="q">بحث في سلمى</label>
+      <input id="q" type="search" placeholder="ابحث في سلمى عن خبر، دراسة، طبيب، أو موضوع صحي...">
+      <button class="press" type="submit">بحث</button>
+    </form>
+    <a class="sub-btn press" href="#newsletter">اشتراك</a>
+  </div>
+  <nav class="nav" aria-label="الأقسام">
+    <div class="wrap">
+      <ul>
+        <li><a class="press" href="#" aria-current="page">الرئيسية</a></li>
+        <li><a class="press" href="#kuwait">الكويت</a></li>
+        <li><a class="press" href="#gulf">الخليج</a></li>
+        <li><a class="press" href="#world">العالم</a></li>
+        <li><a class="press" href="#economy">اقتصاد الصحة</a></li>
+        <li><a class="press" href="#dawi">شصاير في داوي</a></li>
+        <li><a class="press" href="#life">صحة وحياة</a></li>
+        <li><a class="press" href="#investigations">تحقيقات</a></li>
+        <li><a class="press" href="#doctors">انتقال الأطباء</a></li>
+      </ul>
+    </div>
+  </nav>
+</header>
+
+<!-- ============ B. Breaking ticker ============ -->
+<section class="ticker" aria-label="أخبار عاجلة">
+  <div class="wrap">
+    <span class="brk"><i aria-hidden="true"></i>عاجل</span>
+    <div class="tk-view">
+      <div class="tk-track">
+        <div class="tk-set">
+          <a href="#">كيف يمكن لتأثير "البداية الجديدة" مساعدتك على الالتزام بالعادات الجيدة</a>
+          <a href="#">شراكة استراتيجية بين داوي ودار الشفاء تقود مرحلة جديدة في الصحة الرقمية بالكويت</a>
+          <a href="#">العادات التي تساعد الأطفال على تناول المزيد من الخضروات طوال حياتهم</a>
+          <a href="#">تطبيق "داوي" يتيح لك استشارة طبيب حقيقي في دقائق</a>
+        </div>
+        <div class="tk-set" aria-hidden="true">
+          <a href="#" tabindex="-1">كيف يمكن لتأثير "البداية الجديدة" مساعدتك على الالتزام بالعادات الجيدة</a>
+          <a href="#" tabindex="-1">شراكة استراتيجية بين داوي ودار الشفاء تقود مرحلة جديدة في الصحة الرقمية بالكويت</a>
+          <a href="#" tabindex="-1">العادات التي تساعد الأطفال على تناول المزيد من الخضروات طوال حياتهم</a>
+          <a href="#" tabindex="-1">تطبيق "داوي" يتيح لك استشارة طبيب حقيقي في دقائق</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<main id="main">
+
+<!-- ============ C. LEAD BOARD (one composed unit) ============ -->
+<section class="board" aria-label="أبرز الأخبار">
+  <div class="wrap">
+    <div class="bgrid">
+
+      <!-- Centre, dominant: hero carousel (DOM first = editorial importance) -->
+      <div class="b-hero" id="hero" aria-roledescription="carousel" aria-label="الأبرز">
+        <div class="rl"><span class="tag">الأبرز</span><span class="count" dir="ltr" aria-hidden="true"><b id="cur">1</b> / 5</span></div>
+        <div class="slides">
+          <article class="slide on" aria-roledescription="slide" aria-label="1 من 5">
+            <a class="story" href="#">
+              <div class="ph"><img src="https://ychef.files.bbci.co.uk/624x351/p0pb3p8c.jpg" alt="كيف تقلل من استنشاق الهواء الملوث أثناء ممارسة الرياضة" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+              <h1 class="t-hero hl">كيف تقلل من استنشاق الهواء الملوث أثناء ممارسة الرياضة</h1>
+              <p class="ex">تعتبر ممارسة الرياضة في الهواء الطلق مفيدة، لكن يجب اتخاذ خطوات لتقليل التعرض للتلوث الهوائي.</p>
+              <p class="meta"><time>قبل شهرين</time><span class="dot">·</span><span>صحة وحياة</span></p>
+            </a>
+          </article>
+          <article class="slide" aria-roledescription="slide" aria-label="2 من 5" aria-hidden="true">
+            <a class="story" href="#" tabindex="-1">
+              <div class="ph"><img loading="lazy" src="https://ichef.bbci.co.uk/news/1024/branded_news/ea65/live/801b8d10-74c3-11f1-b3a4-17c48cb4ee82.jpg" alt="رحلة إلى الهند تترك امرأة بريطانية مصابة بـ38 طفيليًا في دماغها" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+              <h2 class="t-hero hl">رحلة إلى الهند تترك امرأة بريطانية مصابة بـ38 طفيليًا في دماغها</h2>
+              <p class="ex">تعرضت امرأة بريطانية لصدمة صحية بعد اكتشافها 38 طفيليًا في دماغها نتيجة إصابتها بداء الكيسات المذنبة بعد رحلة إلى الهند.</p>
+              <p class="meta"><time>قبل شهر</time><span class="dot">·</span><span>العالم</span></p>
+            </a>
+          </article>
+          <article class="slide" aria-roledescription="slide" aria-label="3 من 5" aria-hidden="true">
+            <a class="story" href="#" tabindex="-1">
+              <div class="ph"><img loading="lazy" src="https://www.nafeza2world.com/temp/resized/medium_2026-07-01-ebef6111b2.jpg" alt="مواطن يناشد «الصحة» استثناءه لاستكمال علاجه في قطر" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+              <h2 class="t-hero hl">مواطن يناشد «الصحة» استثناءه لاستكمال علاجه في قطر</h2>
+              <p class="ex">مواطن قطري يطلب إعادة تفعيل تحويلته العلاجية لمستشفى &quot;ذافيو&quot; لاستكمال العلاج.</p>
+              <p class="meta"><time>قبل شهر</time><span class="dot">·</span><span>الكويت</span></p>
+            </a>
+          </article>
+          <article class="slide" aria-roledescription="slide" aria-label="4 من 5" aria-hidden="true">
+            <a class="story" href="#" tabindex="-1">
+              <div class="ph"><img loading="lazy" src="https://www.aljarida.com/jarida/uploads/images/2026/07/09/thumbs/650x650/550967.jpg" alt="وكيل وزارة الصحة يؤكد جاهزية المنظومة الصحية" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+              <h2 class="t-hero hl">وكيل وزارة الصحة يؤكد جاهزية المنظومة الصحية للتعامل مع الطوارئ</h2>
+              <p class="ex">تأكيد جاهزية الخدمات الصحية في الكويت.</p>
+              <p class="meta"><time>قبل شهر</time><span class="dot">·</span><span>الكويت</span></p>
+            </a>
+          </article>
+          <article class="slide" aria-roledescription="slide" aria-label="5 من 5" aria-hidden="true">
+            <a class="story" href="#" tabindex="-1">
+              <div class="ph"><img loading="lazy" src="https://www.maspero.eg/image/750/450/2026/07/17843320510.jpeg" alt="الصحة الكويتية: مصابون جراء الاعتداء الإيراني الآثم" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+              <h2 class="t-hero hl">الصحة الكويتية: مصابون جراء الاعتداء الإيراني الآثم</h2>
+              <p class="ex">تحديث حول حالة المصابين في الكويت</p>
+              <p class="meta"><time>قبل شهر</time><span class="dot">·</span><span>الكويت</span></p>
+            </a>
+          </article>
+        </div>
+        <div class="dots" role="group" aria-label="اختر الخبر">
+          <button type="button" aria-label="الخبر رقم 1" aria-current="true"><span></span></button>
+          <button type="button" aria-label="الخبر رقم 2"><span></span></button>
+          <button type="button" aria-label="الخبر رقم 3"><span></span></button>
+          <button type="button" aria-label="الخبر رقم 4"><span></span></button>
+          <button type="button" aria-label="الخبر رقم 5"><span></span></button>
+        </div>
+      </div>
+
+      <!-- Start rail (right on desktop): «الأحدث», text-led -->
+      <div class="b-latest" role="region" aria-labelledby="latest-h">
+        <h2 class="rl" id="latest-h">الأحدث</h2>
+        <ul class="rows">
+          <li><a class="story" href="#">
+            <h3 class="t-row hl">«الصحة» تصدر قراراً لتنظيم الزيارة والمرافقة وتفعيل ساعات الهدوء</h3>
+            <p class="ex c1">إجراءات جديدة لتحسين تجربة المرضى في المستشفيات.</p>
+            <p class="meta"><span><span class="num">3</span> دقائق قراءة</span><span class="dot">·</span><span>الكويت</span></p>
+          </a></li>
+          <li><a class="story" href="#">
+            <h3 class="t-row hl">الدواء الجديد للسكري في الكويت يقترب من الموافقة</h3>
+            <p class="ex c1">الدواء الجديد للسكري في الكويت في مراحل الموافقة النهائية.</p>
+            <p class="meta"><span><span class="num">2</span> دقائق قراءة</span><span class="dot">·</span><span>الكويت</span></p>
+          </a></li>
+          <li><a class="story" href="#">
+            <h3 class="t-row hl">حجز التطعيمات متاح الآن عبر تطبيقي "سهل" و"سالم"</h3>
+            <p class="ex c1">خدمة جديدة للتذكير بمواعيد التطعيمات.</p>
+            <p class="meta"><span><span class="num">2</span> دقائق قراءة</span><span class="dot">·</span><span>الكويت</span></p>
+          </a></li>
+          <li><a class="story" href="#">
+            <h3 class="t-row hl">تحذيرات من علماء FDA بشأن البيبتيدات</h3>
+            <p class="ex c1">علماء إدارة الغذاء والدواء الأمريكية يحذرون من عدم وجود أدلة كافية لدعم استخدام البيبتيدات التي يسعى كينيدي لإعادة تصنيفها.</p>
+            <p class="meta"><time>قبل 4 أشهر</time><span class="dot">·</span><span>تحقيقات</span></p>
+          </a></li>
+        </ul>
+      </div>
+
+      <!-- End rail (left on desktop): supporting stories by news importance, image-led, unlabeled -->
+      <div class="b-side" role="region" aria-label="أخبار مهمة أخرى">
+        <div class="rl blank" aria-hidden="true"></div>
+        <a class="story" href="#">
+          <div class="ph media"><img loading="lazy" src="https://www.cdc.gov/measles/media/images/2025/12/Measles-World-Map-Travel_update_9.12B-gradient.jpg?_=76691" alt="الولايات المتحدة تسجّل 4080 إصابة بالحصبة" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+          <h3 class="t-rail hl">الولايات المتحدة تسجّل 4080 إصابة بالحصبة</h3>
+          <p class="ex">أعلنت مراكز السيطرة على الأمراض في الولايات المتحدة أن حصيلة الحصبة المؤكدة بلغت 4080 إصابة في 2026 حتى 8 أكتوبر/تشرين الأول، بينها 18 حالة لدى زائرين دوليين، مع ارتباط 96% من الحالات بفاشيات.</p>
+          <p class="meta"><span><span class="num">1</span> دقيقة قراءة</span><span class="dot">·</span><span>العالم</span></p>
+        </a>
+        <div class="side-more">
+          <a class="story" href="#">
+            <h3 class="t-row hl">تفشٍّ جديد للإيبولا في الكونغو الديمقراطية ومنظمة الصحة العالمية ترسل فرقاً ميدانية</h3>
+            <p class="ex c1">تجاوز عدد الوفيات 2000 حالة في تفشي الإيبولا الحالي.</p>
+            <p class="meta"><span><span class="num">3</span> دقائق قراءة</span><span class="dot">·</span><span>العالم</span></p>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Package footer -->
+    <div class="more" role="region" aria-labelledby="more-h">
+      <h2 class="rl" id="more-h">المزيد من الأخبار</h2>
+      <div class="more-grid">
+        <a class="story" href="#">
+          <h3 class="t-row hl">بيان بلخي: الاستثمار في الرعاية الأولية يوفّر على أنظمة الصحة في المنطقة</h3>
+          <p class="meta"><span><span class="num">3</span> دقائق قراءة</span><span class="dot">·</span><span>اقتصاد الصحة</span></p>
+        </a>
+        <a class="story" href="#">
+          <h3 class="t-row hl">هل تم المبالغة في فوائد الصيام المتقطع؟</h3>
+          <p class="meta"><span><span class="num">6</span> دقائق قراءة</span><span class="dot">·</span><span>اقتصاد الصحة</span></p>
+        </a>
+        <a class="story" href="#">
+          <h3 class="t-row hl">تناول الأطعمة المعالجة قد يزيد خطر الخرف</h3>
+          <p class="meta"><span><span class="num">3</span> دقائق قراءة</span><span class="dot">·</span><span>صحة وحياة</span></p>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ D. FEATURE STRIP (video, single item) ============ -->
+<section class="feat" aria-label="فيديو">
+  <div class="wrap">
+    <a class="story vstrip" href="#">
+      <div class="ph r1610"><img loading="lazy" src="https://img.youtube.com/vi/FflPACmoh-w/hqdefault.jpg" alt="من السياسة إلى التكنلوجيا — بودكاست ريختر" onerror="this.onerror=null;this.classList.add('img-x')">
+        <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.4-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z"/></svg></span></div>
+      <div class="vtext">
+        <p class="kick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z" fill="currentColor"/></svg>Video</p>
+        <h2 class="t-lead hl">من السياسة إلى التكنلوجيا ... المدير التنفيذي لمنصة داوي في بودكاست ريختر</h2>
+        <p class="ex">في هذه الحلقة من بودكاست Richter Talk، نستضيف رائد الأعمال بدر ششتري، مؤسس منصة داوي، وهي منصة رقمية للخدمات الطبية تربط المرضى بالأطباء والعيادات بطريقة أسهل و</p>
+        <p class="meta"><span>فيديو وتبسيط طبي</span></p>
+      </div>
+    </a>
+  </div>
+</section>
+
+<!-- ============ E0. شصاير في داوي (2 → lead + 1 row) ============ -->
+<section class="sec" id="dawi" aria-labelledby="dawi-h">
+  <div class="wrap">
+    <div class="sh"><h2 id="dawi-h">شصاير في داوي</h2><span class="k">Inside Dawi</span><span class="rule" aria-hidden="true"></span><a class="all" href="#">عرض الكل <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></a></div>
+    <div class="tsec">
+      <a class="story tlead" href="#">
+        <div class="ph"><img loading="lazy" src="https://kuwaittimes.com/kuwaittimes/uploads/images/2026/01/20/349055.jpeg" alt="داوي توقع شراكة استراتيجية مع كليفلاند كلينك أبوظبي" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <div>
+          <h3 class="t-lead hl">داوي توقع شراكة استراتيجية مع كليفلاند كلينك أبوظبي</h3>
+          <p class="ex">وقعت شركة داوي شراكة استراتيجية مع كليفلاند كلينك أبوظبي لتقديم خدمات طبية متقدمة في الكويت.</p>
+          <p class="meta"><span><span class="num">4</span> دقائق قراءة</span><span class="dot">·</span><time>قبل 4 أشهر</time></p>
+        </div>
+      </a>
+      <ul class="trows">
+        <li><a class="story" href="#">
+          <h3 class="t-row hl">شراكة بين داوي ودار الشفاء للصحة الرقمية</h3>
+          <p class="meta"><span>شصاير في داوي</span></p>
+        </a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ E1. الكويت (3 → lead + 2 rows; hero-slide fallback) ============ -->
+<section class="sec" id="kuwait" aria-labelledby="kw-h">
+  <div class="wrap">
+    <div class="sh"><h2 id="kw-h">الكويت</h2><span class="k">Kuwait</span><span class="rule" aria-hidden="true"></span><a class="all" href="#">عرض الكل <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></a></div>
+    <div class="tsec">
+      <a class="story tlead" href="#">
+        <div class="ph"><img loading="lazy" src="https://www.nafeza2world.com/temp/resized/medium_2026-07-01-ebef6111b2.jpg" alt="مواطن يناشد «الصحة» استثناءه لاستكمال علاجه في قطر" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <div>
+          <h3 class="t-lead hl">مواطن يناشد «الصحة» استثناءه لاستكمال علاجه في قطر</h3>
+          <p class="ex">مواطن قطري يطلب إعادة تفعيل تحويلته العلاجية لمستشفى &quot;ذافيو&quot; لاستكمال العلاج.</p>
+          <p class="meta"><span><span class="num">2</span> دقائق قراءة</span><span class="dot">·</span><span>الكويت</span></p>
+        </div>
+      </a>
+      <ul class="trows">
+        <li><a class="story" href="#">
+          <h3 class="t-row hl">وكيل وزارة الصحة يؤكد جاهزية المنظومة الصحية للتعامل مع الطوارئ</h3>
+          <p class="meta"><span><span class="num">2</span> دقائق قراءة</span><span class="dot">·</span><span>الكويت</span></p>
+        </a></li>
+        <li><a class="story" href="#">
+          <h3 class="t-row hl">الصحة الكويتية: مصابون جراء الاعتداء الإيراني الآثم</h3>
+          <p class="meta"><span><span class="num">3</span> دقائق قراءة</span><span class="dot">·</span><span>الكويت</span></p>
+        </a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ E2. الخليج (2 → lead + 1 row) ============ -->
+<section class="sec" id="gulf" aria-labelledby="gulf-h">
+  <div class="wrap">
+    <div class="sh"><h2 id="gulf-h">الخليج</h2><span class="k">Gulf</span><span class="rule" aria-hidden="true"></span><a class="all" href="#">عرض الكل <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></a></div>
+    <div class="tsec">
+      <a class="story tlead" href="#">
+        <div class="ph"><img loading="lazy" src="https://al-sharq.com/get/maximage/20260730_1785443474-520.jpg?t=1785443474" alt="قطر الأولى إقليمياً في الرعاية الصحية بمؤشر Numbeo" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <div>
+          <h3 class="t-lead hl">قطر الأولى إقليمياً في الرعاية الصحية بمؤشر Numbeo</h3>
+          <p class="ex">قطر تحقق المركز الأول في الرعاية الصحية على مستوى الخليج.</p>
+          <p class="meta"><span><span class="num">3</span> دقائق قراءة</span><span class="dot">·</span><span>الخليج</span></p>
+        </div>
+      </a>
+      <ul class="trows">
+        <li><a class="story" href="#">
+          <h3 class="t-row hl">الإمارات تعتمد دواء "ليبفندرا"</h3>
+          <p class="meta"><span><span class="num">2</span> دقائق قراءة</span><span class="dot">·</span><span>الخليج</span></p>
+        </a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ F. Doctor moves (calm dark band) ============ -->
+<section class="dark docs-band" id="doctors" aria-labelledby="doc-h">
+  <div class="wrap">
+    <svg class="pulse" viewBox="0 0 1200 24" preserveAspectRatio="none" aria-hidden="true"><path d="M0 12 H780 L792 12 L802 3 L814 21 L824 6 L832 12 H1200"/></svg>
+    <div class="sh"><h2 id="doc-h">انتقالات الأطباء</h2><span class="k">Doctor Moves</span><span class="rule" aria-hidden="true"></span><a class="all" href="#">عرض الكل <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></a></div>
+    <div class="docs">
+      <a class="doc" href="#">
+        <div class="portrait"><img loading="lazy" src="https://ukraltlejlfkqbcifgcq.supabase.co/storage/v1/object/public/media/2026/11/b0d314c8-fdcd-414c-8a24-cc748bffdeb2.jpeg" alt="د. أيمن الرويح" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <div>
+          <h3>د. أيمن الرويح</h3>
+          <p class="spec">المخ والأعصاب</p>
+          <p class="move">من مستشفى مبارك<span class="arr" aria-label="إلى">←</span>إلى مستشفى الاميري</p>
+          <p class="when">نُشر في <time datetime="2026-11-07">7 نوفمبر 2026</time></p>
+        </div>
+      </a>
+      <a class="doc" href="#">
+        <div class="portrait"><img loading="lazy" src="https://ukraltlejlfkqbcifgcq.supabase.co/storage/v1/object/public/media/2026/07/cd69fff0-3322-476a-9340-c33ad6f03c3d.jpeg" alt="د. مريم العوضي" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <div>
+          <h3>د. مريم العوضي</h3>
+          <p class="spec">الطب النفسي</p>
+          <p class="move">من مايند ويل<span class="arr" aria-label="إلى">←</span>إلى مركز مريم العوضي</p>
+          <p class="when">نُشر في <time datetime="2026-07-02">2 يوليو 2026</time></p>
+        </div>
+      </a>
+      <a class="doc" href="#">
+        <div class="portrait"><img loading="lazy" src="https://ukraltlejlfkqbcifgcq.supabase.co/storage/v1/object/public/media/2026/07/9105bc01-0154-4b87-8705-dd45f3effeb8.jpg" alt="د. محمد جمال" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <div>
+          <h3>د. محمد جمال</h3>
+          <p class="spec">جراحة الكبد و البنكرياس</p>
+          <p class="move">من مستشفى الكويت<span class="arr" aria-label="إلى">←</span>إلى <span class="lat">DAWI</span></p>
+          <p class="when">نُشر في <time datetime="2026-07-01">1 يوليو 2026</time></p>
+        </div>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ E3. اقتصاد الصحة (3 → lead + 2 rows) ============ -->
+<section class="sec" id="economy" aria-labelledby="eco-h">
+  <div class="wrap">
+    <div class="sh"><h2 id="eco-h">اقتصاد الصحة</h2><span class="k">Health Economy</span><span class="rule" aria-hidden="true"></span><a class="all" href="#">عرض الكل <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></a></div>
+    <div class="tsec">
+      <a class="story tlead" href="#">
+        <div class="ph"><img loading="lazy" src="https://ichef.bbci.co.uk/ace/branded_sport/1200/cpsprodpb/549e/live/2fb714c0-a088-11f1-bfeb-dfb02ea642ef.jpg" alt="دراسة عن لاعبي NFL المتوفين" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <div>
+          <h3 class="t-lead hl">دراسة: واحد من كل أربعة لاعبين متوفين في NFL مصاب بمرض دماغي تنكّسي</h3>
+          <p class="ex">أظهرت دراسة جديدة أن نسبة كبيرة من لاعبي دوري كرة القدم الأمريكية الذين توفوا بين عامي 2016 و2021 كانوا يعانون من مرض دماغي مرتبط بالصدمات المتكررة.</p>
+          <p class="meta"><span><span class="num">4</span> دقائق قراءة</span><span class="dot">·</span><span>اقتصاد الصحة</span></p>
+        </div>
+      </a>
+      <ul class="trows">
+        <li><a class="story" href="#">
+          <h3 class="t-row hl">موافقة FDA على Qfitlia لعلاج الهيموفيليا… وأسئلة حول كلفته</h3>
+          <p class="meta"><span><span class="num">2</span> دقائق قراءة</span><span class="dot">·</span><span>اقتصاد الصحة</span></p>
+        </a></li>
+        <li><a class="story" href="#">
+          <h3 class="t-row hl">السعودية تحقق هدف منظمة الصحة العالمية لخفض التهاب الكبد B لدى الأطفال</h3>
+          <p class="meta"><span><span class="num">3</span> دقائق قراءة</span><span class="dot">·</span><span>اقتصاد الصحة</span></p>
+        </a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ E4. العالم (3 → lead + 2 rows; hero-slide fallback) ============ -->
+<section class="sec" id="world" aria-labelledby="world-h">
+  <div class="wrap">
+    <div class="sh"><h2 id="world-h">العالم</h2><span class="k">World</span><span class="rule" aria-hidden="true"></span><a class="all" href="#">عرض الكل <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></a></div>
+    <div class="tsec">
+      <a class="story tlead" href="#">
+        <div class="ph"><img loading="lazy" src="https://cdn.sananews.sy/2026/10/photo_2026-10-09_12-55-19.jpg" alt="طفرة نادرة قد تفسر مقاومة بعض الأشخاص للزهايمر" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <div>
+          <h3 class="t-lead hl">طفرة نادرة قد تفسر مقاومة بعض الأشخاص للزهايمر</h3>
+          <p class="ex">دراسة جديدة تشير إلى أن طفرة نادرة في جين FN1 قد تقلل تراكم بروتين الفيبرونيكتين حول أوعية الدماغ، ما قد يحافظ على سلامة الحاجز الدموي الدماغي لدى بعض حاملي APOE ε4.</p>
+          <p class="meta"><span><span class="num">1</span> دقيقة قراءة</span><span class="dot">·</span><span>العالم</span></p>
+        </div>
+      </a>
+      <ul class="trows">
+        <li><a class="story" href="#">
+          <h3 class="t-row hl">ذكاء اصطناعي يكشف أنماطاً خفية داخل سرطان الثدي</h3>
+          <p class="meta"><span><span class="num">1</span> دقيقة قراءة</span><span class="dot">·</span><span>العالم</span></p>
+        </a></li>
+        <li><a class="story" href="#">
+          <h3 class="t-row hl">رحلة إلى الهند تترك امرأة بريطانية مصابة بـ38 طفيليًا في دماغها</h3>
+          <p class="meta"><time>قبل شهر</time><span class="dot">·</span><span>العالم</span></p>
+        </a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ E5. صحة وحياة (3-up image row — the one visual variant) ============ -->
+<section class="sec" id="life" aria-labelledby="life-h">
+  <div class="wrap">
+    <div class="sh"><h2 id="life-h">صحة وحياة</h2><span class="k">Life</span><span class="rule" aria-hidden="true"></span><a class="all" href="#">عرض الكل <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></a></div>
+    <div class="row3">
+      <a class="story" href="#">
+        <div class="ph r32 media"><img loading="lazy" src="https://ichef.bbci.co.uk/news/1024/branded_news/dfa1/live/aaf4fca0-a387-11f0-a56f-0b1b78ebdf89.jpg" alt="كيف تعزز الطبيعة صحتك في 20 دقيقة" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <h3 class="t-row hl">كيف تعزز الطبيعة صحتك في 20 دقيقة</h3>
+        <p class="meta"><span><span class="num">5</span> دقائق قراءة</span><span class="dot">·</span><span>صحة وحياة</span></p>
+      </a>
+      <a class="story" href="#">
+        <div class="ph r32 media"><img loading="lazy" src="https://cnn-arabic-images.cnn.io/cloudinary/image/upload/w_1920,h_1008,c_fill,q_auto,g_center/t_cnnarabic_watermark_logo_v5/cnnarabic/2026/06/30/images/337055.jpg" alt="14 طريقة للحفاظ على برودة جسمك من دون مكيّف" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <h3 class="t-row hl">14 طريقة للحفاظ على برودة جسمك من دون مكيّف</h3>
+        <p class="meta"><span><span class="num">8</span> دقائق قراءة</span><span class="dot">·</span><span>صحة وحياة</span></p>
+      </a>
+      <a class="story" href="#">
+        <div class="ph r32 media"><img loading="lazy" src="https://ychef.files.bbci.co.uk/624x351/p0pb3p8c.jpg" alt="كيف تقلل من استنشاق الهواء الملوث أثناء ممارسة الرياضة" onerror="this.onerror=null;this.classList.add('img-x')"></div>
+        <h3 class="t-row hl">كيف تقلل من استنشاق الهواء الملوث أثناء ممارسة الرياضة</h3>
+        <p class="meta"><time>قبل شهرين</time><span class="dot">·</span><span>صحة وحياة</span></p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ E6. تحقيقات (2, text-led; Wine Plum on header rule only) ============ -->
+<section class="sec" id="investigations" aria-labelledby="inv-h">
+  <div class="wrap">
+    <div class="sh inv"><h2 id="inv-h">تحقيقات</h2><span class="k">Investigations</span><span class="rule" aria-hidden="true"></span><a class="all" href="#">عرض الكل <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></a></div>
+    <div class="tsec text">
+      <a class="story tlead" href="#">
+        <div>
+          <h3 class="t-lead hl">لماذا رفضت FDA العلاج الخلوي Orca-T رغم نتائج تجربته؟</h3>
+          <p class="meta"><time>قبل 4 أشهر</time><span class="dot">·</span><span>تحقيقات</span></p>
+        </div>
+      </a>
+      <ul class="trows">
+        <li><a class="story" href="#">
+          <h3 class="t-row hl">كيف نُجري تقاريرنا الاستقصائية: المنهج والمصادر والتصحيح</h3>
+          <p class="meta"><time>قبل 4 أشهر</time><span class="dot">·</span><span>تحقيقات</span></p>
+        </a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ G. Pre-footer: «لماذا سلمى» + newsletter ============ -->
+<section class="pre" aria-label="عن سلمى والنشرة">
+  <div class="wrap">
+    <div class="why" role="region" aria-labelledby="why-h">
+      <p class="kick"><img src="assets/logo/mark-mauve.svg" alt="" aria-hidden="true"><span class="ar">لماذا سلمى</span><span class="lat">· WHY SALMA</span></p>
+      <h2 id="why-h">سلمى تساعدك على <em>حياة أفضل</em> وأكثر صحة.</h2>
+      <p class="txt">منصة إخبارية صحية مستقلة، من الكويت إلى الخليج — نُغربل العالم لنقدّم لك ما يهمّ صحتك، بمصداقية ومصادر موثوقة.</p>
+      <a class="go" href="#">من نحن <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></a>
+      <svg class="pulse" viewBox="0 0 1200 24" preserveAspectRatio="none" aria-hidden="true"><path d="M0 12 H360 L372 12 L382 3 L394 21 L404 6 L412 12 H1200"/></svg>
+    </div>
+    <div class="nl" id="newsletter" role="region" aria-labelledby="nl-h">
+      <h2 id="nl-h">اشترك بنشرة سلمى</h2>
+      <div>
+        <form id="nl-form" novalidate>
+          <label class="sr" for="nl-email">البريد الإلكتروني</label>
+          <input id="nl-email" type="email" placeholder="name@example.com" autocomplete="email" required>
+          <div class="hp" aria-hidden="true"><label for="nl-site">Website</label><input id="nl-site" name="website" type="text" tabindex="-1" autocomplete="off"></div>
+          <button class="btn press" type="submit">اشترك</button>
+        </form>
+        <p class="priv">بتسجيل بريدك فإنك توافق على <a href="#">سياسة الخصوصية</a></p>
+        <p class="ok" role="status" aria-live="polite">تم اشتراكك بنجاح ✓</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ============ Footer ============ -->
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-top">
+      <div class="foot-brand"><img src="assets/logo/wordmark-white.svg" alt="سلمى" width="150" height="43"></div>
+      <div>
+        <h3>الأقسام</h3>
+        <ul class="foot-cats">
+          <li><a href="#kuwait">الكويت</a></li><li><a href="#gulf">الخليج</a></li><li><a href="#world">العالم</a></li>
+          <li><a href="#economy">اقتصاد الصحة</a></li><li><a href="#dawi">شصاير في داوي</a></li><li><a href="#life">صحة وحياة</a></li>
+          <li><a href="#investigations">تحقيقات</a></li><li><a href="#doctors">انتقال الأطباء</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>عن سلمى</h3>
+        <ul>
+          <li><a href="#">من نحن</a></li><li><a href="#">اتصل بنا</a></li><li><a href="#">المعايير التحريرية</a></li>
+          <li><a href="#">سياسة التصحيح</a></li><li><a href="#">سياسة الخصوصية</a></li><li><a href="#">شروط الاستخدام</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-bot">
+      <p class="src"><img src="assets/logo/symbol-tile-mauve.svg" alt="" aria-hidden="true">مصادرنا: <b class="lat">WHO · CDC · Mayo Clinic</b></p>
+      <p>© 2026 سلمى — جميع الحقوق محفوظة</p>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  /* Hero carousel — behaviour identical to D-R2 (6.5s, 700ms cross-fade, pause on hover/focus, no autoplay under reduced motion) */
+  var hero=document.getElementById('hero'),slides=hero.querySelectorAll('.slide'),dots=hero.querySelectorAll('.dots button'),cur=document.getElementById('cur');
+  var i=0,t=null,paused=false,reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function go(n){
+    slides[i].classList.remove('on');slides[i].setAttribute('aria-hidden','true');slides[i].querySelector('a').tabIndex=-1;dots[i].removeAttribute('aria-current');
+    i=(n+slides.length)%slides.length;
+    slides[i].classList.add('on');slides[i].removeAttribute('aria-hidden');slides[i].querySelector('a').removeAttribute('tabindex');dots[i].setAttribute('aria-current','true');cur.textContent=i+1;
+  }
+  function start(){if(reduce)return;stop();t=setInterval(function(){if(!paused)go(i+1)},6500)}
+  function stop(){if(t)clearInterval(t);t=null}
+  dots.forEach(function(d,n){d.addEventListener('click',function(){go(n);start()})});
+  hero.addEventListener('mouseenter',function(){paused=true});
+  hero.addEventListener('mouseleave',function(){paused=false});
+  hero.addEventListener('focusin',function(){paused=true});
+  hero.addEventListener('focusout',function(e){if(!hero.contains(e.relatedTarget))paused=false});
+  start();
+
+  /* Newsletter — honeypot: if the hidden field is filled, show success silently and do nothing */
+  var nl=document.querySelector('.nl'),f=document.getElementById('nl-form'),em=document.getElementById('nl-email'),hp=document.getElementById('nl-site');
+  f.addEventListener('submit',function(e){e.preventDefault();if(hp.value){nl.classList.add('done');return}if(!em.value||!em.checkValidity()){em.focus();em.setAttribute('aria-invalid','true');return}nl.classList.add('done')});
+})();
+</script>
+</body>
+</html>

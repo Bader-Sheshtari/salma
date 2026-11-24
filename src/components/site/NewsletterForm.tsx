@@ -20,14 +20,14 @@ export function NewsletterForm({ source = "homepage" }: { source?: SignupSource 
   if (state?.ok) {
     if (state.already) {
       return (
-        <div className="mt-4 rounded-lg bg-cream px-4 py-3 text-[13px] text-teal">
+        <div className="mt-4 rounded-lg bg-white px-4 py-3 text-[13px] text-amethyst">
           أنت مشترك بالفعل في نشرة سلمى.
         </div>
       );
     }
     return (
       <div>
-        <div className="mt-4 rounded-lg bg-cream px-4 py-3 text-[13px] font-bold text-teal">
+        <div className="mt-4 rounded-lg bg-white px-4 py-3 text-[13px] font-bold text-amethyst">
           تم اشتراكك بنجاح ✓
         </div>
         {state.surveyToken ? <AudienceSurvey token={state.surveyToken} /> : null}
@@ -52,24 +52,26 @@ export function NewsletterForm({ source = "homepage" }: { source?: SignupSource 
           type="email"
           name="email"
           placeholder="بريدك الإلكتروني"
+          aria-label="البريد الإلكتروني"
           dir="rtl"
           required
-          className="flex-1 rounded-lg border border-gray/40 bg-white px-3.5 py-3 text-sm outline-none focus:border-teal"
+          className="min-h-12 min-w-0 flex-1 rounded-full border border-hairline-strong bg-white px-4 py-3 text-sm text-amethyst outline-none placeholder:text-amethyst-600 focus:border-amethyst focus-visible:outline-amethyst!"
         />
         <button
           type="submit"
           disabled={pending}
-          className="rounded-lg bg-teal px-5 py-3 text-sm font-bold text-white disabled:opacity-60"
+          className="min-h-12 shrink-0 rounded-full bg-amethyst px-6 py-3 text-sm font-bold text-white hover:bg-amethyst-800 disabled:opacity-60 focus-visible:outline-amethyst!"
         >
           {pending ? "…" : "اشترك"}
         </button>
       </form>
       {state && !state.ok ? (
-        <div className="mt-2 text-[12.5px] text-coral">{state.error}</div>
+        <div role="alert" className="mt-2 text-[13px] text-wine-plum">{state.error}</div>
       ) : null}
-      <p className="mt-2 text-[11px] text-gray/70">
+      {/* Phase 3: ≥13px below 768px and ≥4.5:1 (was gray/70 ≈3:1). */}
+      <p className="mt-2 text-[13px] text-amethyst-600 md:text-[11px]">
         بتسجيل بريدك فإنك توافق على{" "}
-        <Link href="/privacy" className="underline underline-offset-2 hover:text-gray">
+        <Link href="/privacy" className="underline underline-offset-2 hover:text-amethyst">
           سياسة الخصوصية
         </Link>
       </p>

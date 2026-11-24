@@ -40,6 +40,10 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  // `npm run dev:preview` (preview-only identity overlay, lib/previewIdentity.ts)
+  // runs beside the normal dev server; Next allows one `next dev` per distDir,
+  // so the preview gets its own. Unset in every build/production run.
+  ...(process.env.SALMA_PREVIEW_IDENTITY === "1" ? { distDir: ".next-preview" } : {}),
   async headers() {
     return [{ source: "/:path*", headers: SECURITY_HEADERS }];
   },
