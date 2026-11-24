@@ -70,6 +70,10 @@ export type HomepageData = {
   leadBoardIds: string[];
   /** category_slug → Arabic display name, for tags in mixed collections (§LBL). */
   categoryNames: Record<string, string>;
+  /** category_slug → the `accent` of its enabled homepage section (DF identity
+   * key). Lets mixed collections colour a story's category mark/tile by its
+   * section identity without hardcoding slugs. */
+  categoryAccents: Record<string, string | null>;
 };
 
 /** How many recent stories feed the lead board selection (hero takes ≤5,
@@ -160,6 +164,9 @@ export async function getHomepage(): Promise<HomepageData> {
     leadBoardIds: [...leadBoardIds],
     categoryNames: Object.fromEntries(
       ((categoriesRes.data as Pick<Category, "slug" | "name_ar">[]) ?? []).map((c) => [c.slug, c.name_ar]),
+    ),
+    categoryAccents: Object.fromEntries(
+      sectionRows.filter((r) => r.category_slug).map((r) => [r.category_slug as string, r.accent]),
     ),
   };
 }

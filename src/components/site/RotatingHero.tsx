@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Content } from "@/lib/queries";
 import { Cover, coverFor, hrefFor } from "./cards";
-import { LeadMeta } from "./LeadMeta";
+import { LeadMeta, type CategoryLookups } from "./LeadMeta";
 
 const ROTATE_MS = 6500;
 
@@ -20,10 +20,10 @@ const ROTATE_MS = 6500;
  */
 export function RotatingHero({
   items,
-  categoryNames = {},
+  lookups,
 }: {
   items: Content[];
-  categoryNames?: Record<string, string>;
+  lookups: CategoryLookups;
 }) {
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -94,11 +94,7 @@ export function RotatingHero({
               {c.excerpt ? (
                 <p className="mt-2 line-clamp-2 text-sm leading-[1.7] text-amethyst-600">{c.excerpt}</p>
               ) : null}
-              <LeadMeta
-                c={c}
-                mode="time"
-                categoryName={c.category_slug ? categoryNames[c.category_slug] : undefined}
-              />
+              <LeadMeta c={c} mode="time" lookups={lookups} />
             </Link>
           </div>
         ))}

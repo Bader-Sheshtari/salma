@@ -67,9 +67,10 @@ export function NewsletterForm({ source = "homepage" }: { source?: SignupSource 
       {state && !state.ok ? (
         <div className="mt-2 text-[12.5px] text-coral">{state.error}</div>
       ) : null}
-      <p className="mt-2 text-[11px] text-gray/70">
+      {/* Phase 3: ≥13px below 768px and ≥4.5:1 (was gray/70 ≈3:1). */}
+      <p className="mt-2 text-[13px] text-amethyst-600 md:text-[11px]">
         بتسجيل بريدك فإنك توافق على{" "}
-        <Link href="/privacy" className="underline underline-offset-2 hover:text-gray">
+        <Link href="/privacy" className="underline underline-offset-2 hover:text-amethyst">
           سياسة الخصوصية
         </Link>
       </p>
