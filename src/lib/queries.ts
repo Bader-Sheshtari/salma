@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { Tables } from "@/lib/supabase/database.types";
 import { scoreFields } from "@/lib/search";
 import { videoThumbnail } from "@/lib/format";
+import { applyPreviewIdentity, previewIdentityEnabled } from "@/lib/previewIdentity";
 
 export type Content = Tables<"content">;
 export type Category = Tables<"categories">;
@@ -105,7 +106,10 @@ export async function getHomepage(): Promise<HomepageData> {
   ]);
 
   const hero = (heroRes.data as unknown as Content) ?? null;
-  const sectionRows = (sectionsRes.data as HomepageSection[]) ?? [];
+  const adminRows = (sectionsRes.data as HomepageSection[]) ?? [];
+  // Preview-only overlay (lib/previewIdentity.ts): dev + SALMA_PREVIEW_IDENTITY=1
+  // only. In production builds NODE_ENV is "production" → real Admin rows.
+  const sectionRows = previewIdentityEnabled() ? applyPreviewIdentity(adminRows) : adminRows;
 
   // Build the hero rotation pool: featured pick first, then latest articles,
   // deduped, capped at 5 so the rotation stays focused on the top stories.

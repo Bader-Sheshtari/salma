@@ -2,7 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { HotImg } from "./HotImg";
 import type { Content, SearchResult } from "@/lib/queries";
-import { formatDateTimeAr, hatch, timeAgoAr, videoThumbnail } from "@/lib/format";
+import { formatDateTimeAr, timeAgoAr, videoThumbnail } from "@/lib/format";
 
 /** True for images served from our Supabase Storage (optimizable by next/image). */
 export function isStorageImage(src: string): boolean {
@@ -27,10 +27,40 @@ export function hrefFor(c: Pick<Content, "type" | "slug">): string {
  */
 const ZOOM = "transition-transform duration-300 ease-out motion-safe:group-hover:scale-[1.03]";
 
-/** Cover image with a diagonal-hatch placeholder fallback.
+/**
+ * Branded image placeholder (pre-launch): quiet ground + the brand pulse glyph
+ * + the «[ alt ]» label. Light: seashell-2 ground, amethyst-200 glyph,
+ * amethyst-600 label (6.3:1). Dark: amethyst-800 ground, mauve glyph/label
+ * (7.1:1). Decorative (aria-hidden); never zooms; fills its box so the layout
+ * never collapses.
+ */
+function Placeholder({ alt, dark, className = "" }: { alt: string; dark?: boolean; className?: string }) {
+  return (
+    <div
+      aria-hidden
+      className={`flex flex-col items-center justify-center gap-2 ${
+        dark ? "bg-amethyst-800 text-mauve" : "bg-seashell-2 text-amethyst-600"
+      } ${className}`}
+    >
+      <svg
+        viewBox="0 0 32 32"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={`size-8 ${dark ? "text-mauve/70" : "text-amethyst-200"}`}
+      >
+        <path d="M3 17h7l3-8 5 14 3-6h8" />
+      </svg>
+      <span className="text-[13px] leading-none">[ {alt} ]</span>
+    </div>
+  );
+}
+
+/** Cover image with the branded placeholder as fallback.
  * `zoom` opts the *image* into the card hover zoom — the caller's Link must
- * carry `group` and clip with `overflow-hidden`. The hatch placeholder never
- * zooms (scaling a pattern reads as a glitch, not a photo). */
+ * carry `group` and clip with `overflow-hidden`. The placeholder never zooms. */
 export function Cover({
   src,
   alt,
@@ -69,18 +99,12 @@ export function Cover({
         </div>
       );
     }
-    // Hotlinked source-site image: stack the hatch placeholder BENEATH it so
+    // Hotlinked source-site image: stack the branded placeholder BENEATH it so
     // a dead remote file degrades to the branded fallback, never a broken
     // icon, and the layout never collapses.
     return (
       <div className={wrap}>
-        <div
-          aria-hidden
-          className={`absolute inset-0 flex items-center justify-center font-mono text-[11px] ${dark ? "text-white/40" : "text-[#b39b78]"}`}
-          style={{ background: dark ? hatch("#2E2E2D", "#3a3a39", 9) : hatch("#F7EFE6", "#eadfcb", 9) }}
-        >
-          [ {alt} ]
-        </div>
+        <Placeholder alt={alt} dark={dark} className="absolute inset-0" />
         <HotImg
           src={src}
           alt={alt}
@@ -91,15 +115,7 @@ export function Cover({
       </div>
     );
   }
-  return (
-    <div
-      aria-hidden
-      className={`flex h-full w-full items-center justify-center font-mono text-[11px] ${dark ? "text-white/40" : "text-[#b39b78]"} ${className ?? ""}`}
-      style={{ background: dark ? hatch("#2E2E2D", "#3a3a39", 9) : hatch("#F7EFE6", "#eadfcb", 9) }}
-    >
-      [ {alt} ]
-    </div>
-  );
+  return <Placeholder alt={alt} dark={dark} className={`h-full w-full ${className ?? ""}`} />;
 }
 
 /** Large lead/hero card. */
