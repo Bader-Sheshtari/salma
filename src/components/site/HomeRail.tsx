@@ -18,6 +18,7 @@ export function HomeRail({
   items,
   buttonClass,
   bodyClass,
+  itemClass = "w-[min(420px,82vw)]",
 }: {
   /** Accessible name of the carousel region (the section title). */
   label: string;
@@ -28,6 +29,8 @@ export function HomeRail({
   buttonClass: string;
   /** Identity text colour for the counter. */
   bodyClass: string;
+  /** Slide width (defaults to the news-rail card width). */
+  itemClass?: string;
 }) {
   const track = useRef<HTMLUListElement>(null);
   const [current, setCurrent] = useState(1);
@@ -107,7 +110,7 @@ export function HomeRail({
             key={i}
             aria-roledescription="slide"
             aria-label={`${i + 1} من ${count}`}
-            className="w-[min(380px,78vw)] shrink-0 snap-start"
+            className={`${itemClass} shrink-0 snap-start`}
           >
             {item}
           </li>

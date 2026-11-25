@@ -40,7 +40,7 @@ function Meta({ c, ctx, mode }: { c: Content; ctx: Ctx; mode?: "read" | "time" }
 
 function Img({ c, ratio, ctx, className = "" }: { c: Content; ratio: string; ctx: Ctx; className?: string }) {
   return (
-    <div className={`relative isolate overflow-hidden rounded-lg ${ctx.idn.ground} ${ratio} ${className}`}>
+    <div className={`relative isolate overflow-hidden rounded-xl ${ctx.idn.ground} ${ratio} ${className}`}>
       <Cover src={coverFor(c)} alt="صورة" className="absolute inset-0" zoom lazy />
     </div>
   );
@@ -297,9 +297,11 @@ function TextLed({ items, ctx }: { items: Content[]; ctx: Ctx }) {
 }
 
 function RailCard({ c, ctx }: { c: Content; ctx: Ctx }) {
+  // 4:3 keeps the photograph horizontal and its crop gentle (owner refinement
+  // 2026-11-25: no tall portrait crops in news cards).
   return (
     <Link href={hrefFor(c)} className="group block">
-      <Img c={c} ratio="aspect-[4/5]" ctx={ctx} className="mb-4" />
+      <Img c={c} ratio="aspect-[4/3]" ctx={ctx} className="mb-4" />
       <h3 className={`text-lg font-bold leading-[1.45] md:text-xl ${ctx.idn.headline} ${HOVER}`}>{c.title}</h3>
       <Excerpt c={c} ctx={ctx} />
       <Meta c={c} ctx={ctx} />
@@ -317,9 +319,9 @@ function monogram(name: string): string {
 
 /** Golden ECG journey arrow, pointing in RTL reading direction (graphic only,
  * --color-journey-arrow #B98900 — never text, §4). */
-function JourneyArrow() {
+function JourneyArrow({ className = "h-5 w-16 md:w-24" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 96 20" aria-hidden className="h-5 w-16 shrink-0 text-journey-arrow md:w-24">
+    <svg viewBox="0 0 96 20" aria-hidden className={`shrink-0 text-journey-arrow ${className}`}>
       <g fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <path d="M95 10H60l-4 0-4-7-5 14-4-11-3 4H5" />
         <path d="M12 4 4 10l8 6" />
@@ -328,36 +330,61 @@ function JourneyArrow() {
   );
 }
 
-/** One airy transfer row: portrait · identity · من ← إلى journey (the row's
- * hero) · date. Non-interactive, like the /transfers card it summarises. */
-function TransferRow({ t, idn }: { t: PublicDoctorTransfer; idn: Identity }) {
+/** One doctor-transfer card (owner redesign 2026-11-25): large horizontal
+ * portrait on top, name + specialty, then the من ← إلى journey as two boxes
+ * with the arrow carrying the RTL direction — the transfer IS the news, so the
+ * hospital names read large. Every colour comes from the SECTION identity, so
+ * the Admin picker controls the family; the approved accent is vanilla, which
+ * keeps the whole row inside the Vanilla-Custard family. Non-interactive,
+ * like the /transfers card it summarises. */
+function TransferCard({ t, idn }: { t: PublicDoctorTransfer; idn: Identity }) {
   const when = formatDateAr(t.published_at ?? t.created_at);
   return (
-    <article className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-4 gap-y-2 md:grid-cols-[96px_minmax(0,210px)_minmax(0,1fr)_auto] md:gap-x-8">
-      <div className="size-[72px] overflow-hidden rounded-full border-[3px] border-white bg-seashell-2 md:size-24">
+    <article
+      className={`flex h-full flex-col overflow-hidden rounded-2xl border ${idn.hairline} ${
+        idn.field ? idn.surface : "bg-seashell-2"
+      }`}
+    >
+      <div className={`relative aspect-[4/3] w-full overflow-hidden ${idn.ground}`}>
         {t.doctor_photo_url ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={t.doctor_photo_url} alt={t.doctor_name} loading="lazy" className="h-full w-full object-cover" />
+          <img
+            src={t.doctor_photo_url}
+            alt={t.doctor_name}
+            loading="lazy"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
         ) : (
-          <div aria-hidden className="grid h-full w-full place-items-center text-3xl font-bold text-amethyst-600">
+          <div aria-hidden className="grid h-full w-full place-items-center text-6xl font-bold text-amethyst-600">
             {monogram(t.doctor_name)}
           </div>
         )}
       </div>
-      <div className="min-w-0">
-        <h3 className={`text-lg font-bold leading-[1.4] ${idn.headline}`}>{t.doctor_name}</h3>
-        {t.specialty ? <p className={`mt-0.5 text-[13px] ${idn.body}`}>{t.specialty}</p> : null}
+      {/* Internal panels are WHITE by design (owner 2026-11-25), whatever
+          family the picker gives the card — amethyst text keeps them readable
+          everywhere; the card's tint stays visible as the frame around them. */}
+      <div className="flex flex-1 flex-col gap-2 p-3">
+        <div className="rounded-xl bg-white px-3 py-2.5">
+          <h3 className="text-xl font-bold leading-snug text-amethyst">{t.doctor_name}</h3>
+          {t.specialty ? <p className="mt-0.5 text-sm text-amethyst-600">{t.specialty}</p> : null}
+        </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-stretch gap-1.5">
+          <div className="rounded-xl bg-white px-2.5 py-2">
+            <span className="block text-xs font-semibold text-amethyst-600">من</span>
+            <span className="mt-0.5 block text-[15px] font-semibold leading-snug text-amethyst">
+              {t.from_hospital ?? "غير محدد"}
+            </span>
+          </div>
+          <JourneyArrow className="h-6 w-10 self-center sm:w-12" />
+          <div className="rounded-xl bg-white px-2.5 py-2">
+            <span className="block text-xs font-semibold text-amethyst-600">إلى</span>
+            <span className="mt-0.5 block text-base font-bold leading-snug text-amethyst">
+              {t.to_hospital ?? "غير محدد"}
+            </span>
+          </div>
+        </div>
+        {when ? <p className={`mt-auto pt-2 text-xs ${idn.body}`}>{when}</p> : null}
       </div>
-      <p className="col-span-2 flex flex-wrap items-center gap-x-4 gap-y-1 md:col-span-1">
-        <span className={`text-base md:text-[17px] ${idn.body}`}>من {t.from_hospital ?? "غير محدد"}</span>
-        <JourneyArrow />
-        <span className={`text-[17px] font-bold ${idn.ink} md:text-[19px]`}>إلى {t.to_hospital ?? "غير محدد"}</span>
-      </p>
-      {when ? (
-        <p className={`col-span-2 text-[13px] md:col-span-1 md:whitespace-nowrap md:text-xs ${idn.body}`}>
-          {when}
-        </p>
-      ) : null}
     </article>
   );
 }
@@ -392,9 +419,15 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
       ? "columns"
       : base;
 
+  // Transfers (owner redesign 2026-11-25): the band stays PAPER and the cards
+  // carry the identity tint, so there is no full-width saturated field; the
+  // heading therefore always uses paper ink.
+  const paperBand = anatomy === "journey";
+  const headingInk = paperBand ? "text-amethyst" : idn.ink;
+
   const titleRow = (
     <>
-      <h2 id={hid} className={`text-xl font-bold leading-snug ${idn.ink} min-[401px]:text-[length:var(--brand-fs-title)]`}>
+      <h2 id={hid} className={`text-xl font-bold leading-snug ${headingInk} min-[401px]:text-[length:var(--brand-fs-title)]`}>
         {section.title_ar}
       </h2>
       <span aria-hidden className="flex min-w-4 flex-1 items-center">
@@ -406,7 +439,7 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
   const viewAll = showAll ? (
     <Link
       href={href!}
-      className={`-me-2 inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm font-semibold ${idn.ink} ${idn.linkHover}`}
+      className={`-me-2 inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2 text-sm font-semibold ${headingInk} ${idn.linkHover}`}
     >
       عرض الكل
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden className="size-3.5 max-md:hidden">
@@ -417,17 +450,7 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
 
   let body: ReactNode;
   switch (anatomy) {
-    case "journey":
-      body = (
-        <div className={`divide-y ${idn.divide}`}>
-          {transfers.map((t) => (
-            <div key={t.id} className="py-4 first:pt-0 last:pb-0 md:py-5">
-              <TransferRow t={t} idn={idn} />
-            </div>
-          ))}
-        </div>
-      );
-      break;
+    case "journey": // single-row carousel — rendered by HomeRail below
     case "rail":
       body = null; // rendered by HomeRail below (needs the heading row)
       break;
@@ -462,10 +485,10 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
       data-identity={idn.key}
       data-anatomy={anatomy}
       data-category={section.category_slug ?? undefined}
-      className={`${idn.ink} ${idn.field ? `my-12 py-10 md:py-12 ${idn.surface}` : "py-10"}`}
+      className={`${paperBand ? "text-amethyst py-10" : `${idn.ink} ${idn.field ? `my-12 py-10 md:py-12 ${idn.surface}` : "py-10"}`}`}
       style={idn.vars as React.CSSProperties | undefined}
     >
-      {anatomy === "rail" ? (
+      {anatomy === "rail" || anatomy === "journey" ? (
         <HomeRail
           label={section.title_ar}
           heading={
@@ -474,15 +497,21 @@ export function HomeSection({ data, lookups }: { data: HomeSectionItems; lookups
               {viewAll}
             </>
           }
-          items={content.map((c) => (
-            <RailCard key={c.id} c={c} ctx={ctx} />
-          ))}
-          buttonClass={
-            idn.key === "frost"
-              ? "bg-frosted-blue-40 text-amethyst hover:bg-amethyst hover:text-white"
-              : "border border-hairline-strong bg-white text-amethyst hover:border-amethyst hover:bg-amethyst hover:text-white"
+          items={
+            anatomy === "journey"
+              ? transfers.map((t) => <TransferCard key={t.id} t={t} idn={idn} />)
+              : content.map((c) => <RailCard key={c.id} c={c} ctx={ctx} />)
           }
-          bodyClass={idn.body}
+          // ~3 transfer cards visible on the 72rem content width.
+          itemClass={anatomy === "journey" ? "w-[min(368px,85vw)]" : undefined}
+          buttonClass={
+            anatomy === "journey"
+              ? "border border-hairline-strong bg-white text-amethyst hover:border-amethyst hover:bg-amethyst hover:text-white"
+              : idn.key === "frost"
+                ? "bg-frosted-blue-40 text-amethyst hover:bg-amethyst hover:text-white"
+                : "border border-hairline-strong bg-white text-amethyst hover:border-amethyst hover:bg-amethyst hover:text-white"
+          }
+          bodyClass={anatomy === "journey" ? "text-amethyst-600" : idn.body}
         />
       ) : (
         // Full-bleed band (homepage shell), content centred at the H1 width.
